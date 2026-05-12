@@ -1,0 +1,15 @@
+DEV-9999: Add slugify utility to traceability common helpers and use it in supplier slug generation
+
+Right now `src/utils/common.py` has helpers like `to_snake_case` but no `slugify` for
+URL-safe identifiers. Multiple call sites in supplier creation are doing ad-hoc
+lower+replace logic that doesn't handle unicode or repeated separators.
+
+Acceptance:
+- A new `slugify(value: str) -> str` lives in `src/utils/common.py` (lowercased,
+  non-alphanumeric collapsed to single hyphen, trimmed).
+- Replace ad-hoc supplier slug generation with this helper everywhere it appears.
+- Unit tests cover empty string, multi-space, unicode, and mixed-case inputs.
+
+Notes:
+- Should NOT change the existing public API of any model or schema.
+- The frontend may eventually need to mirror this — out of scope for this ticket.

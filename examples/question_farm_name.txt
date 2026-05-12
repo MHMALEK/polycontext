@@ -1,0 +1,5 @@
+What special characters are not allowed in Farm Name and/or Reference ID?
+
+For each of these two fields (Farm Name and Reference ID), determine the exact validation rule in the Tract codebase: which special characters are forbidden, which are allowed, length constraints, and any positional rules (e.g. can't appear at the start). Cite the file(s) and line numbers where the rule is defined.
+
+If the codebase has more than one validation path for the same field, list each one and explain when each applies.
