@@ -1,0 +1,24 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# docker-compose bind volumes (sourcebot index, etc.)
+.docker/
+
+# generated artifacts
+outputs/*.md
+outputs/metrics/
+outputs/.import_index/
+!outputs/.gitkeep
+
+# macOS / editor noise
+.DS_Store
+.idea/
+.vscode/
