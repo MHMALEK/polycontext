@@ -7,7 +7,7 @@ Copy everything between the `---` lines below into your other AI tool.
 You're picking up work on **ticket-recon**, a Python service that turns
 Jira tickets into AI-friendly tech decompositions with multi-repo
 context and clickable GitLab permalinks. The project lives at
-`/Users/mohammadhosseinmalek/tract-projects/ticket-recon` and runs against
+`/Users/mohammadhosseinmalek/tract-projects/tech-decomposition` and runs against
 four real repos cloned at `/Users/mohammadhosseinmalek/tract-projects/aider-experiments/`:
 `traceability`, `frontend`, `data-cloud-functions`, `data`.
 
@@ -213,7 +213,7 @@ re-stated here so you can pick them up directly:
 ## How to verify your changes
 
 ```bash
-cd /Users/mohammadhosseinmalek/tract-projects/ticket-recon
+cd /Users/mohammadhosseinmalek/tract-projects/tech-decomposition
 # Already has .venv. If missing:  uv venv && uv pip install -e .
 
 # Make sure docker stack is up:
