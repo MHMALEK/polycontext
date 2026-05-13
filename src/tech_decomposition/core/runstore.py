@@ -39,13 +39,21 @@ CREATE TABLE IF NOT EXISTS runs (
   output_tokens   INTEGER,
   error           TEXT,
   created_at      TEXT NOT NULL,
-  completed_at    TEXT
+  completed_at    TEXT,
+  current_stage   TEXT,
+  stages_done     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_mode    ON runs(mode);
 CREATE INDEX IF NOT EXISTS idx_runs_status  ON runs(status);
 """
+
+# Columns added after v0.2.0 — applied as ALTERs against existing dbs.
+_MIGRATIONS = (
+    ("current_stage", "TEXT"),
+    ("stages_done", "TEXT"),
+)
 
 
 def _now() -> str:
@@ -61,6 +69,11 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
             except json.JSONDecodeError:
                 pass
             del d[k]
+    if d.get("stages_done"):
+        try:
+            d["stages_done"] = json.loads(d["stages_done"])
+        except json.JSONDecodeError:
+            d["stages_done"] = []
     return d
 
 
@@ -78,12 +91,55 @@ class RunStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        existing = {r[1] for r in self._conn.execute("PRAGMA table_info(runs)").fetchall()}
+        for col, typ in _MIGRATIONS:
+            if col not in existing:
+                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {typ}")
         self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
 
     # ----- writes ---------------------------------------------------------
+
+    def start(
+        self,
+        *,
+        run_id: str,
+        mode: str,
+        input_ref: Any,
+        input_preview: str | None = None,
+        output_format: str | None = None,
+    ) -> None:
+        """Insert a placeholder ``running`` row so live progress updates and
+        history polling can find this run before the pipeline finishes."""
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO runs
+                (id, mode, status, input_ref_json, input_preview, output_format, created_at)
+            VALUES (?, ?, 'running', ?, ?, ?, ?)
+            """,
+            (
+                run_id, mode,
+                json.dumps(input_ref, default=str),
+                input_preview, output_format, _now(),
+            ),
+        )
+        self._conn.commit()
+
+    def update_progress(
+        self,
+        *,
+        run_id: str,
+        current_stage: str | None,
+        stages_done: list[str],
+    ) -> None:
+        """UPDATE only the progress columns. No-op if the row doesn't exist."""
+        self._conn.execute(
+            "UPDATE runs SET current_stage = ?, stages_done = ? WHERE id = ?",
+            (current_stage, json.dumps(stages_done), run_id),
+        )
+        self._conn.commit()
 
     def record(
         self,

@@ -48,6 +48,19 @@ class RunContext:
     input_preview: str | None = None
     scratch: dict[str, Any] = field(default_factory=dict)
 
+    def stage_started(self, *, stage: str, strategy: str) -> None:
+        """Notify the observer that a stage is about to run. Best-effort."""
+        if self.metrics is None:
+            return
+        starter = getattr(self.metrics, "on_stage_start", None)
+        if starter is None:
+            return
+        try:
+            starter(run_id=self.run_id, stage=stage, strategy=strategy)
+        except Exception:
+            # progress reporting must never break the pipeline
+            pass
+
     def record_stage(self, result: StageResult) -> None:
         """Forward a StageResult to the metrics observer, if one is attached."""
         if self.metrics is None:

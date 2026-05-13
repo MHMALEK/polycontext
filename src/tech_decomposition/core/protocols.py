@@ -136,6 +136,8 @@ class MetricsObserver(Protocol):
     once the whole pipeline finishes.
     """
 
+    def on_stage_start(self, *, run_id: str, stage: str, strategy: str) -> None: ...
+
     def on_stage_complete(
         self,
         *,

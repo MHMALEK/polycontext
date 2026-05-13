@@ -54,6 +54,7 @@ class Pipeline:
     async def run(self, ref: str | dict[str, Any], ctx: RunContext) -> PipelineRun:
         t_run = time.monotonic()
 
+        ctx.stage_started(stage="input", strategy=self.input_source.__class__.__name__)
         loaded = await self._timed("input", self.input_source, lambda: self.input_source.load(ref, ctx), ctx)
         # Capture a short preview of the user's input so the run row can carry
         # context without bloating the JSONL with the full body.
@@ -65,10 +66,12 @@ class Pipeline:
             enriched = EnrichedQuestion(question=loaded.body)
             ctx.record_stage(StageResult(stage="enrich", strategy="(none)", seconds=0.0))
         else:
+            ctx.stage_started(stage="enrich", strategy=self.enricher.__class__.__name__)
             enriched = await self._timed(
                 "enrich", self.enricher, lambda: self.enricher.enrich(loaded, ctx), ctx
             )
 
+        ctx.stage_started(stage="engine", strategy=self.engine.__class__.__name__)
         engine_result = await self._timed(
             "engine", self.engine, lambda: self.engine.run(enriched, ctx), ctx,
             extra_metrics={
@@ -81,6 +84,7 @@ class Pipeline:
 
         rendered_list: list[Rendered] = []
         for renderer in self.renderers:
+            ctx.stage_started(stage="render", strategy=renderer.name)
             t = time.monotonic()
             rendered = renderer.render(engine_result, ctx)
             ctx.record_stage(StageResult(
@@ -94,6 +98,7 @@ class Pipeline:
         primary = rendered_list[0] if rendered_list else Rendered(format="markdown", body=engine_result.answer_markdown)
         sink_results: list[SinkResult] = []
         for sink in self.sinks:
+            ctx.stage_started(stage="sink", strategy=sink.name)
             t = time.monotonic()
             chosen = _pick_rendered_for_sink(sink, rendered_list, primary)
             res = await sink.deliver(chosen, ctx)

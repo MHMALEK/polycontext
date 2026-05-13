@@ -23,7 +23,50 @@ from pydantic import BaseModel, Field
 from .config import get_settings
 from .core.context import RunContext
 from .core.factory import build_ask_pipeline, build_decompose_pipeline, build_metrics_observer
-from .core.runstore import open_default_store
+from .core.runstore import RunStore, open_default_store
+
+
+class _LiveProgressObserver:
+    """Wraps a base MetricsObserver and pushes live stage progress to the
+    run store so the UI can poll ``/runs/{id}`` while a request is in flight.
+    Forwards every call to the underlying observer unchanged.
+    """
+
+    def __init__(self, base: Any, store: RunStore, run_id: str) -> None:
+        self._base = base
+        self._store = store
+        self._run_id = run_id
+        self._done: list[str] = []
+
+    def on_stage_start(self, *, run_id: str, stage: str, strategy: str) -> None:
+        # Display label is "<stage>(<strategy>)" — short, debuggable, and
+        # matches the JSONL metric rows.
+        label = f"{stage}:{strategy}"
+        try:
+            self._store.update_progress(
+                run_id=run_id, current_stage=label, stages_done=self._done,
+            )
+        except Exception:
+            pass
+        starter = getattr(self._base, "on_stage_start", None)
+        if starter is not None:
+            try:
+                starter(run_id=run_id, stage=stage, strategy=strategy)
+            except Exception:
+                pass
+
+    def on_stage_complete(self, *, run_id: str, stage: str, strategy: str, **kw: Any) -> None:
+        self._done.append(f"{stage}:{strategy}")
+        try:
+            self._store.update_progress(
+                run_id=run_id, current_stage=None, stages_done=self._done,
+            )
+        except Exception:
+            pass
+        self._base.on_stage_complete(run_id=run_id, stage=stage, strategy=strategy, **kw)
+
+    def on_run_complete(self, **kw: Any) -> None:
+        self._base.on_run_complete(**kw)
 
 app = FastAPI(title="tech-decomposition", version="0.2.0")
 
@@ -99,10 +142,19 @@ async def ask_endpoint(req: AskRequest) -> AskResponse:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}") from e
 
-    obs = build_metrics_observer(settings, mode="ask")
-    ctx = RunContext(settings=settings, mode="ask", metrics=obs)
+    base_obs = build_metrics_observer(settings, mode="ask")
     store = open_default_store(settings)
+    ctx = RunContext(settings=settings, mode="ask")
+    ctx.metrics = _LiveProgressObserver(base_obs, store, ctx.run_id)
     try:
+        # Pre-seed a ``running`` row so the UI can find this run and poll
+        # progress before the pipeline returns.
+        store.start(
+            run_id=ctx.run_id, mode="ask",
+            input_ref=req.question,
+            input_preview=req.question[:160].strip(),
+            output_format=req.format,
+        )
         try:
             run = await pipeline.run(req.question, ctx)
         except Exception as e:
@@ -257,6 +309,8 @@ class RunListItem(BaseModel):
     output_format: str | None = None
     created_at: str
     completed_at: str | None = None
+    current_stage: str | None = None
+    stages_done: list[str] | None = None
 
 
 class RunDetail(RunListItem):

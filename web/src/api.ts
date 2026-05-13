@@ -42,6 +42,8 @@ export interface RunListItem {
   output_format?: string | null;
   created_at: string;
   completed_at?: string | null;
+  current_stage?: string | null;
+  stages_done?: string[];
 }
 
 export interface RunDetail extends RunListItem {
@@ -61,11 +63,12 @@ async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "content-type": "application/json", ...(init?.headers || {}) },
   });
   if (!res.ok) {
-    let detail = "";
+    const body = await res.text();
+    let detail = body;
     try {
-      detail = JSON.stringify(await res.json());
+      detail = JSON.stringify(JSON.parse(body));
     } catch {
-      detail = await res.text();
+      // not JSON — fall through with the raw text
     }
     throw new Error(`${res.status} ${path}: ${detail.slice(0, 400)}`);
   }
@@ -78,7 +81,15 @@ export const api = {
   ask: (req: AskRequest) =>
     jsonReq<AskResponse>("/ask", { method: "POST", body: JSON.stringify(req) }),
 
-  listRuns: (params: { mode?: string; limit?: number; since?: string; engine?: string } = {}) => {
+  listRuns: (
+    params: {
+      mode?: string;
+      limit?: number;
+      since?: string;
+      engine?: string;
+      status?: string;
+    } = {},
+  ) => {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== "") q.set(k, String(v));

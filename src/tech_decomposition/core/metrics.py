@@ -28,6 +28,11 @@ class JsonlMetricsObserver:
         with self._path.open("a") as f:
             f.write(json.dumps(row, default=str) + "\n")
 
+    def on_stage_start(self, *, run_id: str, stage: str, strategy: str) -> None:
+        # JSONL recorder only persists completed stages; start events are
+        # consumed by the live-progress observer.
+        return
+
     def on_stage_complete(
         self,
         *,
