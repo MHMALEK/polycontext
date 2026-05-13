@@ -55,6 +55,11 @@ class Pipeline:
         t_run = time.monotonic()
 
         loaded = await self._timed("input", self.input_source, lambda: self.input_source.load(ref, ctx), ctx)
+        # Capture a short preview of the user's input so the run row can carry
+        # context without bloating the JSONL with the full body.
+        if ctx.input_preview is None:
+            preview = (loaded.title or loaded.body or "").strip().splitlines()
+            ctx.input_preview = (preview[0][:160] if preview else "")
 
         if self.enricher is None:
             enriched = EnrichedQuestion(question=loaded.body)
@@ -104,6 +109,11 @@ class Pipeline:
                 run_id=ctx.run_id,
                 total_seconds=total,
                 total_cost_usd=engine_result.cost_usd,
+                extra={
+                    "input_preview": ctx.input_preview,
+                    "engine": engine_result.engine,
+                    "model": engine_result.model,
+                },
             )
 
         return PipelineRun(

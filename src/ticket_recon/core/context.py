@@ -34,6 +34,10 @@ class RunContext:
     an optional MetricsObserver, and a free-form scratchpad for stages that
     need to stash data (rarely — most stage I/O should go through the typed
     payloads).
+
+    ``input_preview`` is set by the Pipeline after InputSource.load and
+    surfaced in the run row so analytics can show *what* each run asked
+    without re-reading the markdown file.
     """
 
     settings: "Settings"
@@ -41,6 +45,7 @@ class RunContext:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metrics: "MetricsObserver | None" = None
+    input_preview: str | None = None
     scratch: dict[str, Any] = field(default_factory=dict)
 
     def record_stage(self, result: StageResult) -> None:

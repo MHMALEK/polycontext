@@ -56,6 +56,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_GENERATIVE_AI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GEMINI_API_KEY:-}
+      # GitLab connector token (only used when the gitlab-tract connection in
+      # config.json is enabled). Leave empty for local-mount-only setups.
+      - GITLAB_TOKEN=${GITLAB_TOKEN:-}
 
   serena:
     image: ghcr.io/oraios/serena:latest
@@ -76,7 +79,50 @@ services:
       --port 9121
       --project /workspaces/projects
 
+  # The ticket-recon FastAPI + CLI. Builds from the local Dockerfile so
+  # iterating on the Python code only rebuilds this service. Talks to the
+  # in-stack Sourcebot at http://sourcebot:3000 (the docker network host).
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ticket-recon:local
+    container_name: ticket-recon-app
+    restart: unless-stopped
+    depends_on:
+      sourcebot:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    volumes:
+      - ticket_recon_outputs:/app/outputs
+    environment:
+      # Talk to the Sourcebot container by service name on the docker network.
+      - SOURCEBOT_URL=http://sourcebot:3000
+      - SOURCEBOT_API_KEY=${SOURCEBOT_API_KEY:-}
+      - SOURCEBOT_TIMEOUT_SECONDS=${SOURCEBOT_TIMEOUT_SECONDS:-30}
+      # Optional: scope ask flows to specific GitLab project paths.
+      - GITLAB_PROJECTS=${GITLAB_PROJECTS:-}
+      # Provider credentials — only the ones for the models you actually use
+      # need to be set.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - CUSTOM_LLM_BASE_URL=${CUSTOM_LLM_BASE_URL:-}
+      - CUSTOM_LLM_API_KEY=${CUSTOM_LLM_API_KEY:-}
+      # Per-stage model selection (see core/models.py for spec syntax).
+      - ENRICH_MODEL=${ENRICH_MODEL:-gemini:gemini-2.5-flash}
+      - DECOMPOSE_MODEL=${DECOMPOSE_MODEL:-gemini:gemini-2.5-pro}
+      # Jira posting (optional — only needed for --post-to-jira).
+      - JIRA_BASE_URL=${JIRA_BASE_URL:-}
+      - JIRA_EMAIL=${JIRA_EMAIL:-}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN:-}
+      # Outputs live in a named volume so they persist across restarts.
+      - OUTPUT_DIR=/app/outputs
+
 volumes:
   sourcebot_data:
   sourcebot_postgres:
   sourcebot_redis:
+  ticket_recon_outputs:

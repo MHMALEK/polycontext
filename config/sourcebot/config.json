@@ -4,6 +4,20 @@
     "local-repos": {
       "type": "git",
       "url": "file:///data/repos/*"
+    },
+    "gitlab-tract": {
+      "type": "gitlab",
+      "token": {
+        "env": "GITLAB_TOKEN"
+      },
+      "url": "https://gitlab.com",
+      "groups": [
+        "tract1/application"
+      ],
+      "exclude": {
+        "archived": true,
+        "forks": true
+      }
     }
   },
   "models": [

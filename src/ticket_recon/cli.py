@@ -149,7 +149,14 @@ def _cmd_serve(args, settings) -> int:
 def _cmd_analyze(args, settings) -> int:
     from .analyze import main as analyze_main
 
-    analyze_main()
+    forward: list[str] = []
+    if args.since:
+        forward += ["--since", args.since]
+    if args.by_engine:
+        forward += ["--by-engine", args.by_engine]
+    if args.mode_filter:
+        forward += ["--mode", args.mode_filter]
+    analyze_main(forward)
     return 0
 
 
@@ -224,6 +231,12 @@ def _build_parser(settings) -> argparse.ArgumentParser:
 
     # analyze ----------------------------------------------------------------
     p_ana = sub.add_parser("analyze", help="Summarize outputs/metrics/runs.jsonl")
+    p_ana.add_argument("--since", default=None,
+                       help="Time window: '24h', '7d', '15m'. Default: all runs.")
+    p_ana.add_argument("--by-engine", default=None,
+                       help="Substring match on engine name (e.g. 'sourcebot').")
+    p_ana.add_argument("--mode-filter", default=None,
+                       help="Filter by mode: ask | decompose | compare.")
     p_ana.set_defaults(func=_cmd_analyze)
 
     return p
