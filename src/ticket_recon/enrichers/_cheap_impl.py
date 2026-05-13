@@ -6,8 +6,8 @@ from pydantic_ai import Agent
 from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.settings import ModelSettings
 
-from .config import Settings
-from .models import EnrichedQuery, Ticket
+from ..config import Settings
+from ..models import EnrichedQuery, Ticket
 
 _SYSTEM = """\
 You are a senior Tract engineer triaging a Jira ticket so an autonomous coding agent

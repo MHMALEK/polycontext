@@ -1,3 +1,15 @@
+"""ticket-recon CLI — subcommand-based.
+
+Subcommands:
+    ask        - ask a code question via Sourcebot (or local agent, experimental)
+    decompose  - decompose a Jira ticket / text file into subtasks
+    compare    - run a TOML batch of questions through engines side-by-side
+    serve      - run the FastAPI server
+    analyze    - print a summary of outputs/metrics/runs.jsonl
+
+The body of each subcommand composes a Pipeline via ``core.factory`` and runs
+it; the CLI is glue, not logic.
+"""
 from __future__ import annotations
 
 import argparse
@@ -8,206 +20,220 @@ from pathlib import Path
 
 from rich.console import Console
 
-from .ask import AskMetadata, AskResult, Citation as SourcebotCitation, SourcebotAskError, ask_sourcebot, render_ask_markdown, write_ask_markdown
+from .compare import run_compare
 from .config import get_settings
-from .local_ask import Answer, local_ask
-from .metrics import estimate_cost_usd, usage_from_result
-from .models import DecomposeRequest
-from .pipeline import run_pipeline
+from .core.context import RunContext
+from .core.factory import (
+    build_ask_pipeline,
+    build_decompose_pipeline,
+    build_metrics_observer,
+)
 
 console = Console()
 
 
-def _run_ask(args, settings) -> int:
-    """Handle --ask. Tries Sourcebot ``POST /api/ask`` (SSE, Sentinel-style),
-    then MCP ``ask_codebase`` on 404 (unless disabled), else local agent only if ask_via=auto."""
-    import time
-    question = args.ask
-    repos = [s.strip() for s in args.repos.split(",")] if args.repos else None
+# ---------------------------------------------------------------------------
+# Subcommand handlers
+# ---------------------------------------------------------------------------
 
-    sourcebot_result: AskResult | None = None
 
-    if args.ask_via in ("auto", "sourcebot"):
-        try:
-            sourcebot_result = asyncio.run(ask_sourcebot(
-                question,
-                settings=settings,
-                repos=repos,
-                max_steps=args.ask_max_steps,
-                disable_mcp_fallback=True if args.ask_sse_only else None,
-            ))
-        except SourcebotAskError as e:
-            if args.ask_via == "sourcebot":
-                console.print(f"[red]Sourcebot error:[/] {e}")
-                return 1
-            console.print(f"[yellow]Sourcebot ask unavailable ({e}); falling back to local agent.[/]")
-            sourcebot_result = None
-
-    if sourcebot_result is not None and sourcebot_result.answer.strip():
-        path = write_ask_markdown(question, sourcebot_result, settings)
-        console.print(f"\n[green]✓[/] answer written to: [bold]{path}[/]")
-        meta = sourcebot_result.metadata
-        tr = meta.transport if meta else "sse"
-        via_label = {
-            "sse": "Sourcebot SSE /api/ask",
-            "mcp": "Sourcebot MCP ask_codebase",
-            "local": "local agent",
-        }[tr]
-        bits = [f"via: [bold]{via_label}[/]"]
-        if meta:
-            if meta.model_name: bits.append(f"model: {meta.model_name}")
-            if meta.total_tokens: bits.append(f"tokens: {meta.total_tokens}")
-        bits.append(f"wall: {sourcebot_result.wall_seconds}s")
-        bits.append(f"citations: {len(sourcebot_result.citations)}")
-        console.print("  " + " · ".join(bits))
-        return 0
-
-    if args.ask_via == "sourcebot":
-        msg = (
-            "Sourcebot returned no usable answer."
-            if sourcebot_result is not None
-            else "Sourcebot did not return a result."
-        )
-        console.print(f"[red]{msg}[/]")
-        return 1
-
-    # Local fallback (ask_via=auto only)
-    t0 = time.monotonic()
-    result, deps = asyncio.run(local_ask(question, settings))
-    wall = round(time.monotonic() - t0, 2)
-    answer: Answer = result.output
-    in_tok, out_tok = usage_from_result(result)
-    cost = estimate_cost_usd(settings.decompose_model, in_tok or 0, out_tok or 0)
-
-    # Render to a markdown file using the same renderer as Sourcebot path.
-    converted = AskResult(
-        answer=answer.answer,
-        citations=[
-            SourcebotCitation(
-                repo=c.repo, path=c.path,
-                start_line=c.line_start, end_line=c.line_end,
-            ) for c in answer.citations
-        ],
-        metadata=AskMetadata(
-            total_input_tokens=in_tok, total_output_tokens=out_tok,
-            total_tokens=(in_tok or 0) + (out_tok or 0) if (in_tok or out_tok) else None,
-            model_name=settings.decompose_model,
-            sources_seen=[],
-            transport="local",
-        ),
-        wall_seconds=wall,
+def _cmd_ask(args, settings) -> int:
+    pipeline = build_ask_pipeline(
+        settings,
+        engine=args.engine,
+        max_steps=args.max_steps,
+        include_cli_sink=False,  # we print our own status line; the markdown body is in the file
+        include_file_sink=not args.no_file,
     )
-    path = write_ask_markdown(question, converted, settings)
-    console.print(f"\n[green]✓[/] answer written to: [bold]{path}[/]")
-    bits = [f"via: [bold]local agent[/]"]
-    bits.append(f"model: {settings.decompose_model}")
-    if in_tok and out_tok:
-        bits.append(f"tokens: {in_tok}/{out_tok}")
-    if cost is not None:
-        bits.append(f"cost: [yellow]${cost:.4f}[/]")
-    bits.append(f"wall: {wall}s")
-    bits.append(f"citations: {len(answer.citations)}")
-    bits.append(f"confidence: {answer.confidence}")
-    console.print("  " + " · ".join(bits))
-    tc = dict(deps.tool_calls)
-    if tc:
-        console.print(f"  tools: {sum(tc.values())} calls "
-                      f"({', '.join(f'{k}={v}' for k,v in sorted(tc.items()))})")
+    obs = build_metrics_observer(settings, mode="ask")
+    ctx = RunContext(settings=settings, mode="ask", metrics=obs)
+    run = asyncio.run(pipeline.run(args.question, ctx))
+    er = run.engine_result
+
+    console.print(er.answer_markdown.strip())
+    bits = [f"via: [bold]{er.transport or er.engine}[/]"]
+    if er.model:
+        bits.append(f"model: {er.model}")
+    if er.wall_seconds is not None:
+        bits.append(f"wall: {er.wall_seconds}s")
+    if er.input_tokens or er.output_tokens:
+        bits.append(f"tokens: {er.input_tokens or 0}/{er.output_tokens or 0}")
+    if er.cost_usd is not None:
+        bits.append(f"cost: [yellow]${er.cost_usd:.4f}[/]")
+    if er.citations:
+        bits.append(f"citations: {len(er.citations)}")
+    console.print("\n  " + " · ".join(bits))
+    file_locs = [sr.location for sr in run.sink_results if sr.sink == "markdown_file" and sr.location]
+    if file_locs:
+        console.print(f"  written: [bold]{file_locs[0]}[/]")
     return 0
+
+
+def _cmd_decompose(args, settings) -> int:
+    if args.ticket_text_file:
+        source = "text_file"
+        ref = {"path": args.ticket_text_file, "key": args.ticket_key, "url": args.ticket_url}
+    elif args.ticket_key:
+        source = "jira"
+        ref = {"key": args.ticket_key}
+    elif args.ticket_url:
+        source = "jira"
+        ref = {"url": args.ticket_url}
+    else:
+        console.print("[red]decompose: one of --ticket-key / --ticket-url / --ticket-text-file required[/]")
+        return 2
+
+    repos = [s.strip() for s in args.repos.split(",")] if args.repos else None
+    pipeline = build_decompose_pipeline(
+        settings,
+        source=source,
+        mode=args.mode,
+        repos=repos,
+        post_to_jira=args.post_to_jira,
+        include_cli_sink=False,  # we print our own summary
+        include_file_sink=True,
+    )
+    obs = build_metrics_observer(settings, mode="decompose")
+    ctx = RunContext(settings=settings, mode="decompose", metrics=obs)
+    run = asyncio.run(pipeline.run(ref, ctx))
+    er = run.engine_result
+
+    md_path = next(
+        (sr.location for sr in run.sink_results if sr.sink == "markdown_file" and sr.location),
+        None,
+    )
+    if md_path:
+        console.print(f"\n[green]✓[/] decomposition written to: [bold]{md_path}[/]")
+    console.print(f"  engine: [bold]{er.engine}[/]")
+    affected = er.extra.get("affected_repos") or []
+    console.print(f"  affected repos: {', '.join(affected) or '(none)'}")
+    console.print(f"  subtasks: {er.extra.get('subtask_count', 0)}")
+    bits = [f"wall: {run.total_seconds}s"]
+    if er.cost_usd is not None:
+        bits.append(f"cost: [yellow]${er.cost_usd:.4f}[/]")
+    if er.input_tokens or er.output_tokens:
+        bits.append(f"tokens: {er.input_tokens or 0}/{er.output_tokens or 0}")
+    console.print("  " + " · ".join(bits))
+    jira_sr = next((sr for sr in run.sink_results if sr.sink == "jira_comment"), None)
+    if jira_sr and jira_sr.location:
+        console.print(f"  posted jira: [magenta]{jira_sr.location}[/]")
+    if args.print_json:
+        decomp = er.payload.get("decomposition") or {}
+        print(json.dumps(decomp, indent=2, default=str))
+    return 0
+
+
+def _cmd_compare(args, settings) -> int:
+    path = Path(args.questions)
+    if not path.is_file():
+        console.print(f"[red]questions file not found:[/] {path}")
+        return 1
+    out_dir = asyncio.run(run_compare(
+        path, settings,
+        only_ids=args.only,
+        skip_engine=args.skip,
+    ))
+    console.print(f"\n[green]✓[/] compare run dir: [bold]{out_dir}[/]")
+    return 0
+
+
+def _cmd_serve(args, settings) -> int:
+    import uvicorn  # local import — only loaded if serve is invoked
+
+    from .api import app  # FastAPI app
+
+    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    return 0
+
+
+def _cmd_analyze(args, settings) -> int:
+    from .analyze import main as analyze_main
+
+    analyze_main()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Argparse wiring
+# ---------------------------------------------------------------------------
+
+
+def _build_parser(settings) -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="ticket-recon",
+        description="ticket-recon: multi-repo code Q&A and Jira ticket decomposition",
+    )
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    # ask --------------------------------------------------------------------
+    p_ask = sub.add_parser(
+        "ask", help="Ask a code question via Sourcebot (or experimental local agent)"
+    )
+    p_ask.add_argument("question", help="The question to ask")
+    p_ask.add_argument(
+        "--engine",
+        choices=["sourcebot", "local"],
+        default="sourcebot",
+        help="sourcebot (default) = remote /api/chat/blocking + MCP fallback. "
+             "local (EXPERIMENTAL) = in-process pydantic-ai agent against local checkouts.",
+    )
+    p_ask.add_argument(
+        "--max-steps", type=int, default=None,
+        help="Sourcebot maxSteps (1-50). Ignored for local engine.",
+    )
+    p_ask.add_argument("--repos", default=None, help="Comma-separated repo dir names")
+    p_ask.add_argument("--no-file", action="store_true", help="Skip writing the markdown file")
+    p_ask.set_defaults(func=_cmd_ask)
+
+    # decompose --------------------------------------------------------------
+    p_dec = sub.add_parser("decompose", help="Decompose a Jira ticket into subtasks")
+    src = p_dec.add_mutually_exclusive_group(required=True)
+    src.add_argument("--ticket-key", help="Jira ticket key (e.g. DEV-7543)")
+    src.add_argument("--ticket-url", help="Jira ticket URL")
+    src.add_argument("--ticket-text-file", help="Path to a .txt/.md file with ticket title+body")
+    p_dec.add_argument(
+        "--mode",
+        choices=["cheap", "deep", "auto"],
+        default="auto",
+        help="cheap = single-pass retrieval + LLM. "
+             "deep (EXPERIMENTAL) = agentic Pro with tools. "
+             "auto = cheap, escalate to deep on low-confidence / migration cues.",
+    )
+    p_dec.add_argument("--repos", default=None, help="Comma-separated repo dir names")
+    p_dec.add_argument("--post-to-jira", action="store_true",
+                       help="Post the decomposition as a Jira comment (requires ticket key)")
+    p_dec.add_argument("--print-json", action="store_true",
+                       help="Print the structured Decomposition JSON to stdout too")
+    p_dec.set_defaults(func=_cmd_decompose)
+
+    # compare ----------------------------------------------------------------
+    p_cmp = sub.add_parser("compare", help="Batch-run questions.toml side-by-side across engines")
+    p_cmp.add_argument("questions", help="Path to questions.toml")
+    p_cmp.add_argument("--only", action="append", default=None,
+                       help="Run only the question with this id (repeatable)")
+    p_cmp.add_argument("--skip", choices=["sourcebot", "local"], default=None,
+                       help="Skip this engine for this run")
+    p_cmp.set_defaults(func=_cmd_compare)
+
+    # serve ------------------------------------------------------------------
+    p_srv = sub.add_parser("serve", help="Run the FastAPI server")
+    p_srv.add_argument("--host", default="127.0.0.1")
+    p_srv.add_argument("--port", type=int, default=8000)
+    p_srv.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
+    p_srv.set_defaults(func=_cmd_serve)
+
+    # analyze ----------------------------------------------------------------
+    p_ana = sub.add_parser("analyze", help="Summarize outputs/metrics/runs.jsonl")
+    p_ana.set_defaults(func=_cmd_analyze)
+
+    return p
 
 
 def main() -> int:
     settings = get_settings()
-    p = argparse.ArgumentParser(description="ticket-recon CLI")
-    src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--ticket-url", help="Jira ticket URL")
-    src.add_argument("--ticket-key", help="Jira ticket key (e.g. DEV-7543)")
-    src.add_argument("--ticket-text-file", help="Path to a .txt/.md file with ticket title+body")
-    src.add_argument("--ask", metavar="QUESTION",
-                     help="Ask a code question via Sourcebot (SSE POST /api/ask, MCP on 404) "
-                          "or local agent when --ask-via allows it (Q&A mode, skips ticket decomposition).")
-    p.add_argument(
-        "--repos",
-        help="Comma-separated repo dir names to override the configured set",
-        default=None,
-    )
-    p.add_argument("--print-json", action="store_true",
-                   help="Print the structured Decomposition JSON to stdout in addition to writing markdown")
-    p.add_argument("--post-to-jira", action="store_true",
-                   help="Post the decomposition as a Jira comment on the ticket (requires a ticket key)")
-    p.add_argument("--mode", choices=["cheap", "deep", "auto"], default="auto",
-                   help="cheap = single-pass static retrieval (default ~$0.06, ~50s). "
-                        "deep = agentic Pro with tools (~$0.30+, ~3-5min). "
-                        "auto = cheap, escalate to deep on low-confidence or migration cues.")
-    p.add_argument("--ask-max-steps", type=int, default=None,
-                   help="When using --ask, max reasoning steps Sourcebot takes (1-50, default 20). "
-                        "Ignored for local fallback.")
-    p.add_argument(
-        "--ask-via",
-        choices=["auto", "sourcebot", "local"],
-        default=settings.ask_via,
-        help="auto = try Sourcebot SSE /api/ask, MCP if 404, else local agent. "
-             "sourcebot = require Sourcebot only (no local fallback). "
-             "local = local Pydantic AI agent. "
-             "Default: ASK_VIA env or 'auto'.",
-    )
-    p.add_argument(
-        "--ask-sse-only",
-        action="store_true",
-        help="With --ask, use only Sourcebot chat SSE POST /api/ask (no MCP fallback). "
-             "Same as SOURCEBOT_DISABLE_MCP_FALLBACK=1 for this run.",
-    )
-    args = p.parse_args()
-
-    if args.ask:
-        return _run_ask(args, settings)
-
-    text = None
-    if args.ticket_text_file:
-        text = Path(args.ticket_text_file).read_text()
-
-    req = DecomposeRequest(
-        ticket_url=args.ticket_url,
-        ticket_key=args.ticket_key,
-        ticket_text=text,
-        repos=[s.strip() for s in args.repos.split(",")] if args.repos else None,
-        post_to_jira=args.post_to_jira,
-        mode=args.mode,
-    )
-
-    resp = asyncio.run(run_pipeline(req, settings))
-
-    m = resp.metrics or {}
-    cost = m.get("total_cost_usd")
-    mode_label = m.get("mode", "?")
-    if m.get("escalated_to_deep"):
-        mode_label = f"{mode_label} (auto-escalated)"
-    console.print(f"\n[green]✓[/] decomposition written to: [bold]{resp.markdown_path}[/]")
-    console.print(f"  mode: [bold]{mode_label}[/]")
-    console.print(f"  enriched intent: [cyan]{resp.enriched_query.intent}[/] "
-                  f"(confidence: {resp.enriched_query.confidence})")
-    console.print(f"  affected repos: {', '.join(resp.decomposition.affected_repos) or '(none)'}")
-    console.print(f"  subtasks: {len(resp.decomposition.subtasks)}")
-    if m:
-        console.print(f"  timing: total {m.get('total_seconds')}s "
-                      f"(enrich {m['enrich']['seconds']}s · retrieve {m['retrieval']['seconds']}s · "
-                      f"decompose {m['decompose']['seconds']}s)")
-        console.print(f"  retrieval: {m['retrieval']['total_snippets']} snippets, "
-                      f"{m['retrieval']['total_chars']:,} chars "
-                      f"({', '.join(f'{k}={v}' for k,v in m['retrieval']['by_source'].items()) or '—'})")
-        tc = m.get("deep_tool_calls") or {}
-        if tc:
-            console.print(f"  deep tools: {sum(tc.values())} calls "
-                          f"({', '.join(f'{k}={v}' for k,v in sorted(tc.items()))})")
-        if cost is not None:
-            console.print(f"  cost: [yellow]${cost:.4f}[/]")
-    if resp.jira_comment_id:
-        console.print(f"  posted Jira comment id: [magenta]{resp.jira_comment_id}[/]")
-
-    if args.print_json:
-        print(json.dumps(resp.decomposition.model_dump(mode="json"), indent=2, default=str))
-
-    return 0
+    parser = _build_parser(settings)
+    args = parser.parse_args()
+    return args.func(args, settings)
 
 
 if __name__ == "__main__":

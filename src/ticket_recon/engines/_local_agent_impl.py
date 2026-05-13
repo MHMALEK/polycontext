@@ -25,9 +25,9 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-from .config import Settings
-from .deep_decompose import DEEP_MAX_FILE_BYTES, DEEP_MAX_GREP_HITS, DEEP_MAX_LIST_ENTRIES, DeepDeps, _call_serena
-from .import_index import load_or_build_index, who_imports as index_who_imports
+from ..config import Settings
+from ._deep_decompose_impl import DEEP_MAX_FILE_BYTES, DEEP_MAX_GREP_HITS, DEEP_MAX_LIST_ENTRIES, DeepDeps, _call_serena
+from ..import_index import load_or_build_index, who_imports as index_who_imports
 
 log = logging.getLogger(__name__)
 

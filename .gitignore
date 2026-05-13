@@ -12,10 +12,8 @@ build/
 # docker-compose bind volumes (sourcebot index, etc.)
 .docker/
 
-# generated artifacts
-outputs/*.md
-outputs/metrics/
-outputs/.import_index/
+# generated artifacts — keep the dir, ignore everything in it except .gitkeep
+outputs/*
 !outputs/.gitkeep
 
 # macOS / editor noise

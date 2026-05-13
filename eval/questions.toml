@@ -1,0 +1,53 @@
+# Eval set for comparing local agent vs. Sourcebot.
+# Tags describe (a) likely scope (single-repo / cross-repo) and (b) topic so the
+# summary report can break results down by axis.
+
+[[questions]]
+id = "q1-data-sharing-geolocation"
+tags = ["single-repo", "frontend", "ui-behavior"]
+text = """
+On Data Sharing, if I do not select anything aside from Geolocation, what will show when I import? Will I be able to see any of my Deforestation status?
+"""
+
+[[questions]]
+id = "q2-supplier-prefill"
+tags = ["cross-repo", "frontend", "traceability", "behavior"]
+text = """
+Question about "pre-filling" information on a questionnaire on behalf of a supplier.
+
+Workflow:
+- An Internal employee logs-in on behalf of the supplier and pre-fills some information and saves the responses.
+- Supplier logins and reviews information then submits.
+
+Questions:
+1. What happens if the Internal representative who edited the questionnaire with some pre-filled information is removed as a supplier user? For example, once the questionnaire was edited, we delete that user. What happens with the edited questionnaire answers?
+2. Are there any limitations or technical considerations to consider?
+"""
+
+[[questions]]
+id = "q3-dashboard-suppliers-count"
+tags = ["cross-repo", "frontend", "traceability", "count-discrepancy"]
+text = """
+In the dashboard, what number is the "Suppliers" number? It does not fit the number on the Suppliers page. Trace where each number is computed and explain the difference.
+"""
+
+[[questions]]
+id = "q4-farm-name-unicode"
+tags = ["single-repo", "frontend", "validation"]
+text = """
+Are other-language letters accepted in Farm Name and/or ReferenceID? For example: é, ñ, ü, ç. Look at the actual validation logic, not docs.
+"""
+
+[[questions]]
+id = "q5-farm-name-special-chars"
+tags = ["single-repo", "frontend", "validation"]
+text = """
+What special characters are NOT allowed in Farm Name and/or ReferenceID? Cite the exact regex / validator that enforces this.
+"""
+
+[[questions]]
+id = "q6-data-viewer-settings"
+tags = ["cross-repo", "frontend", "traceability", "permissions"]
+text = """
+Can DATA_VIEWER_ROLE access the Settings area at all? Find where Settings access is gated and which roles pass that gate.
+"""

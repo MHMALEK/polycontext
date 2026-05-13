@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from .config import Settings
-from .models import Decomposition, EnrichedQuery, RetrievedContext, Snippet
+from ..config import Settings
+from ..models import Decomposition, EnrichedQuery, RetrievedContext, Snippet
 
 
 def _gitlab_link(settings: Settings, repo: str, path: str, ref: str, line: int | None) -> str | None:

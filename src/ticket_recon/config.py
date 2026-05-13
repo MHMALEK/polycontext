@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     gemini_api_key: str = ""
+    # Optional credentials for the model registry (core/models.py). Each provider
+    # is opt-in: only required if a stage's model spec names that provider.
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    openrouter_api_key: str = ""
+    # Generic OpenAI-compatible endpoint (LiteLLM proxy, vLLM, Ollama, etc.).
+    custom_llm_base_url: str = ""
+    custom_llm_api_key: str = ""
 
     repos_root: Path = Path("/Users/mohammadhosseinmalek/tract-projects/aider-experiments")
     repos: Annotated[list[str], NoDecode] = Field(default_factory=lambda: [
@@ -32,21 +40,9 @@ class Settings(BaseSettings):
     sourcebot_url: str = ""
     sourcebot_api_key: str = ""
     sourcebot_timeout_seconds: float = 15.0
-    # Optional: Sourcebot Postgres URL used to hydrate MCP answers from Chat.messages
-    # for UI-parity (same final assistant turn users see in Sourcebot chat).
-    sourcebot_database_url: str = ""
-    # Optional browse base used for @file links when hydrating answers.
-    sourcebot_browse_origin: str = ""
-    # When true, ``ask_sourcebot`` uses only SSE ``POST /api/ask`` (no MCP fallback on 404).
+    # When true, ``ask_sourcebot`` uses only ``POST /api/chat/blocking`` and does
+    # not fall back to MCP ``ask_codebase`` if the primary endpoint 404s.
     sourcebot_disable_mcp_fallback: bool = False
-    # Optional second-pass answer cleanup using pydantic-ai.
-    ask_cleanup_with_pydantic_ai: bool = False
-    # Optional model override for cleanup pass; defaults to ENRICH_MODEL.
-    ask_cleanup_model: str = ""
-    # Sentinel-style Sourcebot `/api/ask` model override (camelCase payload).
-    sourcebot_language_model_provider: str = ""
-    sourcebot_language_model_name: str = ""
-    sourcebot_language_model_display_name: str = ""
 
     serena_url: str = ""
     serena_timeout_seconds: float = 20.0
@@ -61,7 +57,10 @@ class Settings(BaseSettings):
 
     output_dir: Path = Path("./outputs")
 
-    # Default for ``ticket-recon --ask``: ``sourcebot`` = remote only (no local agent fallback).
+    # Default for ``ticket-recon --ask``:
+    #   auto       = try Sourcebot /api/chat/blocking, MCP on 404, else local agent.
+    #   sourcebot  = require Sourcebot (no local agent fallback).
+    #   local      = local Pydantic AI agent only.
     ask_via: Literal["auto", "sourcebot", "local"] = "auto"
 
     @field_validator("repos", mode="before")

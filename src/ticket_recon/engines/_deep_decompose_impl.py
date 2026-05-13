@@ -31,9 +31,9 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-from .config import Settings
-from .import_index import load_or_build_index, transitive_imports, who_imports
-from .models import Decomposition, EnrichedQuery, Ticket
+from ..config import Settings
+from ..import_index import load_or_build_index, transitive_imports, who_imports
+from ..models import Decomposition, EnrichedQuery, Ticket
 
 log = logging.getLogger(__name__)
 

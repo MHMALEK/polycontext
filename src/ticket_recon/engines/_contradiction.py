@@ -14,8 +14,8 @@ from pydantic_ai import Agent
 from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.settings import ModelSettings
 
-from .config import Settings
-from .models import Decomposition, Ticket
+from ..config import Settings
+from ..models import Decomposition, Ticket
 
 
 class Contradiction(BaseModel):

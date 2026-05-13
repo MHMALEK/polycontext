@@ -5,8 +5,8 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import Settings
-from .models import Ticket
+from ..config import Settings
+from ..models import Ticket
 
 _KEY_RE = re.compile(r"([A-Z][A-Z0-9]+-\d+)")
 
