@@ -7,12 +7,28 @@ Sourcebot, Serena, ticket-recon) lives in one file.
 ## Quick start
 
 ```bash
-cp .env.example .env
-# fill in at minimum: GEMINI_API_KEY, SOURCEBOT_AUTH_SECRET, SOURCEBOT_ENCRYPTION_KEY
-docker compose up -d
+cp .env.example .env       # fill in at minimum:
+                           # GEMINI_API_KEY
+                           # SOURCEBOT_AUTH_SECRET, SOURCEBOT_ENCRYPTION_KEY
+make up                    # builds the image (with UI) + brings up the stack
 ```
 
-Wait ~30 s for Sourcebot to index, then:
+Then open:
+- **UI** — http://localhost:8000/ui
+- **API** — http://localhost:8000
+- **Sourcebot** — http://localhost:3000
+
+`make up` is shorthand for `docker compose up -d --build` plus a status banner.
+Run `make` (no args) to see all targets.
+
+For development with hot reload (FastAPI + Vite on the host, backends in
+Docker):
+
+```bash
+make dev   # runs both servers; Ctrl-C stops both
+```
+
+Wait ~30 s on first `make up` for Sourcebot to index, then:
 
 ```bash
 # from the host

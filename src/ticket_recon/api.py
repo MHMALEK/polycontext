@@ -38,9 +38,13 @@ app.add_middleware(
 )
 
 
-# If a pre-built UI exists at `web/dist`, mount it at /ui. Lets the same
-# FastAPI deployment serve the React app in production with no extra infra.
-_ui_dist = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
+# If a pre-built UI exists, mount it at /ui. Path resolution order:
+#   1. UI_DIST_DIR env var (set in the Docker image to /app/web/dist)
+#   2. web/dist relative to the current working directory (dev mode)
+# Mount is silently skipped if neither exists, so the API runs without the UI.
+import os as _os
+_ui_env = _os.environ.get("UI_DIST_DIR")
+_ui_dist = Path(_ui_env) if _ui_env else (Path.cwd() / "web" / "dist")
 if _ui_dist.is_dir():
     app.mount("/ui", StaticFiles(directory=str(_ui_dist), html=True), name="ui")
 
