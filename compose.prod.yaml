@@ -1,0 +1,30 @@
+# Production overlay for docker-compose.yml.
+#
+# Used by `make prod`:
+#   docker compose -f docker-compose.yml -f compose.prod.yaml --env-file .env.prod up -d
+#
+# Does NOT include compose.local.yaml — so Sourcebot stays off the host
+# network (the app reaches it over the docker network only).
+#
+# What this overlay changes vs. the base:
+# - Quieter uvicorn logs (warning) and --proxy-headers for use behind a
+#   reverse proxy.
+# - Higher SOURCEBOT_TIMEOUT_SECONDS — production traffic can be slower
+#   than localhost.
+# - Restart policy `always` so a panicking app self-recovers.
+
+services:
+  app:
+    environment:
+      - SOURCEBOT_TIMEOUT_SECONDS=${SOURCEBOT_TIMEOUT_SECONDS:-60}
+    command:
+      - uvicorn
+      - tech_decomposition.api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --log-level
+      - warning
+      - --proxy-headers
+    restart: always

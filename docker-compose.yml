@@ -43,8 +43,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "3000:3000"
+    # Sourcebot's host port (3000) is published only in the local overlay
+    # (compose.local.yaml), not in this base file. Prod mode (make prod)
+    # therefore keeps Sourcebot off the host network — the app talks to it
+    # over the docker network at http://sourcebot:3000.
     volumes:
       # Bind-mount the parent folder containing the 4 repo clones, read-only.
       # Sourcebot config.json globs file:///data/repos/* so each subdir gets indexed.

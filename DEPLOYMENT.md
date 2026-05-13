@@ -1,34 +1,72 @@
 # Deployment
 
-Single-page guide for getting tech-decomposition running locally and shipping it to a
-remote host. Built around `docker compose` — the whole stack (Postgres, Redis,
-Sourcebot, Serena, tech-decomposition) lives in one file.
+Single-page guide for getting tech-decomposition running locally and shipping
+it to a remote host. Built around `docker compose` — the whole stack (Postgres,
+Redis, Sourcebot, the app + UI) lives in one file with one optional overlay
+for prod tuning.
 
-## Quick start
+## Three modes
 
+| Mode | Command | Env file | Compose files | When |
+|---|---|---|---|---|
+| **Dev** (hot reload) | `make dev` | `.env` | base only | While editing Python or web/. FastAPI + Vite on the host; only backends in Docker. |
+| **Local** (prod-like) | `make up` | `.env` | base only | Verify the bundled image works end-to-end. Everything in Docker. UI baked in. |
+| **Prod** (prod config) | `make prod` | `.env.prod` | base + `compose.prod.yaml` | Production-flavored run. Sourcebot **not** exposed to host. Quieter logs. Same image as `make up`. |
+
+`make` with no args prints all targets. `make build` rebuilds the app image; `make down` / `make down-prod` stop the respective stack; `make clean` wipes volumes (CAUTION: re-index needed).
+
+## First-time setup
+
+For **dev** or **local** modes:
 ```bash
-cp .env.example .env       # fill in at minimum:
-                           # GEMINI_API_KEY
-                           # SOURCEBOT_AUTH_SECRET, SOURCEBOT_ENCRYPTION_KEY
-make up                    # builds the image (with UI) + brings up the stack
+cp .env.example .env
+# fill in at minimum:
+#   GEMINI_API_KEY
+#   SOURCEBOT_AUTH_SECRET, SOURCEBOT_ENCRYPTION_KEY (one-time generated)
+#   (after first `make up`) SOURCEBOT_API_KEY — create in Sourcebot UI → Settings → API Keys
 ```
 
-Then open:
-- **UI** — http://localhost:8000/ui
-- **API** — http://localhost:8000
-- **Sourcebot** — http://localhost:3000
-
-`make up` is shorthand for `docker compose up -d --build` plus a status banner.
-Run `make` (no args) to see all targets.
-
-For development with hot reload (FastAPI + Vite on the host, backends in
-Docker):
-
+For **prod** mode, also:
 ```bash
-make dev   # runs both servers; Ctrl-C stops both
+cp .env.prod.example .env.prod
+# fill in production values:
+#   strong POSTGRES_PASSWORD (NOT 'changeme')
+#   fresh SOURCEBOT_AUTH_SECRET, SOURCEBOT_ENCRYPTION_KEY (don't reuse dev)
+#   GITLAB_TOKEN if you want Sourcebot to clone repos itself
 ```
 
-Wait ~30 s on first `make up` for Sourcebot to index, then:
+## What changes between local and prod
+
+The Docker image is **the same**. Only configuration changes via env file + the [`compose.prod.yaml`](compose.prod.yaml) overlay:
+
+| | Local (`make up`) | Prod (`make prod`) |
+|---|---|---|
+| Env file | `.env` | `.env.prod` |
+| Sourcebot host port | `:3000` exposed | not exposed (docker network only) |
+| Uvicorn log level | info | warning |
+| `--proxy-headers` | off | on (for reverse proxies) |
+| Sourcebot HTTP timeout | 30 s | 60 s |
+| `SOURCEBOT_DISABLE_MCP_FALLBACK` | unset (fallback ok) | `true` (fail fast) |
+| Container restart policy | `unless-stopped` | `always` |
+| Postgres password | typically `changeme` | should be strong |
+
+The app image is built once and reused across modes. Switching modes is just a different `--env-file` + overlay — no rebuild needed.
+
+## Quick start (dev)
+
+```bash
+make dev    # backends in Docker, FastAPI + Vite on host
+# open http://localhost:5173 (Vite proxies API calls to FastAPI :8000)
+```
+
+## Quick start (local)
+
+```bash
+make up     # everything in Docker
+# open http://localhost:8000/ui
+```
+
+Wait ~30 s on first run for Sourcebot to index, then:
 
 ```bash
 # from the host
