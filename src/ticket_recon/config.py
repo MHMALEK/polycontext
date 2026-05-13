@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     sourcebot_url: str = ""
     sourcebot_api_key: str = ""
     sourcebot_timeout_seconds: float = 15.0
+    # Optional: Sourcebot Postgres URL used to hydrate MCP answers from Chat.messages
+    # for UI-parity (same final assistant turn users see in Sourcebot chat).
+    sourcebot_database_url: str = ""
+    # Optional browse base used for @file links when hydrating answers.
+    sourcebot_browse_origin: str = ""
+    # When true, ``ask_sourcebot`` uses only SSE ``POST /api/ask`` (no MCP fallback on 404).
+    sourcebot_disable_mcp_fallback: bool = False
+    # Optional second-pass answer cleanup using pydantic-ai.
+    ask_cleanup_with_pydantic_ai: bool = False
+    # Optional model override for cleanup pass; defaults to ENRICH_MODEL.
+    ask_cleanup_model: str = ""
+    # Sentinel-style Sourcebot `/api/ask` model override (camelCase payload).
+    sourcebot_language_model_provider: str = ""
+    sourcebot_language_model_name: str = ""
+    sourcebot_language_model_display_name: str = ""
 
     serena_url: str = ""
     serena_timeout_seconds: float = 20.0
@@ -45,6 +60,9 @@ class Settings(BaseSettings):
     decompose_max_context_chars: int = 80_000
 
     output_dir: Path = Path("./outputs")
+
+    # Default for ``ticket-recon --ask``: ``sourcebot`` = remote only (no local agent fallback).
+    ask_via: Literal["auto", "sourcebot", "local"] = "auto"
 
     @field_validator("repos", mode="before")
     @classmethod

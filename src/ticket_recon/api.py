@@ -35,6 +35,8 @@ class AskRequest(BaseModel):
     repos: list[str] | None = None
     max_steps: int | None = Field(default=None, ge=1, le=50)
     write_markdown: bool = False
+    # When true, only ``POST {SOURCEBOT_URL}/api/ask`` (SSE); no MCP fallback.
+    sse_only: bool = False
 
 
 class AskResponse(BaseModel):
@@ -51,8 +53,11 @@ async def ask_endpoint(req: AskRequest) -> AskResponse:
     settings = get_settings()
     try:
         result = await ask_sourcebot(
-            req.question, settings=settings,
-            repos=req.repos, max_steps=req.max_steps,
+            req.question,
+            settings=settings,
+            repos=req.repos,
+            max_steps=req.max_steps,
+            disable_mcp_fallback=True if req.sse_only else None,
         )
     except SourcebotAskError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e

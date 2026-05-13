@@ -19,32 +19,41 @@ console = Console()
 
 
 def _run_ask(args, settings) -> int:
-    """Handle --ask. Tries Sourcebot's MCP ask_codebase first, falls back
-    to a local Pydantic AI agent with the same tools as deep_decompose."""
+    """Handle --ask. Tries Sourcebot ``POST /api/ask`` (SSE, Sentinel-style),
+    then MCP ``ask_codebase`` on 404 (unless disabled), else local agent only if ask_via=auto."""
     import time
     question = args.ask
     repos = [s.strip() for s in args.repos.split(",")] if args.repos else None
 
     sourcebot_result: AskResult | None = None
-    used_path = "sourcebot"
 
     if args.ask_via in ("auto", "sourcebot"):
         try:
             sourcebot_result = asyncio.run(ask_sourcebot(
-                question, settings=settings, repos=repos, max_steps=args.ask_max_steps,
+                question,
+                settings=settings,
+                repos=repos,
+                max_steps=args.ask_max_steps,
+                disable_mcp_fallback=True if args.ask_sse_only else None,
             ))
         except SourcebotAskError as e:
             if args.ask_via == "sourcebot":
-                console.print(f"[red]Sourcebot ask_codebase error:[/] {e}")
+                console.print(f"[red]Sourcebot error:[/] {e}")
                 return 1
-            console.print(f"[yellow]Sourcebot ask_codebase unavailable ({e}); falling back to local agent.[/]")
+            console.print(f"[yellow]Sourcebot ask unavailable ({e}); falling back to local agent.[/]")
             sourcebot_result = None
 
     if sourcebot_result is not None and sourcebot_result.answer.strip():
         path = write_ask_markdown(question, sourcebot_result, settings)
         console.print(f"\n[green]✓[/] answer written to: [bold]{path}[/]")
         meta = sourcebot_result.metadata
-        bits = [f"via: [bold]Sourcebot ask_codebase[/]"]
+        tr = meta.transport if meta else "sse"
+        via_label = {
+            "sse": "Sourcebot SSE /api/ask",
+            "mcp": "Sourcebot MCP ask_codebase",
+            "local": "local agent",
+        }[tr]
+        bits = [f"via: [bold]{via_label}[/]"]
         if meta:
             if meta.model_name: bits.append(f"model: {meta.model_name}")
             if meta.total_tokens: bits.append(f"tokens: {meta.total_tokens}")
@@ -53,8 +62,16 @@ def _run_ask(args, settings) -> int:
         console.print("  " + " · ".join(bits))
         return 0
 
-    # Local fallback
-    used_path = "local"
+    if args.ask_via == "sourcebot":
+        msg = (
+            "Sourcebot returned no usable answer."
+            if sourcebot_result is not None
+            else "Sourcebot did not return a result."
+        )
+        console.print(f"[red]{msg}[/]")
+        return 1
+
+    # Local fallback (ask_via=auto only)
     t0 = time.monotonic()
     result, deps = asyncio.run(local_ask(question, settings))
     wall = round(time.monotonic() - t0, 2)
@@ -76,6 +93,7 @@ def _run_ask(args, settings) -> int:
             total_tokens=(in_tok or 0) + (out_tok or 0) if (in_tok or out_tok) else None,
             model_name=settings.decompose_model,
             sources_seen=[],
+            transport="local",
         ),
         wall_seconds=wall,
     )
@@ -99,14 +117,15 @@ def _run_ask(args, settings) -> int:
 
 
 def main() -> int:
+    settings = get_settings()
     p = argparse.ArgumentParser(description="ticket-recon CLI")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--ticket-url", help="Jira ticket URL")
     src.add_argument("--ticket-key", help="Jira ticket key (e.g. DEV-7543)")
     src.add_argument("--ticket-text-file", help="Path to a .txt/.md file with ticket title+body")
     src.add_argument("--ask", metavar="QUESTION",
-                     help="Ask a code question via Sourcebot's MCP ask_codebase (Q&A mode, "
-                          "skips ticket decomposition).")
+                     help="Ask a code question via Sourcebot (SSE POST /api/ask, MCP on 404) "
+                          "or local agent when --ask-via allows it (Q&A mode, skips ticket decomposition).")
     p.add_argument(
         "--repos",
         help="Comma-separated repo dir names to override the configured set",
@@ -123,13 +142,22 @@ def main() -> int:
     p.add_argument("--ask-max-steps", type=int, default=None,
                    help="When using --ask, max reasoning steps Sourcebot takes (1-50, default 20). "
                         "Ignored for local fallback.")
-    p.add_argument("--ask-via", choices=["auto", "sourcebot", "local"], default="auto",
-                   help="auto = try Sourcebot /api/ask first, fall back to local agent. "
-                        "sourcebot = require Sourcebot (errors if EE feature is missing). "
-                        "local = use the local Pydantic AI agent.")
+    p.add_argument(
+        "--ask-via",
+        choices=["auto", "sourcebot", "local"],
+        default=settings.ask_via,
+        help="auto = try Sourcebot SSE /api/ask, MCP if 404, else local agent. "
+             "sourcebot = require Sourcebot only (no local fallback). "
+             "local = local Pydantic AI agent. "
+             "Default: ASK_VIA env or 'auto'.",
+    )
+    p.add_argument(
+        "--ask-sse-only",
+        action="store_true",
+        help="With --ask, use only Sourcebot chat SSE POST /api/ask (no MCP fallback). "
+             "Same as SOURCEBOT_DISABLE_MCP_FALLBACK=1 for this run.",
+    )
     args = p.parse_args()
-
-    settings = get_settings()
 
     if args.ask:
         return _run_ask(args, settings)
