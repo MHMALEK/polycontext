@@ -54,5 +54,5 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
 
 # Default: run the FastAPI server. The UI is served from this same process at
 # /ui. Override at runtime for one-shot CLI invocations, e.g.:
-#     docker run --rm ticket-recon ticket-recon ask "..."
-CMD ["uvicorn", "ticket_recon.api:app", "--host", "0.0.0.0", "--port", "8000"]
+#     docker run --rm tech-decomposition tech-decomposition ask "..."
+CMD ["uvicorn", "tech_decomposition.api:app", "--host", "0.0.0.0", "--port", "8000"]

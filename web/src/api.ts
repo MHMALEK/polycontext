@@ -1,5 +1,5 @@
 // Thin wrapper around the FastAPI surface. Same shapes as
-// ticket_recon.api.{AskRequest, AskResponse, RunListItem, RunDetail}.
+// tech_decomposition.api.{AskRequest, AskResponse, RunListItem, RunDetail}.
 
 export type OutputFormat = "markdown" | "html" | "text";
 export type AskEngine = "sourcebot" | "local";

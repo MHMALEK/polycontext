@@ -8,7 +8,7 @@ name: ticket-recon
 services:
   postgres:
     image: postgres:16
-    container_name: ticket-recon-postgres
+    container_name: tech-decomposition-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -24,7 +24,7 @@ services:
 
   redis:
     image: redis:8
-    container_name: ticket-recon-redis
+    container_name: tech-decomposition-redis
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -36,7 +36,7 @@ services:
 
   sourcebot:
     image: ghcr.io/sourcebot-dev/sourcebot:latest
-    container_name: ticket-recon-sourcebot
+    container_name: tech-decomposition-sourcebot
     restart: unless-stopped
     depends_on:
       postgres:
@@ -73,7 +73,7 @@ services:
     # need it. Opt in with `docker compose --profile experimental up`.
     profiles: ["experimental"]
     image: ghcr.io/oraios/serena:latest
-    container_name: ticket-recon-serena
+    container_name: tech-decomposition-serena
     restart: unless-stopped
     ports:
       - "9121:9121"
@@ -86,15 +86,15 @@ services:
       --port 9121
       --project /workspaces/projects
 
-  # The ticket-recon FastAPI + CLI. Builds from the local Dockerfile so
+  # The tech-decomposition FastAPI + CLI. Builds from the local Dockerfile so
   # iterating on the Python code only rebuilds this service. Talks to the
   # in-stack Sourcebot at http://sourcebot:3000 (the docker network host).
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ticket-recon:local
-    container_name: ticket-recon-app
+    image: tech-decomposition:local
+    container_name: tech-decomposition-app
     restart: unless-stopped
     depends_on:
       sourcebot:
@@ -102,7 +102,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ticket_recon_outputs:/app/outputs
+      - tech_decomposition_outputs:/app/outputs
     environment:
       # Talk to the Sourcebot container by service name on the docker network.
       - SOURCEBOT_URL=http://sourcebot:3000
@@ -132,4 +132,4 @@ volumes:
   sourcebot_data:
   sourcebot_postgres:
   sourcebot_redis:
-  ticket_recon_outputs:
+  tech_decomposition_outputs:

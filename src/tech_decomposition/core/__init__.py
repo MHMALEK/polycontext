@@ -1,4 +1,4 @@
-"""ticket-recon core: stage Protocols, RunContext, Pipeline, model registry.
+"""tech-decomposition core: stage Protocols, RunContext, Pipeline, model registry.
 
 The pipeline runs as five composable stages:
 

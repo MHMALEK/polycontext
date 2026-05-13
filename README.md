@@ -1,4 +1,4 @@
-# ticket-recon
+# tech-decomposition
 
 Turn a Jira ticket into an **AI-friendly tech decomposition** with multi-repo
 context and clickable GitLab permalinks — designed so an autonomous coding
@@ -97,7 +97,7 @@ a runaway exploration can't blow the bill.
 
 ```bash
 git clone <this-repo>
-cd ticket-recon
+cd tech-decomposition
 cp .env.example .env
 ```
 
@@ -148,13 +148,13 @@ write access to put its `.serena/` config dir at the project root (it does
 
 ```bash
 # Raw-text ticket (no Jira needed)
-ticket-recon --ticket-text-file examples/sample_ticket.txt
+tech-decomposition --ticket-text-file examples/sample_ticket.txt
 
 # Real Jira ticket (uses JIRA_* creds)
-ticket-recon --ticket-key SCRUM-17
+tech-decomposition --ticket-key SCRUM-17
 
 # Real ticket + post the decomposition back as a Jira comment
-ticket-recon --ticket-key SCRUM-17 --post-to-jira
+tech-decomposition --ticket-key SCRUM-17 --post-to-jira
 ```
 
 Output:
@@ -174,7 +174,7 @@ Output:
 ## API
 
 ```bash
-uvicorn ticket_recon.api:app --reload --port 8765
+uvicorn tech_decomposition.api:app --reload --port 8765
 ```
 
 ```bash
@@ -214,7 +214,7 @@ Every run appends one JSON line to `outputs/metrics/runs.jsonl`:
 Quick summary across all runs:
 
 ```bash
-ticket-recon-analyze
+tech-decomposition-analyze
 ```
 
 ```
@@ -229,10 +229,10 @@ latency p50/p95: 27.6s / 27.6s
 ## Layout
 
 ```
-src/ticket_recon/
+src/tech_decomposition/
 ├── api.py                 FastAPI: POST /decompose
-├── cli.py                 ticket-recon CLI
-├── analyze.py             ticket-recon-analyze CLI (metrics summary)
+├── cli.py                 tech-decomposition CLI
+├── analyze.py             tech-decomposition-analyze CLI (metrics summary)
 ├── config.py              pydantic-settings — all env vars
 ├── models.py              Ticket, EnrichedQuery, Snippet, Decomposition, Subtask, …
 ├── jira.py                fetch ticket via REST; post comment in ADF

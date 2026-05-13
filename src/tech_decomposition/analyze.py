@@ -160,7 +160,7 @@ def _print_aggregates(summaries: list[dict[str, Any]]) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(
-        prog="ticket-recon analyze",
+        prog="tech-decomposition analyze",
         description="Summarize outputs/metrics/runs.jsonl.",
     )
     p.add_argument("--since", help="Window like '24h', '7d', '15m'. Default: all.")

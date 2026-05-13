@@ -1,8 +1,8 @@
 # Deployment
 
-Single-page guide for getting ticket-recon running locally and shipping it to a
+Single-page guide for getting tech-decomposition running locally and shipping it to a
 remote host. Built around `docker compose` — the whole stack (Postgres, Redis,
-Sourcebot, Serena, ticket-recon) lives in one file.
+Sourcebot, Serena, tech-decomposition) lives in one file.
 
 ## Quick start
 
@@ -44,16 +44,16 @@ curl -sS http://localhost:8000/ask \
 CLI alternative (one-shot, in the running container):
 
 ```bash
-docker exec -it ticket-recon-app ticket-recon ask "..."
-docker exec -it ticket-recon-app ticket-recon decompose --ticket-key DEV-7543
-docker exec -it ticket-recon-app ticket-recon analyze --since 24h
+docker exec -it tech-decomposition-app tech-decomposition ask "..."
+docker exec -it tech-decomposition-app tech-decomposition decompose --ticket-key DEV-7543
+docker exec -it tech-decomposition-app tech-decomposition analyze --since 24h
 ```
 
 ## Services
 
 | Service | Port (host) | Role |
 |---|---|---|
-| `app` (ticket-recon) | 8000 | FastAPI + CLI |
+| `app` (tech-decomposition) | 8000 | FastAPI + CLI |
 | `sourcebot` | 3000 | Code index + AI Q&A backend |
 | `serena` | 9121 | LSP-backed MCP server (experimental local agent) |
 | `postgres` | — | Sourcebot persistence (docker network only) |
@@ -84,7 +84,7 @@ DECOMPOSE_MODEL=openrouter:anthropic/claude-opus-4-5
 ```
 
 Switching providers requires no code changes; the model registry in
-[core/models.py](src/ticket_recon/core/models.py) resolves `provider:name`
+[core/models.py](src/tech_decomposition/core/models.py) resolves `provider:name`
 strings at runtime.
 
 ## Repo management — two paths
@@ -130,7 +130,7 @@ you only need one, comment out the other.
 ## Observability
 
 - **Per-run metrics**: `outputs/metrics/runs.jsonl` (one stage row + one run row per invocation, JSONL).
-- **Quick view**: `ticket-recon analyze`, with `--since 24h`, `--by-engine sourcebot`, `--mode-filter ask` filters.
+- **Quick view**: `tech-decomposition analyze`, with `--since 24h`, `--by-engine sourcebot`, `--mode-filter ask` filters.
 - **Healthcheck**: `GET /health` returns `{"status":"ok"}`. Docker's healthcheck hits this every 10 s.
 
 ## Web UI
@@ -146,7 +146,7 @@ npm install        # first time only
 npm run dev        # → http://localhost:5173, proxies /ask + /runs to :8000
 ```
 
-Run the FastAPI server in another shell (`ticket-recon serve` or
+Run the FastAPI server in another shell (`tech-decomposition serve` or
 `docker compose up app`); the Vite dev proxy forwards API calls to it.
 
 **Prod (bundled into FastAPI):**
@@ -157,7 +157,7 @@ cd web && npm run build       # writes web/dist/
 # Visit http://localhost:8000/ui
 ```
 
-The static mount in [api.py](src/ticket_recon/api.py) is gated on the directory
+The static mount in [api.py](src/tech_decomposition/api.py) is gated on the directory
 existing, so if `web/dist` isn't present the API runs without the UI.
 
 ## Hosting beyond local docker
@@ -166,7 +166,7 @@ The `app` service is a stateless FastAPI container — fits any container
 runtime. Two common shapes:
 
 **Single managed container** (Cloud Run / Fly.io / Render):
-- Build & push the image: `docker build -t registry.example.com/ticket-recon:latest . && docker push ...`
+- Build & push the image: `docker build -t registry.example.com/tech-decomposition:latest . && docker push ...`
 - Point `SOURCEBOT_URL` at your hosted Sourcebot deployment.
 - Set env vars in the platform's secret store.
 
@@ -184,7 +184,7 @@ reverse proxy.
 
 ```bash
 git pull
-docker compose build app           # rebuild only ticket-recon
+docker compose build app           # rebuild only tech-decomposition
 docker compose up -d               # apply
 docker compose logs -f app         # tail
 ```

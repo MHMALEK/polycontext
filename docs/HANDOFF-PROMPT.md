@@ -4,7 +4,7 @@ Copy everything between the `---` lines below into your other AI tool.
 
 ---
 
-You're picking up work on **ticket-recon**, a Python service that turns
+You're picking up work on **tech-decomposition**, a Python service that turns
 Jira tickets into AI-friendly tech decompositions with multi-repo
 context and clickable GitLab permalinks. The project lives at
 `/Users/mohammadhosseinmalek/tract-projects/tech-decomposition` and runs against
@@ -52,8 +52,8 @@ Jira ticket
        (latency per stage, tokens, cost, retrieval breakdown by source)
 ```
 
-Two CLI entry points: `ticket-recon` (decomposition) and `ticket-recon-analyze`
-(metrics summary). One more entry point: `ticket-recon --ask "..."` for
+Two CLI entry points: `tech-decomposition` (decomposition) and `tech-decomposition-analyze`
+(metrics summary). One more entry point: `tech-decomposition --ask "..."` for
 free-form code Q&A — tries Sourcebot's `/api/ask` first, falls back to a local
 agentic loop with the same tool inventory but `output_type=Answer`.
 
@@ -84,7 +84,7 @@ actually at 763).
 
 ## What's already on disk
 
-- `src/ticket_recon/` — 18 modules, ~1700 LOC
+- `src/tech_decomposition/` — 18 modules, ~1700 LOC
 - `docker-compose.yml` — Sourcebot + Postgres + Redis + Serena. Sourcebot
   config at `config/sourcebot/config.json` (also registers Gemini models
   for the `/api/chat` feature — but see "stuck on" below).
@@ -116,7 +116,7 @@ We set:
 - Hard container recreate
 - Sentinel works because it runs against a different Sourcebot (likely hosted or EE)
 
-**Workaround that's currently live**: `ticket-recon --ask` tries Sourcebot MCP
+**Workaround that's currently live**: `tech-decomposition --ask` tries Sourcebot MCP
 first (`ask_codebase`), captures the "not configured" error, falls back to
 `local_ask.py` (same Pydantic AI agentic loop as `deep_decompose` but with
 `output_type=Answer`). End-to-end works. ~$0.04 for a Q&A on our setup.
@@ -221,16 +221,16 @@ docker compose ps        # all 4 healthy: postgres, redis, sourcebot, serena
 docker compose up -d     # if anything is down
 
 # Smoke test the cheap path:
-.venv/bin/ticket-recon --ticket-key SCRUM-17 --mode cheap
+.venv/bin/tech-decomposition --ticket-key SCRUM-17 --mode cheap
 
 # Smoke test the deep path:
-.venv/bin/ticket-recon --ticket-key SCRUM-18 --mode deep
+.venv/bin/tech-decomposition --ticket-key SCRUM-18 --mode deep
 
 # Smoke test --ask (falls back to local agent since Sourcebot AI is broken):
-.venv/bin/ticket-recon --ask "What special characters are not allowed in Farm Name?"
+.venv/bin/tech-decomposition --ask "What special characters are not allowed in Farm Name?"
 
 # Compare runs:
-.venv/bin/ticket-recon-analyze
+.venv/bin/tech-decomposition-analyze
 
 # Inspect a generated artifact:
 ls -t outputs/*.md | head -1 | xargs cat
@@ -260,28 +260,28 @@ ls -t outputs/*.md | head -1 | xargs cat
 
 | concern | file |
 |---|---|
-| FastAPI app + routes | `src/ticket_recon/api.py` |
-| CLI | `src/ticket_recon/cli.py` |
-| Config (env, defaults) | `src/ticket_recon/config.py` |
-| Typed models | `src/ticket_recon/models.py` |
-| Pipeline orchestration | `src/ticket_recon/pipeline.py` |
-| Jira fetch + comment | `src/ticket_recon/jira.py` |
-| Enrich (Flash) | `src/ticket_recon/enrich.py` |
-| Decompose (Pro, cheap) | `src/ticket_recon/decompose.py` |
-| Decompose (Pro, agentic) | `src/ticket_recon/deep_decompose.py` |
-| Contradiction check | `src/ticket_recon/contradiction.py` |
-| Local Q&A agent | `src/ticket_recon/local_ask.py` |
-| Sourcebot /api/ask adapter | `src/ticket_recon/ask.py` |
-| Markdown render + GitLab links | `src/ticket_recon/output.py` |
-| Markdown → ADF for Jira | `src/ticket_recon/markdown_to_adf.py` |
-| Metrics + cost | `src/ticket_recon/metrics.py` |
-| Run summary CLI | `src/ticket_recon/analyze.py` |
-| Per-repo import index | `src/ticket_recon/import_index.py` |
-| Per-language import parsing | `src/ticket_recon/retrievers/import_follow.py` |
-| Anchor retrieval | `src/ticket_recon/retrievers/anchors.py` |
-| Ripgrep retriever | `src/ticket_recon/retrievers/ripgrep.py` |
-| Sourcebot retriever | `src/ticket_recon/retrievers/sourcebot.py` |
-| Serena retriever | `src/ticket_recon/retrievers/serena.py` |
+| FastAPI app + routes | `src/tech_decomposition/api.py` |
+| CLI | `src/tech_decomposition/cli.py` |
+| Config (env, defaults) | `src/tech_decomposition/config.py` |
+| Typed models | `src/tech_decomposition/models.py` |
+| Pipeline orchestration | `src/tech_decomposition/pipeline.py` |
+| Jira fetch + comment | `src/tech_decomposition/jira.py` |
+| Enrich (Flash) | `src/tech_decomposition/enrich.py` |
+| Decompose (Pro, cheap) | `src/tech_decomposition/decompose.py` |
+| Decompose (Pro, agentic) | `src/tech_decomposition/deep_decompose.py` |
+| Contradiction check | `src/tech_decomposition/contradiction.py` |
+| Local Q&A agent | `src/tech_decomposition/local_ask.py` |
+| Sourcebot /api/ask adapter | `src/tech_decomposition/ask.py` |
+| Markdown render + GitLab links | `src/tech_decomposition/output.py` |
+| Markdown → ADF for Jira | `src/tech_decomposition/markdown_to_adf.py` |
+| Metrics + cost | `src/tech_decomposition/metrics.py` |
+| Run summary CLI | `src/tech_decomposition/analyze.py` |
+| Per-repo import index | `src/tech_decomposition/import_index.py` |
+| Per-language import parsing | `src/tech_decomposition/retrievers/import_follow.py` |
+| Anchor retrieval | `src/tech_decomposition/retrievers/anchors.py` |
+| Ripgrep retriever | `src/tech_decomposition/retrievers/ripgrep.py` |
+| Sourcebot retriever | `src/tech_decomposition/retrievers/sourcebot.py` |
+| Serena retriever | `src/tech_decomposition/retrievers/serena.py` |
 | Improvement roadmap (read this) | `docs/improvement-roadmap.md` |
 
 ---

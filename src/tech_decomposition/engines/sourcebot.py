@@ -1,7 +1,7 @@
 """SourcebotEngine: wraps the existing ``ask_sourcebot`` call.
 
 Thin adapter — pipes EnrichedQuestion in, EngineResult out. The actual
-HTTP logic lives in ``ticket_recon.ask`` so the engine here stays a
+HTTP logic lives in ``tech_decomposition.clients.sourcebot`` so the engine here stays a
 shim that converts shapes.
 """
 from __future__ import annotations

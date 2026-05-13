@@ -171,7 +171,7 @@ export function App() {
         {/* Main */}
         <main className="overflow-y-auto p-8 max-w-5xl">
           <header className="mb-6">
-            <h1 className="text-2xl font-bold">ticket-recon</h1>
+            <h1 className="text-2xl font-bold">tech-decomposition</h1>
             <p className="text-sm text-base-content/60">multi-repo code Q&amp;A</p>
           </header>
 

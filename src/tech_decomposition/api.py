@@ -25,7 +25,7 @@ from .core.context import RunContext
 from .core.factory import build_ask_pipeline, build_decompose_pipeline, build_metrics_observer
 from .core.runstore import open_default_store
 
-app = FastAPI(title="ticket-recon", version="0.2.0")
+app = FastAPI(title="tech-decomposition", version="0.2.0")
 
 # Permissive CORS for the bundled UI + local dev. Tighten in prod via a
 # reverse proxy or by replacing this with an explicit origin allowlist.

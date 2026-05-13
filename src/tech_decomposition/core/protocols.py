@@ -1,4 +1,4 @@
-"""Stage protocols for the ticket-recon pipeline.
+"""Stage protocols for the tech-decomposition pipeline.
 
 Five stages are defined here. Each is a runtime-checkable Protocol so any class
 matching the shape can be plugged in without inheritance. Concrete data classes

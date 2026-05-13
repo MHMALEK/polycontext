@@ -1,4 +1,4 @@
-"""ticket-recon CLI — subcommand-based.
+"""tech-decomposition CLI — subcommand-based.
 
 Subcommands:
     ask        - ask a code question via Sourcebot (or local agent, experimental)
@@ -304,8 +304,8 @@ def _cmd_analyze(args, settings) -> int:
 
 def _build_parser(settings) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="ticket-recon",
-        description="ticket-recon: multi-repo code Q&A and Jira ticket decomposition",
+        prog="tech-decomposition",
+        description="tech-decomposition: multi-repo code Q&A and Jira ticket decomposition",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -381,7 +381,7 @@ def _build_parser(settings) -> argparse.ArgumentParser:
     # history ----------------------------------------------------------------
     p_hist = sub.add_parser("history", help="List, show, or replay prior runs (from outputs/runstore.db)")
     hsub = p_hist.add_subparsers(dest="history_cmd")
-    # ticket-recon history (list, default)
+    # tech-decomposition history (list, default)
     p_hist.add_argument("--limit", type=int, default=20)
     p_hist.add_argument("--since", default=None, help="Window: '24h', '7d', '15m'.")
     p_hist.add_argument("--engine", default=None, help="Filter by engine substring.")
@@ -389,11 +389,11 @@ def _build_parser(settings) -> argparse.ArgumentParser:
                         help="Filter by status.")
     p_hist.add_argument("--history-mode", default=None, choices=[None, "ask", "decompose"],
                         help="Filter by run mode.")
-    # ticket-recon history show <id>
+    # tech-decomposition history show <id>
     p_show = hsub.add_parser("show", help="Print a full prior run by id")
     p_show.add_argument("run_id")
     p_show.add_argument("--json", action="store_true", help="Print as JSON.")
-    # ticket-recon history replay <id>
+    # tech-decomposition history replay <id>
     p_rep = hsub.add_parser("replay", help="Re-run a prior request by id")
     p_rep.add_argument("run_id")
     p_hist.set_defaults(func=_cmd_history)

@@ -1,7 +1,7 @@
-# Making ticket-recon's tech decomposition better and more efficient
+# Making tech-decomposition's tech decomposition better and more efficient
 
 A grounded survey of tools, techniques, and architectural moves that would
-materially improve the accuracy, cost, and reliability of `ticket-recon`'s
+materially improve the accuracy, cost, and reliability of `tech-decomposition`'s
 output. Ordered by impact-per-effort, with honest tradeoffs.
 
 The premise: **retrieval and grounding are now solid** (anchors + 3-hop
@@ -165,7 +165,7 @@ The routing decision itself costs $0.001. Average cost per ticket drops.
 
 ### Tracing / LLM observability
 - **[LangFuse](https://langfuse.com/)** — OSS, self-hostable, traces every
-  LLM call + tool call + retrieval step. Best for ticket-recon.
+  LLM call + tool call + retrieval step. Best for tech-decomposition.
 - **[Helicone](https://www.helicone.ai/)** — drop-in proxy, simpler setup,
   hosted.
 - **[Arize Phoenix](https://phoenix.arize.com/)** — OSS, good UI for agent traces.

@@ -1,4 +1,4 @@
-# ticket-recon: common workflow shortcuts.
+# tech-decomposition: common workflow shortcuts.
 #
 # One-command quick start:
 #   make up        — bring up the full stack (postgres, redis, sourcebot, app)
@@ -55,7 +55,7 @@ dev: install ui-install  ## Dev mode: backends in docker, FastAPI + Vite on host
 	@echo "FastAPI on :8000 + Vite on :5173. Ctrl-C to stop both."
 	@echo "Open http://localhost:5173 (the Vite proxy talks to FastAPI for you)."
 	@trap 'kill 0' EXIT INT TERM; \
-	uv run uvicorn ticket_recon.api:app --reload --port 8000 & \
+	uv run uvicorn tech_decomposition.api:app --reload --port 8000 & \
 	(cd web && npm run dev) & \
 	wait
 

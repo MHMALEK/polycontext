@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     output_dir: Path = Path("./outputs")
 
-    # Default for ``ticket-recon --ask``:
+    # Default for ``tech-decomposition --ask``:
     #   auto       = try Sourcebot /api/chat/blocking, MCP on 404, else local agent.
     #   sourcebot  = require Sourcebot (no local agent fallback).
     #   local      = local Pydantic AI agent only.
