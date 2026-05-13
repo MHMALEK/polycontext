@@ -69,7 +69,7 @@ class EngineResult(BaseModel):
 class Rendered(BaseModel):
     """Output of Renderer.render(): the final shape to deliver."""
 
-    format: Literal["markdown", "json", "jira_adf"]
+    format: Literal["markdown", "html", "text", "json", "jira_adf"]
     body: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 

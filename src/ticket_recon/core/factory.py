@@ -17,12 +17,14 @@ from ..enrichers.cheap import CheapEnricher
 from ..inputs.jira_ticket import JiraTicketSource
 from ..inputs.raw import RawQuestionSource
 from ..inputs.text_file import TextFileSource
+from ..renderers.html import HtmlRenderer
 from ..renderers.jira_adf import JiraADFRenderer
 from ..renderers.markdown import MarkdownRenderer
 from ..renderers.passthrough import PassthroughMarkdownRenderer
+from ..renderers.text import TextRenderer
 from ..sinks.cli import CLISink
+from ..sinks.file import FileSink
 from ..sinks.jira_comment import JiraCommentSink
-from ..sinks.markdown_file import MarkdownFileSink
 from .metrics import JsonlMetricsObserver
 from .pipeline import Pipeline
 from .protocols import Engine, InputSource
@@ -31,6 +33,17 @@ from .structurer import PydanticAIStructurer
 AskEngineName = Literal["sourcebot", "local"]
 DecomposeMode = Literal["cheap", "deep", "auto"]
 TicketSourceName = Literal["jira", "text_file"]
+OutputFormat = Literal["markdown", "html", "text"]
+
+
+def _build_renderer(output_format: OutputFormat):
+    if output_format == "markdown":
+        return MarkdownRenderer()
+    if output_format == "html":
+        return HtmlRenderer()
+    if output_format == "text":
+        return TextRenderer()
+    raise ValueError(f"unknown output format: {output_format!r}")
 
 
 def build_ask_engine(name: AskEngineName, *, max_steps: int | None = None) -> Engine:
@@ -55,15 +68,19 @@ def build_ask_pipeline(
     engine: AskEngineName = "sourcebot",
     max_steps: int | None = None,
     structure_responses: bool = True,
+    output_format: OutputFormat = "markdown",
     include_file_sink: bool = True,
     include_cli_sink: bool = True,
 ) -> Pipeline:
-    """Q&A pipeline: raw question → engine → (structurer) → markdown → sinks.
+    """Q&A pipeline: raw question → engine → (structurer) → renderer → sinks.
 
     ``structure_responses=True`` (default) wraps the engine in a
     ``StructuredEngine`` that runs a Flash-tier pydantic-ai pass to strip
     narration and lift citations into typed objects. The local agent already
     emits structured output, so the wrapper is skipped for it.
+
+    ``output_format`` picks the renderer (markdown / html / text). The
+    file sink writes with the matching extension.
     """
     inner = build_ask_engine(engine, max_steps=max_steps)
     if structure_responses and engine == "sourcebot":
@@ -72,16 +89,17 @@ def build_ask_pipeline(
     else:
         active_engine = inner
 
+    renderer = _build_renderer(output_format)
     sinks = []
     if include_cli_sink:
         sinks.append(CLISink())
     if include_file_sink:
-        sinks.append(MarkdownFileSink(subdir="answers"))
+        sinks.append(FileSink(subdir="answers", format=output_format))
     return Pipeline(
         input_source=RawQuestionSource(),
         enricher=None,
         engine=active_engine,
-        renderers=[MarkdownRenderer()],
+        renderers=[renderer],
         sinks=sinks,
     )
 
@@ -93,6 +111,7 @@ def build_decompose_pipeline(
     mode: DecomposeMode = "cheap",
     repos: list[str] | None = None,
     post_to_jira: bool = False,
+    output_format: OutputFormat = "markdown",
     include_file_sink: bool = True,
     include_cli_sink: bool = True,
 ) -> Pipeline:
@@ -110,12 +129,19 @@ def build_decompose_pipeline(
     else:
         engine = DecomposeEngine(repos=repos)
 
-    renderers = [PassthroughMarkdownRenderer()]
+    # Decompose engines already produce richly-laid-out markdown; for the
+    # markdown case use the passthrough renderer so we don't double-up
+    # headers. For html/text, transform the engine's markdown via the
+    # standard renderers (they accept any EngineResult).
+    if output_format == "markdown":
+        renderers = [PassthroughMarkdownRenderer()]
+    else:
+        renderers = [_build_renderer(output_format)]
     sinks = []
     if include_cli_sink:
         sinks.append(CLISink())
     if include_file_sink:
-        sinks.append(MarkdownFileSink(subdir="decompositions"))
+        sinks.append(FileSink(subdir="decompositions", format=output_format))
     if post_to_jira:
         # JiraCommentSink consumes the jira_adf rendering; append the ADF
         # renderer at the end of the list so the sink can find it.

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from .config import get_settings
 from .core.context import RunContext
 from .core.factory import build_ask_pipeline, build_decompose_pipeline, build_metrics_observer
+from .core.runstore import open_default_store
 
 app = FastAPI(title="ticket-recon", version="0.2.0")
 
@@ -38,7 +39,8 @@ class AskRequest(BaseModel):
     engine: Literal["sourcebot", "local"] = "sourcebot"
     max_steps: int | None = Field(default=None, ge=1, le=50)
     structure_responses: bool = True
-    write_markdown: bool = False
+    write_file: bool = False
+    format: Literal["markdown", "html", "text"] = "markdown"
     repos: list[str] | None = None
 
 
@@ -65,22 +67,32 @@ async def ask_endpoint(req: AskRequest) -> AskResponse:
             engine=req.engine,
             max_steps=req.max_steps,
             structure_responses=req.structure_responses,
+            output_format=req.format,
             include_cli_sink=False,
-            include_file_sink=req.write_markdown,
+            include_file_sink=req.write_file,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}") from e
 
     obs = build_metrics_observer(settings, mode="ask")
     ctx = RunContext(settings=settings, mode="ask", metrics=obs)
+    store = open_default_store(settings)
     try:
-        run = await pipeline.run(req.question, ctx)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+        try:
+            run = await pipeline.run(req.question, ctx)
+        except Exception as e:
+            store.record(run_id=ctx.run_id, mode="ask", status="failed",
+                         input_ref=req.question, output_format=req.format,
+                         error=f"{type(e).__name__}: {e}")
+            raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+        store.record(run_id=ctx.run_id, mode="ask", status="completed",
+                     input_ref=req.question, output_format=req.format, pipeline_run=run)
+    finally:
+        store.close()
 
     er = run.engine_result
     md_path = next(
-        (sr.location for sr in run.sink_results if sr.sink == "markdown_file" and sr.location),
+        (sr.location for sr in run.sink_results if sr.sink == "file" and sr.location),
         None,
     )
     return AskResponse(
@@ -110,6 +122,7 @@ class DecomposeBody(BaseModel):
     repos: list[str] | None = None
     mode: Literal["cheap", "deep", "auto"] = "auto"
     post_to_jira: bool = False
+    format: Literal["markdown", "html", "text"] = "markdown"
 
 
 class DecomposeAPIResponse(BaseModel):
@@ -158,19 +171,29 @@ async def decompose_endpoint(req: DecomposeBody) -> DecomposeAPIResponse:
         mode=req.mode,
         repos=req.repos,
         post_to_jira=req.post_to_jira,
+        output_format=req.format,
         include_cli_sink=False,
         include_file_sink=True,
     )
     obs = build_metrics_observer(settings, mode="decompose")
     ctx = RunContext(settings=settings, mode="decompose", metrics=obs)
+    store = open_default_store(settings)
     try:
-        run = await pipeline.run(ref, ctx)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        try:
+            run = await pipeline.run(ref, ctx)
+        except Exception as e:
+            store.record(run_id=ctx.run_id, mode="decompose", status="failed",
+                         input_ref=ref, output_format=req.format,
+                         error=f"{type(e).__name__}: {e}")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+        store.record(run_id=ctx.run_id, mode="decompose", status="completed",
+                     input_ref=ref, output_format=req.format, pipeline_run=run)
+    finally:
+        store.close()
 
     er = run.engine_result
     md_path = next(
-        (sr.location for sr in run.sink_results if sr.sink == "markdown_file" and sr.location),
+        (sr.location for sr in run.sink_results if sr.sink == "file" and sr.location),
         None,
     )
     jira_sr = next((sr for sr in run.sink_results if sr.sink == "jira_comment"), None)
@@ -188,3 +211,95 @@ async def decompose_endpoint(req: DecomposeBody) -> DecomposeAPIResponse:
         output_tokens=er.output_tokens,
         run_id=ctx.run_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# /runs — history
+# ---------------------------------------------------------------------------
+
+
+class RunListItem(BaseModel):
+    id: str
+    mode: str
+    status: str
+    engine: str | None = None
+    model: str | None = None
+    total_seconds: float | None = None
+    total_cost_usd: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    input_preview: str | None = None
+    output_format: str | None = None
+    created_at: str
+    completed_at: str | None = None
+
+
+class RunDetail(RunListItem):
+    answer: str | None = None
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    input_ref: Any = None
+    error: str | None = None
+
+
+@app.get("/runs", response_model=list[RunListItem])
+def list_runs(
+    mode: str | None = None,
+    status: str | None = None,
+    engine: str | None = None,
+    since: str | None = None,
+    limit: int = 20,
+) -> list[RunListItem]:
+    """List recent runs. ``since`` is an ISO-8601 timestamp."""
+    settings = get_settings()
+    store = open_default_store(settings)
+    try:
+        rows = store.list(
+            mode=mode, status=status, engine_contains=engine,
+            since_iso=since, limit=limit,
+        )
+    finally:
+        store.close()
+    return [RunListItem(**{k: v for k, v in r.items() if k in RunListItem.model_fields}) for r in rows]
+
+
+@app.get("/runs/{run_id}", response_model=RunDetail)
+def get_run(run_id: str) -> RunDetail:
+    settings = get_settings()
+    store = open_default_store(settings)
+    try:
+        row = store.get(run_id)
+    finally:
+        store.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="run not found")
+    return RunDetail(**{k: v for k, v in row.items() if k in RunDetail.model_fields})
+
+
+@app.post("/runs/{run_id}/replay")
+async def replay_run(run_id: str) -> dict[str, Any]:
+    """Re-run a prior request. Returns the new run_id; poll /runs/{new_id}."""
+    settings = get_settings()
+    store = open_default_store(settings)
+    try:
+        row = store.get(run_id)
+    finally:
+        store.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="run not found")
+    mode = row["mode"]
+    ref = row.get("input_ref")
+    fmt = row.get("output_format") or "markdown"
+    if mode == "ask":
+        question = ref if isinstance(ref, str) else (ref.get("question") if isinstance(ref, dict) else "")
+        resp = await ask_endpoint(AskRequest(question=question, format=fmt))
+        return {"replayed_from": run_id, "new_run_id": resp.run_id}
+    if mode == "decompose":
+        body = DecomposeBody(
+            ticket_key=(ref or {}).get("key") if isinstance(ref, dict) else None,
+            ticket_url=(ref or {}).get("url") if isinstance(ref, dict) else None,
+            format=fmt,
+        )
+        resp = await decompose_endpoint(body)
+        return {"replayed_from": run_id, "new_run_id": resp.run_id}
+    raise HTTPException(status_code=400, detail=f"replay not supported for mode {mode!r}")

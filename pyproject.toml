@@ -15,6 +15,7 @@ dependencies = [
     "mcp>=1.2",
     "tree-sitter>=0.23",
     "tree-sitter-typescript>=0.23",
+    "markdown>=3.7",
 ]
 
 [project.scripts]

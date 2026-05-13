@@ -61,16 +61,16 @@ services:
       - GITLAB_TOKEN=${GITLAB_TOKEN:-}
 
   serena:
+    # Serena is only used by the experimental local agent (--engine local)
+    # and the deep_decompose path. The default Sourcebot-backed flows don't
+    # need it. Opt in with `docker compose --profile experimental up`.
+    profiles: ["experimental"]
     image: ghcr.io/oraios/serena:latest
     container_name: ticket-recon-serena
     restart: unless-stopped
     ports:
       - "9121:9121"
     volumes:
-      # Same parent folder mounted at Serena's expected location.
-      # Serena treats this single path as one project — it sees all 4 repos at once.
-      # Mounted writable because Serena writes a `.serena/` config dir at the root
-      # (alongside the repo folders, NOT inside them). Harmless to your repos.
       - ${REPOS_ROOT:-/Users/mohammadhosseinmalek/tract-projects/aider-experiments}:/workspaces/projects
     command: >
       serena start-mcp-server
