@@ -1,3 +1,10 @@
+# Project name locked to `ticket-recon` so the docker resource names
+# (volumes, networks) stay stable regardless of where the repo lives on
+# disk. The GitLab repo / folder is named `tech-decomposition`, but the
+# existing Sourcebot index + Postgres volumes were created under
+# `ticket-recon` and we don't want to orphan them.
+name: ticket-recon
+
 services:
   postgres:
     image: postgres:16
