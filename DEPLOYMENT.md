@@ -117,6 +117,33 @@ you only need one, comment out the other.
 - **Quick view**: `ticket-recon analyze`, with `--since 24h`, `--by-engine sourcebot`, `--mode-filter ask` filters.
 - **Healthcheck**: `GET /health` returns `{"status":"ok"}`. Docker's healthcheck hits this every 10 s.
 
+## Web UI
+
+A React + Tailwind + DaisyUI single-page app lives under [web/](web/). It
+talks to the FastAPI endpoints (`/ask`, `/runs`) — no separate backend.
+
+**Dev (live reload):**
+
+```bash
+cd web
+npm install        # first time only
+npm run dev        # → http://localhost:5173, proxies /ask + /runs to :8000
+```
+
+Run the FastAPI server in another shell (`ticket-recon serve` or
+`docker compose up app`); the Vite dev proxy forwards API calls to it.
+
+**Prod (bundled into FastAPI):**
+
+```bash
+cd web && npm run build       # writes web/dist/
+# FastAPI auto-detects web/dist and mounts it at /ui
+# Visit http://localhost:8000/ui
+```
+
+The static mount in [api.py](src/ticket_recon/api.py) is gated on the directory
+existing, so if `web/dist` isn't present the API runs without the UI.
+
 ## Hosting beyond local docker
 
 The `app` service is a stateless FastAPI container — fits any container

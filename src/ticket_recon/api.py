@@ -13,7 +13,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import get_settings
@@ -22,6 +26,23 @@ from .core.factory import build_ask_pipeline, build_decompose_pipeline, build_me
 from .core.runstore import open_default_store
 
 app = FastAPI(title="ticket-recon", version="0.2.0")
+
+# Permissive CORS for the bundled UI + local dev. Tighten in prod via a
+# reverse proxy or by replacing this with an explicit origin allowlist.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# If a pre-built UI exists at `web/dist`, mount it at /ui. Lets the same
+# FastAPI deployment serve the React app in production with no extra infra.
+_ui_dist = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
+if _ui_dist.is_dir():
+    app.mount("/ui", StaticFiles(directory=str(_ui_dist), html=True), name="ui")
 
 
 @app.get("/health")
