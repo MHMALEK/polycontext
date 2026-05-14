@@ -26,7 +26,14 @@ tech-decomposition-analyze = "tech_decomposition.analyze:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
+    "pytest-asyncio>=0.24",
     "ruff>=0.7",
+]
+# Adapter bake-off extras. Each is opt-in so users only pay for the agent backends
+# they actually want to compare. ``pip install -e '.[adapters]'`` pulls them all.
+adapters = [
+    "claude-agent-sdk>=0.1",
+    "aider-chat>=0.70",
 ]
 
 [build-system]
@@ -39,3 +46,7 @@ packages = ["src/tech_decomposition"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

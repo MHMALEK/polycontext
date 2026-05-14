@@ -3,12 +3,14 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "./api";
 import type {
+  AdapterInfo,
   AskEngine,
   AskResponse,
   OutputFormat,
   RunDetail,
   RunListItem,
 } from "./api";
+import { Bakeoff } from "./Bakeoff";
 
 // ---------------------------------------------------------------------------
 // Types & utilities
@@ -25,6 +27,10 @@ type AskFormState = {
   question: string;
   engine: AskEngine;
   format: OutputFormat;
+  // Empty string = use the legacy /ask endpoint (baseline-Sourcebot with the
+  // structurer wrapper). Any other value routes to POST /v1/adapters/{name}/ask
+  // so a single named adapter can be driven from the main view.
+  adapter: string;
 };
 
 type DisplayedRun = {
@@ -40,10 +46,13 @@ type DisplayedRun = {
   citations: Array<Record<string, unknown>>;
 };
 
+type View = "ask" | "bakeoff";
+
 const INITIAL_FORM: AskFormState = {
   question: "",
   engine: "sourcebot",
   format: "markdown",
+  adapter: "",
 };
 
 const SUGGESTED_PROMPTS = [
@@ -423,6 +432,7 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
 // ---------------------------------------------------------------------------
 
 export function App() {
+  const [view, setView] = useState<View>("ask");
   const [form, setForm] = useState<AskFormState>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [answer, setAnswer] = useState<AskResponse | null>(null);
@@ -433,6 +443,7 @@ export function App() {
   const [selectedDetail, setSelectedDetail] = useState<RunDetail | null>(null);
   const [selectedLoading, setSelectedLoading] = useState(false);
   const [progress, setProgress] = useState<LiveProgress | null>(null);
+  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const progressTimer = useRef<number | null>(null);
 
   const loadHistory = useCallback(async () => {
@@ -446,6 +457,11 @@ export function App() {
 
   useEffect(() => {
     loadHistory();
+    // Adapter list is fetched once at mount; status changes (e.g. starting
+    // the OpenHands container) require a refresh anyway.
+    api.listAdapters()
+      .then((r) => setAdapters(r.adapters.filter((a) => a.capabilities.includes("ask"))))
+      .catch((e) => console.warn("adapter list fetch failed", e));
   }, [loadHistory]);
 
   const startNew = useCallback(() => {
@@ -501,11 +517,41 @@ export function App() {
       void tick();
 
       try {
-        const res = await api.ask({
-          question,
-          engine: form.engine,
-          format: form.format,
-        });
+        let res: AskResponse;
+        if (form.adapter) {
+          // Adapter path: hit /v1/adapters/{name}/ask via the bake-off
+          // fan-out endpoint with a single adapter. Map the adapter result
+          // back into AskResponse shape so the rest of the view is unchanged.
+          const r = await api.bakeoff("ask", {
+            adapters: [form.adapter],
+            ask: { query: question },
+          });
+          const item = r.results[0];
+          if (!item.ok) throw new Error(item.error || `adapter ${form.adapter} failed`);
+          const ar = item.result!;
+          res = {
+            engine: ar.adapter,
+            answer: ar.answer ?? "",
+            citations: (ar.citations ?? []) as Array<Record<string, unknown>>,
+            model: ar.metrics?.model ?? null,
+            transport: null,
+            wall_seconds: ar.metrics?.duration_ms != null
+              ? ar.metrics.duration_ms / 1000
+              : null,
+            input_tokens: ar.metrics?.tokens_in ?? null,
+            output_tokens: ar.metrics?.tokens_out ?? null,
+            cost_usd: ar.metrics?.cost_usd ?? null,
+            markdown_path: null,
+            run_id: "(adapter-call)",
+          };
+        } else {
+          // Legacy /ask path — baseline-Sourcebot with the structurer wrapper.
+          res = await api.ask({
+            question,
+            engine: form.engine,
+            format: form.format,
+          });
+        }
         setAnswer(res);
         setForm((f) => ({ ...f, question: "" }));
         await loadHistory();
@@ -597,6 +643,24 @@ export function App() {
 
   const historyGroups = useMemo(() => groupHistoryByDay(history), [history]);
 
+  if (view === "bakeoff") {
+    return (
+      <div className="min-h-screen bg-base-200 text-base-content">
+        <div className="navbar bg-base-100 border-b border-base-300 px-4">
+          <h1 className="text-lg font-bold flex-1">tech-decomposition</h1>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setView("ask")}
+          >
+            ← Ask
+          </button>
+        </div>
+        <Bakeoff />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-base-200 text-base-content">
       <div className="grid grid-cols-1 md:grid-cols-[300px_1fr] h-screen">
@@ -662,11 +726,18 @@ export function App() {
         {/* ── Main ────────────────────────────────────────────────────────── */}
         <main className="overflow-y-auto">
           <div className="max-w-3xl mx-auto px-6 py-8">
-            <header className="mb-6 flex items-baseline justify-between">
+            <header className="mb-6 flex items-baseline justify-between gap-4">
               <div>
                 <h1 className="text-xl font-semibold">tech-decomposition</h1>
                 <p className="text-sm text-base-content/60">multi-repo code Q&amp;A</p>
               </div>
+              <button
+                type="button"
+                className="btn btn-sm btn-outline"
+                onClick={() => setView("bakeoff")}
+              >
+                Adapter bake-off →
+              </button>
             </header>
 
             {/* Ask form */}
@@ -688,6 +759,27 @@ export function App() {
                 className="w-full p-4 bg-transparent text-sm resize-y focus:outline-none placeholder:text-base-content/40"
               />
               <div className="flex items-center gap-3 flex-wrap px-3 py-2 border-t border-base-200">
+                <label className="flex items-center gap-1.5 text-xs text-base-content/60">
+                  <span>adapter</span>
+                  <select
+                    className="select select-bordered select-xs"
+                    value={form.adapter}
+                    onChange={(e) => setForm({ ...form, adapter: e.target.value })}
+                    title="Empty = legacy /ask (baseline). Any other adapter routes through /v1/adapters/{name}/ask."
+                  >
+                    <option value="">default (baseline)</option>
+                    {adapters.map((a) => (
+                      <option
+                        key={a.name}
+                        value={a.name}
+                        disabled={!a.health.ok}
+                        title={a.health.ok ? a.description : a.health.reason}
+                      >
+                        {a.name}{a.health.ok ? "" : " (down)"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="flex items-center gap-1.5 text-xs text-base-content/60">
                   <span>engine</span>
                   <select

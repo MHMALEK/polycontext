@@ -150,18 +150,24 @@ class RunStore:
         input_ref: Any,
         output_format: str | None = None,
         pipeline_run: PipelineRun | None = None,
+        engine: str | None = None,
         error: str | None = None,
         created_at: str | None = None,
     ) -> None:
-        """Insert (or replace) a row for this run."""
-        engine = model = answer = None
+        """Insert (or replace) a row for this run.
+
+        ``engine`` may be supplied directly when there's no PipelineRun — used
+        by the adapter bake-off routes which record a tag like ``baseline:ask``
+        without running through the legacy Pipeline class.
+        """
+        model = answer = None
         citations_json = payload_json = None
         total_seconds = total_cost_usd = None
         input_tokens = output_tokens = None
         input_preview = None
         if pipeline_run is not None:
             er = pipeline_run.engine_result
-            engine = er.engine
+            engine = engine or er.engine
             model = er.model
             answer = er.answer_markdown
             citations_json = json.dumps(er.citations or [])

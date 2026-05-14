@@ -11,6 +11,7 @@ implemented yet — out of scope for v1.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 from pathlib import Path
@@ -20,9 +21,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .adapters import (
+    AdapterAskInput,
+    AdapterDecomposeInput,
+    AdapterImplementInput,
+    NotSupported,
+    get_adapter,
+    list_adapters,
+)
 from .config import get_settings
 from .core.context import RunContext
 from .core.factory import build_ask_pipeline, build_decompose_pipeline, build_metrics_observer
+from .core.implement_runner import run_implement
 from .core.runstore import RunStore, open_default_store
 
 
@@ -382,3 +392,152 @@ async def replay_run(run_id: str) -> dict[str, Any]:
         resp = await decompose_endpoint(body)
         return {"replayed_from": run_id, "new_run_id": resp.run_id}
     raise HTTPException(status_code=400, detail=f"replay not supported for mode {mode!r}")
+
+
+# ---------------------------------------------------------------------------
+# /v1/adapters — bake-off harness
+# ---------------------------------------------------------------------------
+
+
+def _resolve_adapter(name: str):
+    """Look up the adapter, applying the ``enabled_adapters`` allowlist."""
+    settings = get_settings()
+    allowlist = settings.enabled_adapters
+    if allowlist and name not in allowlist:
+        raise HTTPException(status_code=404, detail=f"adapter {name!r} not enabled")
+    try:
+        return get_adapter(name, settings)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown adapter: {name!r}")
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"adapter not installed: {e}") from e
+
+
+@app.get("/v1/adapters")
+def list_adapters_endpoint() -> dict[str, Any]:
+    settings = get_settings()
+    items = list_adapters(settings)
+    if settings.enabled_adapters:
+        items = [i for i in items if i["name"] in settings.enabled_adapters]
+    return {"adapters": items}
+
+
+@app.post("/v1/adapters/{name}/ask")
+async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
+    adapter = _resolve_adapter(name)
+    store = open_default_store(get_settings())
+    ctx = RunContext(settings=get_settings(), mode="ask")
+    try:
+        try:
+            result = await adapter.ask(inp)
+        except NotSupported as e:
+            raise HTTPException(status_code=501, detail=str(e)) from e
+        except Exception as e:
+            store.record(run_id=ctx.run_id, mode="ask", status="failed",
+                         input_ref=inp.model_dump(), engine=f"{name}:ask",
+                         error=f"{type(e).__name__}: {e}")
+            raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+        store.record(run_id=ctx.run_id, mode="ask", status="completed",
+                     input_ref=inp.model_dump(), engine=f"{name}:ask")
+    finally:
+        store.close()
+    return {"run_id": ctx.run_id, "result": result.model_dump()}
+
+
+@app.post("/v1/adapters/{name}/decompose")
+async def adapter_decompose(name: str, inp: AdapterDecomposeInput) -> dict[str, Any]:
+    if not (inp.ticket_key or inp.ticket_url or inp.ticket_text):
+        raise HTTPException(status_code=400, detail="Provide one of: ticket_key, ticket_url, ticket_text.")
+    adapter = _resolve_adapter(name)
+    store = open_default_store(get_settings())
+    ctx = RunContext(settings=get_settings(), mode="decompose")
+    try:
+        try:
+            result = await adapter.decompose(inp)
+        except NotSupported as e:
+            raise HTTPException(status_code=501, detail=str(e)) from e
+        except Exception as e:
+            store.record(run_id=ctx.run_id, mode="decompose", status="failed",
+                         input_ref=inp.model_dump(), engine=f"{name}:decompose",
+                         error=f"{type(e).__name__}: {e}")
+            raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+        store.record(run_id=ctx.run_id, mode="decompose", status="completed",
+                     input_ref=inp.model_dump(), engine=f"{name}:decompose")
+    finally:
+        store.close()
+    return {"run_id": ctx.run_id, "result": result.model_dump()}
+
+
+@app.post("/v1/adapters/{name}/implement")
+async def adapter_implement(name: str, inp: AdapterImplementInput) -> dict[str, Any]:
+    adapter = _resolve_adapter(name)
+    if not adapter.supports("implement"):
+        raise HTTPException(status_code=501, detail=f"adapter {name!r} does not support implement")
+    store = open_default_store(get_settings())
+    ctx = RunContext(settings=get_settings(), mode="implement")
+    try:
+        try:
+            result = await run_implement(
+                adapter=adapter, inp=inp, settings=get_settings(), run_id=ctx.run_id,
+            )
+        except NotSupported as e:
+            raise HTTPException(status_code=501, detail=str(e)) from e
+        except Exception as e:
+            store.record(run_id=ctx.run_id, mode="implement", status="failed",
+                         input_ref=inp.model_dump(), engine=f"{name}:implement",
+                         error=f"{type(e).__name__}: {e}")
+            raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+        store.record(run_id=ctx.run_id, mode="implement", status="completed",
+                     input_ref=inp.model_dump(), engine=f"{name}:implement")
+    finally:
+        store.close()
+    return {"run_id": ctx.run_id, "result": result.model_dump()}
+
+
+# ---------------------------------------------------------------------------
+# /v1/bakeoff — fan-out across N adapters
+# ---------------------------------------------------------------------------
+
+
+class BakeoffBody(BaseModel):
+    adapters: list[str] = Field(min_length=1)
+    ask: AdapterAskInput | None = None
+    decompose: AdapterDecomposeInput | None = None
+    implement: AdapterImplementInput | None = None
+
+
+@app.post("/v1/bakeoff/{job}")
+async def bakeoff(job: Literal["ask", "decompose", "implement"], body: BakeoffBody) -> dict[str, Any]:
+    """Run the same input through every named adapter sequentially.
+
+    Sequential rather than parallel because some backends share resources
+    (Sourcebot, the local SQLite store, your Anthropic rate limit). Each
+    adapter's response is independent; failures don't short-circuit the
+    others.
+    """
+    inp = getattr(body, job)
+    if inp is None:
+        raise HTTPException(status_code=400, detail=f"body.{job} is required for job={job!r}")
+
+    results: list[dict[str, Any]] = []
+    settings = get_settings()
+    for name in body.adapters:
+        try:
+            adapter = _resolve_adapter(name)
+        except HTTPException as e:
+            results.append({"adapter": name, "ok": False, "error": e.detail, "status": e.status_code})
+            continue
+        try:
+            if job == "ask":
+                r = await adapter.ask(inp)
+            elif job == "decompose":
+                r = await adapter.decompose(inp)
+            else:
+                r = await run_implement(adapter=adapter, inp=inp, settings=settings,
+                                         run_id=f"bo-{name}-{asyncio.get_event_loop().time():.0f}")
+            results.append({"adapter": name, "ok": True, "result": r.model_dump()})
+        except NotSupported as e:
+            results.append({"adapter": name, "ok": False, "error": str(e), "status": 501})
+        except Exception as e:  # noqa: BLE001 — surface, don't break the loop
+            results.append({"adapter": name, "ok": False, "error": f"{type(e).__name__}: {e}", "status": 502})
+    return {"job": job, "results": results}
