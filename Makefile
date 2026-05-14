@@ -24,14 +24,18 @@
 #   make down-prod  stop the prod-mode stack
 #   make clean    — stop and remove named volumes (CAUTION: wipes index)
 
-.PHONY: up dev prod build logs down down-prod clean smoke install ui-install help
+.PHONY: up dev prod build logs down down-prod clean smoke install ui-install help \
+        eval-adapters eval-cases eval-run eval-report \
+        adapters adapters-down adapters-logs
 .DEFAULT_GOAL := help
 
 # Compose file combinations
-#   LOCAL = base + local overlay (publishes Sourcebot's :3000 for the UI)
-#   PROD  = base + prod overlay  (no host port for Sourcebot; quieter logs)
-COMPOSE_LOCAL := -f docker-compose.yml -f compose.local.yaml
-COMPOSE_PROD  := -f docker-compose.yml -f compose.prod.yaml --env-file .env.prod
+#   LOCAL    = base + local overlay (publishes Sourcebot's :3000 for the UI)
+#   PROD     = base + prod overlay  (no host port for Sourcebot; quieter logs)
+#   ADAPTERS = local + adapters overlay (Tabby + OpenHands sidecars)
+COMPOSE_LOCAL    := -f docker-compose.yml -f compose.local.yaml
+COMPOSE_PROD     := -f docker-compose.yml -f compose.prod.yaml --env-file .env.prod
+COMPOSE_ADAPTERS := -f docker-compose.yml -f compose.local.yaml -f compose.adapters.yaml
 
 # ---------------------------------------------------------------------------
 # Local — full Docker stack with .env
@@ -115,5 +119,49 @@ smoke:  ## Ask one canned question via the running API
 	  -d '{"question":"Where is the Suppliers page rendered?"}' | \
 	  python -m json.tool
 
+# ---------------------------------------------------------------------------
+# Phase 3 sidecar adapters (Tabby + OpenHands)
+# ---------------------------------------------------------------------------
+
+adapters:  ## Start OpenHands + cline-sdk-bridge sidecars (Tabby is GPU-only)
+	docker compose $(COMPOSE_ADAPTERS) up -d --build openhands cline_sdk_bridge
+	@echo ""
+	@echo "  OpenHands         : http://localhost:$${OPENHANDS_HOST_PORT:-3030}"
+	@echo "  cline-sdk-bridge  : http://localhost:$${CLINE_SDK_BRIDGE_PORT:-3040}"
+	@echo ""
+	@echo "Tabby is not started locally (image requires CUDA). To enable Tabby,"
+	@echo "point TABBY_BASE_URL at a remote GPU-host Tabby server."
+	@echo ""
+	@echo "Set in .env:"
+	@echo "  OPENHANDS_BASE_URL=http://localhost:3030"
+	@echo "  CLINE_SDK_BRIDGE_URL=http://localhost:3040"
+	@echo "Then 'make eval-adapters' to confirm health."
+
+adapters-down:  ## Stop sidecar adapters only (leave Sourcebot stack running)
+	docker compose $(COMPOSE_ADAPTERS) stop tabby openhands
+	docker compose $(COMPOSE_ADAPTERS) rm -f tabby openhands
+
+adapters-logs:  ## Tail Tabby + OpenHands logs
+	docker compose $(COMPOSE_ADAPTERS) logs -f tabby openhands
+
+# ---------------------------------------------------------------------------
+# Adapter bake-off (eval/)
+# ---------------------------------------------------------------------------
+
+eval-adapters:  ## eval: list registered adapters and their health
+	uv run python -m eval.bakeoff.cli list-adapters
+
+eval-cases:  ## eval: list discovered cases (filter with JOB=ask|decompose|implement)
+	uv run python -m eval.bakeoff.cli list-cases $(if $(JOB),--job $(JOB))
+
+# Example: make eval-run ADAPTERS=baseline,claude_sdk JOB=ask
+eval-run:  ## eval: run the bake-off (ADAPTERS=a,b JOB=ask|decompose|implement)
+	@test -n "$(ADAPTERS)" || (echo "set ADAPTERS=a,b,c"; exit 1)
+	uv run python -m eval.bakeoff.cli run --adapters $(ADAPTERS) $(if $(JOB),--job $(JOB)) $(if $(IDS),--ids $(IDS)) $(if $(TAGS),--tags $(TAGS))
+
+eval-report:  ## eval: regenerate report.md/summary.json for RUN=eval-<ts>
+	@test -n "$(RUN)" || (echo "set RUN=eval-<timestamp>"; exit 1)
+	uv run python -m eval.bakeoff.cli report $(RUN)
+
 help:  ## Show this help.
-	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | awk -F':.*##' '{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | awk -F':.*##' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'

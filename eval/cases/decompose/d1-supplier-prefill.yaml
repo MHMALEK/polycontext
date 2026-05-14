@@ -1,0 +1,32 @@
+id: d1-supplier-prefill
+tags: [cross-repo, traceability, frontend, ux-flow]
+description: |
+  Multi-repo behavior question framed as a Jira ticket. Tests whether the
+  decompose pipeline can: identify both the frontend and traceability repos,
+  call out the data-flow risk when the editing user is deleted, and break
+  the work into a handful of concrete subtasks.
+
+input:
+  ticket_text: |
+    Title: Pre-fill supplier questionnaire on behalf of supplier
+
+    An internal employee logs in on behalf of a supplier, pre-fills a
+    questionnaire, and saves the responses. The supplier then logs in,
+    reviews the information, and submits.
+
+    Questions to answer in the decomposition:
+    1. What happens if the internal representative who edited the questionnaire
+       is later removed as a user? Specifically: what happens to the edited
+       answers — are they orphaned, deleted, blocked, or visible?
+    2. List any technical limitations or considerations.
+
+    Produce subtasks that an autonomous coding agent could pick up and
+    implement to make this flow safe and complete.
+  mode: auto
+
+expected:
+  min_subtasks: 3
+  max_subtasks: 10
+  must_touch_repos: [frontend, traceability]
+  must_mention_files:
+    - questionnaire

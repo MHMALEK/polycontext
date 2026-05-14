@@ -72,6 +72,47 @@ async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+// ---- Adapter bake-off shapes (mirror src/tech_decomposition/adapters/base.py)
+
+export type Capability = "ask" | "decompose" | "implement";
+
+export interface AdapterInfo {
+  name: string;
+  installed: boolean;
+  capabilities: Capability[];
+  description: string;
+  health: { ok: boolean; reason?: string };
+}
+
+export interface AdapterMetrics {
+  duration_ms?: number;
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+  cost_usd?: number | null;
+  model?: string | null;
+  tool_calls?: number;
+  extra?: Record<string, unknown>;
+}
+
+export interface BakeoffItem {
+  adapter: string;
+  ok: boolean;
+  status?: number;
+  error?: string;
+  result?: {
+    adapter: string;
+    answer?: string;
+    markdown?: string;
+    decomposition?: Record<string, unknown>;
+    mr_url?: string | null;
+    branch?: string;
+    diff_summary?: string;
+    citations?: Array<Record<string, unknown>>;
+    files_changed?: string[];
+    metrics: AdapterMetrics;
+  };
+}
+
 export const api = {
   health: () => jsonReq<{ status: string }>("/health"),
 
@@ -93,5 +134,35 @@ export const api = {
     jsonReq<{ replayed_from: string; new_run_id: string }>(
       `/runs/${encodeURIComponent(id)}/replay`,
       { method: "POST" },
+    ),
+
+  // --- adapter bake-off ---
+  listAdapters: () => jsonReq<{ adapters: AdapterInfo[] }>("/v1/adapters"),
+
+  bakeoff: (
+    job: "ask" | "decompose" | "implement",
+    body: {
+      adapters: string[];
+      ask?: { query: string; repos?: string[]; top_k?: number };
+      decompose?: {
+        ticket_key?: string;
+        ticket_url?: string;
+        ticket_text?: string;
+        repos?: string[];
+        mode?: "cheap" | "deep" | "auto";
+      };
+      implement?: {
+        repo: string;
+        free_text?: string;
+        subtask?: Record<string, unknown>;
+        base_branch?: string;
+        ticket_key?: string;
+        draft?: boolean;
+      };
+    },
+  ) =>
+    jsonReq<{ job: string; results: BakeoffItem[] }>(
+      `/v1/bakeoff/${job}`,
+      { method: "POST", body: JSON.stringify(body) },
     ),
 };

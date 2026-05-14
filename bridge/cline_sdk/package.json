@@ -1,0 +1,17 @@
+{
+  "name": "cline-sdk-bridge",
+  "version": "0.1.0",
+  "description": "Tiny HTTP bridge exposing @cline/sdk to the tech-decomposition Python adapter.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@cline/sdk": "^0.0.41",
+    "fastify": "^5.0.0"
+  }
+}

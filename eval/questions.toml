@@ -37,6 +37,12 @@ tags = ["single-repo", "frontend", "validation"]
 text = """
 Are other-language letters accepted in Farm Name and/or ReferenceID? For example: é, ñ, ü, ç. Look at the actual validation logic, not docs.
 """
+# A correct answer cites the actual validator, not the docs.
+[questions.expected]
+min_chars = 120
+min_citations = 1
+must_mention = ["regex"]
+should_mention = ["unicode", "validator"]
 
 [[questions]]
 id = "q5-farm-name-special-chars"
@@ -44,6 +50,10 @@ tags = ["single-repo", "frontend", "validation"]
 text = """
 What special characters are NOT allowed in Farm Name and/or ReferenceID? Cite the exact regex / validator that enforces this.
 """
+[questions.expected]
+min_chars = 120
+min_citations = 1
+must_mention = ["regex"]
 
 [[questions]]
 id = "q6-data-viewer-settings"

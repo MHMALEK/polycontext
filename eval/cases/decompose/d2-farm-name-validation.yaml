@@ -1,0 +1,26 @@
+id: d2-farm-name-validation
+tags: [single-repo, frontend, validation]
+description: |
+  Smaller, single-repo task. Tests whether the decomposer can stay focused
+  on one repo (frontend) and pick out the exact validator file rather than
+  exploding into unrelated changes.
+
+input:
+  ticket_text: |
+    Title: Allow accented characters in Farm Name and ReferenceID
+
+    Right now the Farm Name and ReferenceID validators reject characters
+    like é, ñ, ü, ç even though product wants suppliers in non-English
+    locales to use their real farm names.
+
+    Update the validation logic to accept Unicode letters while still
+    blocking the special characters that we actually want to block
+    (whichever they currently are — surface the current rule before
+    proposing a change).
+  repos: [frontend]
+  mode: cheap
+
+expected:
+  min_subtasks: 2
+  max_subtasks: 6
+  must_touch_repos: [frontend]
