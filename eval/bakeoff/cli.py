@@ -3,7 +3,7 @@
 Run via:
     uv run python -m eval.bakeoff.cli list-cases
     uv run python -m eval.bakeoff.cli list-adapters
-    uv run python -m eval.bakeoff.cli run --job ask --adapters baseline,claude_sdk
+    uv run python -m eval.bakeoff.cli run --job ask --adapters cline_sdk,opencode
     uv run python -m eval.bakeoff.cli report eval/outputs/eval-20260514T...
 
 The runner uses an in-process FastAPI ``TestClient`` by default (no need to
@@ -24,9 +24,9 @@ from pathlib import Path
 def _load_dotenv_into_environ() -> None:
     """Make ``.env`` available to subprocess-level libraries.
 
-    ``pydantic-settings`` reads ``.env`` into the ``Settings`` model fields, but
-    libraries like litellm (used by aider) and some adapter CLIs read
-    ``os.environ`` directly. Without this shim, you get the surprising
+    ``pydantic-settings`` reads ``.env`` into the ``Settings`` model fields,
+    but the adapter CLIs (Cline, OpenCode, cursor-agent) read ``os.environ``
+    directly for provider keys. Without this shim, you get the surprising
     ``API_KEY_INVALID`` errors when an adapter inside the FastAPI process
     can't see keys that the parent app loaded.
 

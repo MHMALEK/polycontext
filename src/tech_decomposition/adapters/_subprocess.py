@@ -150,7 +150,7 @@ _JSON_OBJECT_RE = re.compile(r"\{(?:[^{}]|\{[^{}]*\})*\}", re.DOTALL)
 def extract_json(text: str) -> dict:
     """Pull the largest top-level JSON object out of a possibly-noisy answer.
 
-    Same heuristic the claude_sdk adapter uses — agent CLIs love to wrap JSON
+    Same heuristic CLI adapters use — agent CLIs love to wrap JSON
     in fenced code blocks or sandwich it between explanation paragraphs.
     """
     # Strip common ```json ... ``` fences first; they wreck the regex above.

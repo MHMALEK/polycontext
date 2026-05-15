@@ -24,6 +24,11 @@ from pathlib import Path
 import httpx
 
 from ..models import Decomposition
+from ._grounding import (
+    DEFAULT_MAX_FILES,
+    format_grounding_block,
+    retrieve_context_paths,
+)
 from ._subprocess import extract_json
 from .base import (
     Adapter,
@@ -84,9 +89,15 @@ class ClineSDKAdapter(Adapter):
     name = "cline_sdk"
     capabilities: set[Capability] = {"ask", "decompose", "implement"}
     description = (
-        "Cline via Node SDK (sidecar at bridge/cline_sdk/). Same runtime as the "
-        "cline CLI adapter but with real token/cost telemetry and custom system prompts."
+        "Cline via Node SDK (sidecar at bridge/cline_sdk/). Real token/cost "
+        "telemetry and custom system prompts. Sourcebot is wired in as an "
+        "agent tool the model can call on demand."
     )
+
+    #: Whether to also inject a Sourcebot+ripgrep prelude with concrete
+    #: file pointers into the prompt — on top of the tool-call grounding
+    #: the bridge already provides. Set True via the ``Grounded`` subclass.
+    _prelude_grounding: bool = False
 
     # ---- health ----------------------------------------------------------------
 
@@ -111,9 +122,10 @@ class ClineSDKAdapter(Adapter):
 
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         t = time.monotonic()
+        prompt = await self._maybe_prepend_grounding(inp.query)
         out = await self._run(
             system=_ASK_SYSTEM,
-            prompt=inp.query,
+            prompt=prompt,
             cwd=self.settings.repos_root,
             timeout_seconds=self.settings.cline_sdk_timeout_seconds,
             enable_find_code=True,  # Sourcebot as a tool the agent can call
@@ -122,14 +134,17 @@ class ClineSDKAdapter(Adapter):
             adapter=self.name,
             answer=out["answer"],
             citations=[],
-            metrics=_metrics_from(out, t),
+            metrics=_metrics_from(out, t, self._prelude_grounding),
         )
 
     async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
         t = time.monotonic()
+        ticket = _ticket_blob(inp)
+        user_prompt = _DECOMPOSE_USER_TEMPLATE.format(ticket=ticket)
+        user_prompt = await self._maybe_prepend_grounding(user_prompt, basis=ticket)
         out = await self._run(
             system=_DECOMPOSE_SYSTEM,
-            prompt=_DECOMPOSE_USER_TEMPLATE.format(ticket=_ticket_blob(inp)),
+            prompt=user_prompt,
             cwd=self.settings.repos_root,
             timeout_seconds=self.settings.cline_sdk_timeout_seconds,
             enable_find_code=True,
@@ -145,12 +160,13 @@ class ClineSDKAdapter(Adapter):
             adapter=self.name,
             decomposition=decomp,
             markdown=out["answer"],
-            metrics=_metrics_from(out, t),
+            metrics=_metrics_from(out, t, self._prelude_grounding),
         )
 
     async def implement(
         self, inp: AdapterImplementInput, ctx: ImplementContext,
     ) -> AdapterImplementResult:
+        # No prelude on implement — subtask already names files.
         t = time.monotonic()
         out = await self._run(
             system=_IMPLEMENT_SYSTEM,
@@ -165,8 +181,30 @@ class ClineSDKAdapter(Adapter):
             commits=[],
             diff_summary=(out["answer"] or "")[-1000:].strip(),
             files_changed=[],
-            metrics=_metrics_from(out, t),
+            metrics=_metrics_from(out, t, self._prelude_grounding),
         )
+
+    # ---- grounding prelude (opt-in via subclass) -------------------------------
+
+    async def _maybe_prepend_grounding(self, prompt: str, *, basis: str | None = None) -> str:
+        """Prepend a Sourcebot+ripgrep file-pointer block if grounding is on.
+
+        ``basis`` is the text the retrieval keywords come from — usually
+        the same as ``prompt`` for ``ask`` but different for ``decompose``
+        (where the prompt embeds the JSON schema and we want to retrieve
+        based on the ticket body, not the schema).
+        """
+        if not self._prelude_grounding:
+            return prompt
+        try:
+            paths = await retrieve_context_paths(
+                basis or prompt, self.settings, max_files=DEFAULT_MAX_FILES,
+            )
+            block = format_grounding_block(paths, self.settings.repos_root)
+        except Exception as e:  # noqa: BLE001 — best-effort
+            log.warning("%s: grounding prelude failed: %s", self.name, e)
+            return prompt
+        return block + prompt
 
     # ---- internals -------------------------------------------------------------
 
@@ -213,7 +251,10 @@ class ClineSDKAdapter(Adapter):
             return r.json()
 
 
-def _metrics_from(out: dict, start: float) -> AdapterMetrics:
+def _metrics_from(out: dict, start: float, grounded: bool = False) -> AdapterMetrics:
+    extra: dict = {"bridge_event_tail_size": len(out.get("events") or [])}
+    if grounded:
+        extra["grounded"] = True
     return AdapterMetrics(
         duration_ms=int((time.monotonic() - start) * 1000),
         tokens_in=out.get("tokensIn"),
@@ -222,8 +263,25 @@ def _metrics_from(out: dict, start: float) -> AdapterMetrics:
         # ``events`` from the bridge is a debugging tail, not user-facing —
         # park its length in ``extra`` so the report can mention it without
         # cluttering the main metrics block.
-        extra={"bridge_event_tail_size": len(out.get("events") or [])},
+        extra=extra,
     )
+
+
+class ClineSDKGroundedAdapter(ClineSDKAdapter):
+    """Cline SDK with a Sourcebot+ripgrep file-pointer prelude on ask/decompose.
+
+    The base adapter already exposes Sourcebot to Cline as an agent tool;
+    this variant additionally pre-loads concrete file paths into the
+    prompt so the model doesn't have to discover them itself. Useful for
+    A/B-ing whether the prelude beats tool-only grounding.
+    """
+
+    name = "cline_sdk_grounded"
+    description = (
+        "Cline SDK with a Sourcebot+ripgrep retrieval prelude added on top of "
+        "the bridge's Sourcebot-as-tool grounding."
+    )
+    _prelude_grounding = True
 
 
 def _ticket_blob(inp: AdapterDecomposeInput) -> str:

@@ -120,29 +120,24 @@ smoke:  ## Ask one canned question via the running API
 	  python -m json.tool
 
 # ---------------------------------------------------------------------------
-# Phase 3 sidecar adapters (Tabby + OpenHands)
+# Adapter sidecars (currently just the cline-sdk-bridge)
 # ---------------------------------------------------------------------------
 
-adapters:  ## Start OpenHands + cline-sdk-bridge sidecars (Tabby is GPU-only)
-	docker compose $(COMPOSE_ADAPTERS) up -d --build openhands cline_sdk_bridge
+adapters:  ## Start the cline-sdk-bridge sidecar
+	docker compose $(COMPOSE_ADAPTERS) up -d --build cline_sdk_bridge
 	@echo ""
-	@echo "  OpenHands         : http://localhost:$${OPENHANDS_HOST_PORT:-3030}"
 	@echo "  cline-sdk-bridge  : http://localhost:$${CLINE_SDK_BRIDGE_PORT:-3040}"
 	@echo ""
-	@echo "Tabby is not started locally (image requires CUDA). To enable Tabby,"
-	@echo "point TABBY_BASE_URL at a remote GPU-host Tabby server."
-	@echo ""
 	@echo "Set in .env:"
-	@echo "  OPENHANDS_BASE_URL=http://localhost:3030"
 	@echo "  CLINE_SDK_BRIDGE_URL=http://localhost:3040"
 	@echo "Then 'make eval-adapters' to confirm health."
 
-adapters-down:  ## Stop sidecar adapters only (leave Sourcebot stack running)
-	docker compose $(COMPOSE_ADAPTERS) stop tabby openhands
-	docker compose $(COMPOSE_ADAPTERS) rm -f tabby openhands
+adapters-down:  ## Stop the cline-sdk-bridge sidecar
+	docker compose $(COMPOSE_ADAPTERS) stop cline_sdk_bridge
+	docker compose $(COMPOSE_ADAPTERS) rm -f cline_sdk_bridge
 
-adapters-logs:  ## Tail Tabby + OpenHands logs
-	docker compose $(COMPOSE_ADAPTERS) logs -f tabby openhands
+adapters-logs:  ## Tail cline-sdk-bridge logs
+	docker compose $(COMPOSE_ADAPTERS) logs -f cline_sdk_bridge
 
 # ---------------------------------------------------------------------------
 # Adapter bake-off (eval/)
@@ -154,7 +149,7 @@ eval-adapters:  ## eval: list registered adapters and their health
 eval-cases:  ## eval: list discovered cases (filter with JOB=ask|decompose|implement)
 	uv run python -m eval.bakeoff.cli list-cases $(if $(JOB),--job $(JOB))
 
-# Example: make eval-run ADAPTERS=baseline,claude_sdk JOB=ask
+# Example: make eval-run ADAPTERS=cline_sdk,opencode JOB=ask
 eval-run:  ## eval: run the bake-off (ADAPTERS=a,b JOB=ask|decompose|implement)
 	@test -n "$(ADAPTERS)" || (echo "set ADAPTERS=a,b,c"; exit 1)
 	uv run python -m eval.bakeoff.cli run --adapters $(ADAPTERS) $(if $(JOB),--job $(JOB)) $(if $(IDS),--ids $(IDS)) $(if $(TAGS),--tags $(TAGS))

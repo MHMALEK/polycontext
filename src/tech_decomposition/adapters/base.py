@@ -1,7 +1,7 @@
 """Adapter contract: a uniform surface over heterogeneous code agents.
 
-Every adapter (baseline, Claude Agent SDK, Aider, OpenCode, ...) implements
-some subset of three methods:
+Every adapter (Cline SDK, OpenCode, Cursor, ...) implements some subset
+of three methods:
 
     ask        — code Q&A
     decompose  — ticket → structured subtasks
@@ -89,7 +89,8 @@ class AdapterDecomposeInput(BaseModel):
     ticket_url: str | None = None
     ticket_text: str | None = None
     repos: list[str] | None = None
-    # Each adapter interprets this as it wishes; baseline maps to its cheap/deep modes.
+    # Each adapter interprets this as it wishes; adapters that don't
+    # distinguish modes simply ignore the field.
     mode: Literal["cheap", "deep", "auto"] = "auto"
 
 

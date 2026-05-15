@@ -157,7 +157,7 @@ class RunStore:
         """Insert (or replace) a row for this run.
 
         ``engine`` may be supplied directly when there's no PipelineRun — used
-        by the adapter bake-off routes which record a tag like ``baseline:ask``
+        by the adapter bake-off routes which record a tag like ``cline_sdk:ask``
         without running through the legacy Pipeline class.
         """
         model = answer = None

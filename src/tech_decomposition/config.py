@@ -77,32 +77,13 @@ class Settings(BaseSettings):
     # CLI binaries — empty string means "look on PATH". Set these only if
     # you have a non-standard install location (e.g. a Homebrew prefix).
     opencode_bin: str = ""
-    goose_bin: str = ""
     cursor_bin: str = ""
-    aider_bin: str = ""
-    cline_bin: str = ""
 
     # Per-CLI timeouts. CLI adapters launch real agent processes that can take
     # minutes for non-trivial work; defaults are generous so they don't get
     # killed mid-edit. Tune downward if you want fail-fast behavior.
     opencode_timeout_seconds: float = 600.0
-    goose_timeout_seconds: float = 600.0
     cursor_timeout_seconds: float = 600.0
-    cline_timeout_seconds: float = 600.0
-
-    # ----- sidecar adapters (Phase 3) -----------------------------------------
-    # Tabby — self-hosted Copilot service. The compose.adapters.yaml overlay
-    # publishes it on port 8080 by default.
-    tabby_base_url: str = ""
-    tabby_api_key: str = ""
-    tabby_timeout_seconds: float = 60.0
-    # OpenHands — autonomous agent. Heavier service; takes longer to respond.
-    openhands_base_url: str = ""
-    openhands_api_key: str = ""
-    openhands_timeout_seconds: float = 900.0
-    # Optional override for which LLM OpenHands uses per-conversation. If empty,
-    # the OpenHands server uses whatever's configured in its own settings.
-    openhands_llm_model: str = ""
 
     # cline-sdk-bridge — Node sidecar wrapping @cline/sdk so the Python adapter
     # can call it over HTTP. See bridge/cline_sdk/.

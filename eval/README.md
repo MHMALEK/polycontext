@@ -36,7 +36,7 @@ make eval-cases JOB=decompose
 make eval-cases JOB=implement
 
 # 3. Run the bake-off against a couple of adapters.
-make eval-run ADAPTERS=baseline,claude_sdk JOB=ask
+make eval-run ADAPTERS=cline_sdk,opencode JOB=ask
 
 # 4. Open the report.
 open eval/outputs/eval-<timestamp>/report.md
@@ -117,44 +117,23 @@ markdown report's `<details>` blocks.
 
 ## Installing adapter tools
 
-Adapters with optional deps:
-
 ```bash
-# Python libraries
-uv pip install '.[adapters]'           # both claude-agent-sdk and aider-chat
-uv pip install claude-agent-sdk        # claude_sdk only
-uv pip install aider-chat              # aider only
-# On Python 3.13+ you also need: uv pip install audioop-lts
-
 # CLI binaries
 brew install opencode                  # or: curl -fsSL https://opencode.ai/install | bash
-brew install block/tap/goose
 # cursor-agent ships with the Cursor IDE; run `cursor-agent login` once.
 
-# Docker sidecars (Tabby + OpenHands)
-make adapters                          # starts both containers
+# Cline SDK sidecar (used by cline_sdk + cline_sdk_grounded)
+make adapters                          # starts the cline_sdk_bridge container
 # Then add to .env:
-#   TABBY_BASE_URL=http://localhost:8080
-#   TABBY_API_KEY=...                  # generate inside Tabby's web UI
-#   OPENHANDS_BASE_URL=http://localhost:3001
-#   OPENHANDS_LLM_API_KEY=<anthropic key>
+#   CLINE_SDK_BRIDGE_URL=http://localhost:3040
 ```
 
 Then `make eval-adapters` to confirm health turned green.
 
-### What's NOT included yet
-
-**Cline CLI** and **Roo Code CLI** are flagged as future adapters in the
-registry but not implemented in v1 — neither tool ships a stable
-production CLI yet (both are still VS Code-extension-first as of late
-2025). When they do, drop in a new `_cline.py` / `_roo.py` following the
-subprocess pattern in `_opencode.py` — the registry entry is the only
-other place that needs touching.
-
 ## Tips
 
 - **No network**: the in-process TestClient backend lets the harness run
-  fully offline if your adapters do (e.g. baseline + a local Ollama model).
+  fully offline if your adapters do (e.g. OpenCode pointed at a local Ollama).
 - **Real network**: set `--base-url http://localhost:8000` to run against
   a `make dev` instance — necessary for adapters that need Docker sidecars.
 - **Filters**: use `--ids id1 id2` to re-run just a handful of cases, or

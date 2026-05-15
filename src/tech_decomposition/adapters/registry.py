@@ -1,39 +1,39 @@
 """Adapter discovery — name → class lookup.
 
 Registration is by **late import**: each adapter module is imported lazily on
-first lookup so a missing optional dependency (e.g. ``aider`` not installed)
-doesn't take down the whole API. ``health()`` reports the failure if anyone
-asks for that adapter specifically.
+first lookup so a missing optional dependency doesn't take down the whole API.
+``health()`` reports the failure if anyone asks for that adapter specifically.
 
 To add a new adapter:
     1. Implement ``Adapter`` in a new ``_yourname.py`` module.
     2. Add an entry to ``_REGISTRY`` below.
+
+Current set (post-narrowing): the bake-off has converged on Cline (SDK) and
+OpenCode as the strongest agents, with Cursor kept as a frozen secondary.
+Each primary has a ``_grounded`` sibling that pre-loads Sourcebot+ripgrep
+file pointers into the prompt.
+
+The legacy ``/ask`` endpoint (Sourcebot retrieval + Gemini answer) still
+exists in ``api.py`` and is what the UI calls when no adapter is selected —
+it is not exposed through the adapter registry.
 """
 from __future__ import annotations
 
 import importlib
-from typing import Callable
 
 from .base import Adapter
 
 
 # name → (module, classname). Late-imported on demand.
 _REGISTRY: dict[str, tuple[str, str]] = {
-    # Phase 1: baseline + in-process Python adapters
-    "baseline": ("tech_decomposition.adapters._baseline", "BaselineAdapter"),
-    "claude_sdk": ("tech_decomposition.adapters._claude_sdk", "ClaudeSDKAdapter"),
-    "aider": ("tech_decomposition.adapters._aider", "AiderAdapter"),
-    # Experiment: Aider with cross-repo retrieval prelude (Sourcebot + ripgrep)
-    "aider_grounded": ("tech_decomposition.adapters._aider_grounded", "AiderGroundedAdapter"),
-    # Phase 2: CLI-backed adapters
-    "opencode": ("tech_decomposition.adapters._opencode", "OpenCodeAdapter"),
-    "goose": ("tech_decomposition.adapters._goose", "GooseAdapter"),
-    "cursor": ("tech_decomposition.adapters._cursor", "CursorAdapter"),
-    "cline": ("tech_decomposition.adapters._cline", "ClineAdapter"),
+    # Primary: Cline via Node SDK bridge (real token/cost telemetry).
     "cline_sdk": ("tech_decomposition.adapters._cline_sdk", "ClineSDKAdapter"),
-    # Phase 3: HTTP sidecars (Docker — see compose.adapters.yaml)
-    "tabby": ("tech_decomposition.adapters._tabby", "TabbyAdapter"),
-    "openhands": ("tech_decomposition.adapters._openhands", "OpenHandsAdapter"),
+    "cline_sdk_grounded": ("tech_decomposition.adapters._cline_sdk", "ClineSDKGroundedAdapter"),
+    # Primary: OpenCode terminal agent (provider-agnostic).
+    "opencode": ("tech_decomposition.adapters._opencode", "OpenCodeAdapter"),
+    "opencode_grounded": ("tech_decomposition.adapters._opencode", "OpenCodeGroundedAdapter"),
+    # Secondary (kept, frozen): Cursor Agent CLI.
+    "cursor": ("tech_decomposition.adapters._cursor", "CursorAdapter"),
 }
 
 

@@ -29,12 +29,11 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
 ]
-# Adapter bake-off extras. Each is opt-in so users only pay for the agent backends
-# they actually want to compare. ``pip install -e '.[adapters]'`` pulls them all.
-adapters = [
-    "claude-agent-sdk>=0.1",
-    "aider-chat>=0.70",
-]
+# The current adapter set (cline_sdk, opencode, cursor) has no extra Python
+# deps — Cline runs through the Node sidecar at ``bridge/cline_sdk/``,
+# OpenCode and Cursor are external CLI binaries. Left empty so external
+# references to ``.[adapters]`` keep working.
+adapters = []
 
 [build-system]
 requires = ["hatchling"]

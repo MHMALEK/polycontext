@@ -1,54 +1,17 @@
-# Optional compose overlay: heavyweight adapter sidecars.
+# Optional compose overlay: adapter sidecars.
 #
 # Not part of the default `make up` / `make dev` stack — start with:
 #     docker compose -f docker-compose.yml -f compose.local.yaml -f compose.adapters.yaml up -d
 # or the convenience target:
 #     make adapters
 #
-# Both Tabby and OpenHands are heavy: they download large model weights or
-# agent runtime images on first start. Expect minutes of pull/setup the
-# first time, then near-instant after.
-#
-# Mounts:
-#   * Tabby:     read-only access to ${REPOS_ROOT} so its Answer Engine can
-#                index your repos.
-#   * OpenHands: writeable access to ${OUTPUT_DIR}/worktrees so the agent's
-#                /workspace/<run_id> maps to the same worktree the implement
-#                runner provisions on the host.
-#
-# Auth/config:
-#   * Tabby:     server-side model config; see ${TABBY_MODEL_CONFIG} or
-#                edit ./config/tabby/ before first start. The bake-off adapter
-#                only needs TABBY_BASE_URL + TABBY_API_KEY.
-#   * OpenHands: needs an LLM provider key (Anthropic by default).
-#                Set OPENHANDS_LLM_MODEL and OPENHANDS_LLM_API_KEY in .env.
+# Currently the only sidecar is the cline-sdk-bridge — a tiny Node service
+# that exposes @cline/sdk over HTTP so the Python ``cline_sdk`` adapter can
+# call it. The OpenCode and Cursor adapters run as subprocesses on the host
+# and don't need a sidecar.
 
 services:
 
-  # Tabby is intentionally NOT defined as a service here.
-  #
-  # Why: as of v0.31, the official ``registry.tabbyml.com/tabbyml/tabby``
-  # image ships only CUDA-linked llama-server binaries — even when you
-  # pass ``--device cpu`` the embedding model still fails to load with
-  # ``libcuda.so.1: cannot open shared object file``. The Tabby quick-start
-  # only documents ``--device cuda``.
-  #
-  # Translation: Tabby needs an NVIDIA GPU. On Apple Silicon (or any
-  # CPU-only host) it won't run, even under Rosetta.
-  #
-  # If you have a Tabby server elsewhere (e.g. a Linux box with a GPU),
-  # point the adapter at it:
-  #   TABBY_BASE_URL=http://your-tabby-host:8080
-  #   TABBY_API_KEY=<from Tabby's web UI>
-  # No service definition needed in this file for the remote case.
-  #
-  # When Tabby ships a CPU-only image variant, re-add the service block
-  # here. The adapter code in ``src/tech_decomposition/adapters/_tabby.py``
-  # is already pointed at ``/v1/chat/completions`` which is correct.
-
-  # cline-sdk-bridge — tiny Node service that exposes @cline/sdk over HTTP so
-  # the Python adapter can call it. Same pattern would work for any other
-  # Node-only agent SDK (Roo, future Cline siblings).
   cline_sdk_bridge:
     build:
       context: ./bridge/cline_sdk
@@ -64,30 +27,3 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
-
-  openhands:
-    # OpenHands publishes multi-arch images (amd64 + arm64) on GHCR. Pin to a
-    # known-good tag rather than ``:latest`` so a registry refresh doesn't break
-    # the API surface the adapter targets.
-    image: ghcr.io/all-hands-ai/openhands:0.50
-    # Port 3001 is reserved by Docker Desktop on macOS — default to 3030.
-    ports:
-      - "${OPENHANDS_HOST_PORT:-3030}:3000"
-    environment:
-      # OpenHands talks to the host Docker socket to spin its sandbox runtime.
-      SANDBOX_RUNTIME_CONTAINER_IMAGE: ghcr.io/all-hands-ai/runtime:0.50-nikolaik
-      LOG_ALL_EVENTS: "true"
-      LLM_MODEL: ${OPENHANDS_LLM_MODEL:-anthropic/claude-sonnet-4-5}
-      LLM_API_KEY: ${OPENHANDS_LLM_API_KEY:-${ANTHROPIC_API_KEY}}
-    volumes:
-      # /var/run/docker.sock is required by OpenHands' Docker-in-Docker
-      # sandbox model. If you don't want this on a shared host, OpenHands
-      # supports remote runtimes — see their docs.
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Mount worktrees (where the implement runner provisions branches)
-      # so OpenHands' /workspace/<run_id> matches our host paths.
-      - ${OUTPUT_DIR:-./outputs}/worktrees:/openhands/runtime/workspace
-    restart: unless-stopped
-
-volumes:
-  tabby-data:

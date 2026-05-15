@@ -27,9 +27,9 @@ type AskFormState = {
   question: string;
   engine: AskEngine;
   format: OutputFormat;
-  // Empty string = use the legacy /ask endpoint (baseline-Sourcebot with the
-  // structurer wrapper). Any other value routes to POST /v1/adapters/{name}/ask
-  // so a single named adapter can be driven from the main view.
+  // Empty string = use the legacy /ask endpoint (Sourcebot + Gemini with
+  // the structurer wrapper). Any other value routes to POST /v1/adapters/
+  // {name}/ask so a single named adapter can be driven from the main view.
   adapter: string;
 };
 
@@ -545,7 +545,7 @@ export function App() {
             run_id: "(adapter-call)",
           };
         } else {
-          // Legacy /ask path — baseline-Sourcebot with the structurer wrapper.
+          // Legacy /ask path — Sourcebot + Gemini with the structurer wrapper.
           res = await api.ask({
             question,
             engine: form.engine,
@@ -765,9 +765,9 @@ export function App() {
                     className="select select-bordered select-xs"
                     value={form.adapter}
                     onChange={(e) => setForm({ ...form, adapter: e.target.value })}
-                    title="Empty = legacy /ask (baseline). Any other adapter routes through /v1/adapters/{name}/ask."
+                    title="Empty = legacy /ask (Sourcebot + Gemini). Any other selection routes through /v1/adapters/{name}/ask."
                   >
-                    <option value="">default (baseline)</option>
+                    <option value="">default (Sourcebot Q&A)</option>
                     {adapters.map((a) => (
                       <option
                         key={a.name}
