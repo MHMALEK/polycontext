@@ -114,9 +114,10 @@ ui-install:  ## Install UI deps via npm
 # Smoke
 # ---------------------------------------------------------------------------
 
-smoke:  ## Ask one canned question via the running API
-	curl -sS http://localhost:8000/ask -H 'content-type: application/json' \
-	  -d '{"question":"Where is the Suppliers page rendered?"}' | \
+smoke:  ## Ask one canned question via the running API (override ADAPTER=...)
+	curl -sS http://localhost:8000/v1/adapters/$${ADAPTER:-opencode}/ask \
+	  -H 'content-type: application/json' \
+	  -d '{"query":"Where is the Suppliers page rendered?"}' | \
 	  python -m json.tool
 
 # ---------------------------------------------------------------------------

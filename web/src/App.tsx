@@ -4,7 +4,6 @@ import remarkGfm from "remark-gfm";
 import { api } from "./api";
 import type {
   AdapterInfo,
-  AskEngine,
   AskResponse,
   OutputFormat,
   RunDetail,
@@ -25,13 +24,16 @@ type LiveProgress = {
 
 type AskFormState = {
   question: string;
-  engine: AskEngine;
   format: OutputFormat;
-  // Empty string = use the legacy /ask endpoint (Sourcebot + Gemini with
-  // the structurer wrapper). Any other value routes to POST /v1/adapters/
-  // {name}/ask so a single named adapter can be driven from the main view.
+  // Name of the adapter the question is routed to via POST /v1/adapters/
+  // {adapter}/ask. Defaulted to ``DEFAULT_ADAPTER`` and reconciled against
+  // the live adapter list once it loads — see the useEffect below.
   adapter: string;
 };
+
+// Initial dropdown selection. Overridden at mount if this adapter isn't
+// installed or isn't healthy — see the adapter list useEffect.
+const DEFAULT_ADAPTER = "opencode";
 
 type DisplayedRun = {
   question: string;
@@ -50,9 +52,8 @@ type View = "ask" | "bakeoff";
 
 const INITIAL_FORM: AskFormState = {
   question: "",
-  engine: "sourcebot",
   format: "markdown",
-  adapter: "",
+  adapter: DEFAULT_ADAPTER,
 };
 
 const SUGGESTED_PROMPTS = [
@@ -458,9 +459,20 @@ export function App() {
   useEffect(() => {
     loadHistory();
     // Adapter list is fetched once at mount; status changes (e.g. starting
-    // the OpenHands container) require a refresh anyway.
+    // the cline-sdk-bridge sidecar) require a refresh anyway.
     api.listAdapters()
-      .then((r) => setAdapters(r.adapters.filter((a) => a.capabilities.includes("ask"))))
+      .then((r) => {
+        const askables = r.adapters.filter((a) => a.capabilities.includes("ask"));
+        setAdapters(askables);
+        // If the default adapter is missing or unhealthy, pick the first
+        // healthy one so the user doesn't land on a broken selection.
+        setForm((f) => {
+          const current = askables.find((a) => a.name === f.adapter);
+          if (current && current.health.ok) return f;
+          const firstHealthy = askables.find((a) => a.health.ok);
+          return firstHealthy ? { ...f, adapter: firstHealthy.name } : f;
+        });
+      })
       .catch((e) => console.warn("adapter list fetch failed", e));
   }, [loadHistory]);
 
@@ -517,41 +529,29 @@ export function App() {
       void tick();
 
       try {
-        let res: AskResponse;
-        if (form.adapter) {
-          // Adapter path: hit /v1/adapters/{name}/ask via the bake-off
-          // fan-out endpoint with a single adapter. Map the adapter result
-          // back into AskResponse shape so the rest of the view is unchanged.
-          const r = await api.bakeoff("ask", {
-            adapters: [form.adapter],
-            ask: { query: question },
-          });
-          const item = r.results[0];
-          if (!item.ok) throw new Error(item.error || `adapter ${form.adapter} failed`);
-          const ar = item.result!;
-          res = {
-            engine: ar.adapter,
-            answer: ar.answer ?? "",
-            citations: (ar.citations ?? []) as Array<Record<string, unknown>>,
-            model: ar.metrics?.model ?? null,
-            transport: null,
-            wall_seconds: ar.metrics?.duration_ms != null
-              ? ar.metrics.duration_ms / 1000
-              : null,
-            input_tokens: ar.metrics?.tokens_in ?? null,
-            output_tokens: ar.metrics?.tokens_out ?? null,
-            cost_usd: ar.metrics?.cost_usd ?? null,
-            markdown_path: null,
-            run_id: "(adapter-call)",
-          };
-        } else {
-          // Legacy /ask path — Sourcebot + Gemini with the structurer wrapper.
-          res = await api.ask({
-            question,
-            engine: form.engine,
-            format: form.format,
-          });
+        if (!form.adapter) {
+          throw new Error("pick an adapter from the dropdown before submitting");
         }
+        // Route every question through POST /v1/adapters/{name}/ask. The
+        // adapter result is flattened into the AskResponse shape the
+        // answer view already binds to.
+        const r = await api.adapterAsk(form.adapter, { query: question });
+        const ar = r.result;
+        const res: AskResponse = {
+          engine: ar.adapter,
+          answer: ar.answer ?? "",
+          citations: (ar.citations ?? []) as Array<Record<string, unknown>>,
+          model: ar.metrics?.model ?? null,
+          transport: null,
+          wall_seconds: ar.metrics?.duration_ms != null
+            ? ar.metrics.duration_ms / 1000
+            : null,
+          input_tokens: ar.metrics?.tokens_in ?? null,
+          output_tokens: ar.metrics?.tokens_out ?? null,
+          cost_usd: ar.metrics?.cost_usd ?? null,
+          markdown_path: null,
+          run_id: r.run_id,
+        };
         setAnswer(res);
         setForm((f) => ({ ...f, question: "" }));
         await loadHistory();
@@ -765,9 +765,8 @@ export function App() {
                     className="select select-bordered select-xs"
                     value={form.adapter}
                     onChange={(e) => setForm({ ...form, adapter: e.target.value })}
-                    title="Empty = legacy /ask (Sourcebot + Gemini). Any other selection routes through /v1/adapters/{name}/ask."
+                    title="Routes the question through POST /v1/adapters/{name}/ask."
                   >
-                    <option value="">default (Sourcebot Q&A)</option>
                     {adapters.map((a) => (
                       <option
                         key={a.name}
@@ -778,19 +777,6 @@ export function App() {
                         {a.name}{a.health.ok ? "" : " (down)"}
                       </option>
                     ))}
-                  </select>
-                </label>
-                <label className="flex items-center gap-1.5 text-xs text-base-content/60">
-                  <span>engine</span>
-                  <select
-                    className="select select-bordered select-xs"
-                    value={form.engine}
-                    onChange={(e) =>
-                      setForm({ ...form, engine: e.target.value as AskEngine })
-                    }
-                  >
-                    <option value="sourcebot">sourcebot</option>
-                    <option value="local">local (experimental)</option>
                   </select>
                 </label>
                 <label className="flex items-center gap-1.5 text-xs text-base-content/60">

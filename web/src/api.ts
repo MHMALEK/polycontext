@@ -1,18 +1,12 @@
-// Thin wrapper around the FastAPI surface. Same shapes as
-// tech_decomposition.api.{AskRequest, AskResponse, RunListItem, RunDetail}.
+// Thin wrapper around the FastAPI surface.
+//
+// Every code-agent request goes through ``/v1/adapters/{name}/...`` — there
+// is no longer a generic ``/ask`` endpoint. ``AskResponse`` is the flattened
+// shape the UI uses to render an adapter result; we keep it here (rather
+// than the raw AdapterAskResult) because the existing answer view binds to
+// these fields.
 
 export type OutputFormat = "markdown" | "html" | "text";
-export type AskEngine = "sourcebot" | "local";
-
-export interface AskRequest {
-  question: string;
-  engine?: AskEngine;
-  max_steps?: number | null;
-  structure_responses?: boolean;
-  format?: OutputFormat;
-  write_file?: boolean;
-  repos?: string[] | null;
-}
 
 export interface AskResponse {
   engine: string;
@@ -116,11 +110,37 @@ export interface BakeoffItem {
   };
 }
 
+// Shape returned by POST /v1/adapters/{name}/{ask,decompose,implement}.
+export interface AdapterCallResponse {
+  run_id: string;
+  result: {
+    adapter: string;
+    answer?: string;
+    markdown?: string;
+    decomposition?: Record<string, unknown>;
+    mr_url?: string | null;
+    branch?: string;
+    diff_summary?: string;
+    citations?: Array<Record<string, unknown>>;
+    files_changed?: string[];
+    metrics: AdapterMetrics;
+  };
+}
+
+export interface AdapterAskBody {
+  query: string;
+  repos?: string[];
+  top_k?: number;
+}
+
 export const api = {
   health: () => jsonReq<{ status: string }>("/health"),
 
-  ask: (req: AskRequest) =>
-    jsonReq<AskResponse>("/ask", { method: "POST", body: JSON.stringify(req) }),
+  adapterAsk: (name: string, body: AdapterAskBody) =>
+    jsonReq<AdapterCallResponse>(`/v1/adapters/${encodeURIComponent(name)}/ask`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   listRuns: (
     params: {
