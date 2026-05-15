@@ -507,6 +507,20 @@ class CliAgentAdapter(Adapter):
             extra.setdefault("stderr_excerpt", res.stderr[:200])
         if self._grounded:
             extra.setdefault("grounded", True)
+        # When the parser yielded no answer, surface enough of the raw
+        # stdout to debug it without re-running. CLIs sometimes write the
+        # final answer to stderr, or emit a JSON shape we don't yet
+        # recognise — both look like "empty answer" without this hint.
+        if not parsed.answer:
+            extra["stdout_len"] = len(res.stdout)
+            extra["stderr_len"] = len(res.stderr or "")
+            if res.stdout:
+                extra["stdout_head"] = res.stdout[:400]
+                extra["stdout_tail"] = res.stdout[-400:]
+            log.warning(
+                "%s produced empty answer; stdout_len=%d stderr_len=%d head=%r",
+                self.name, len(res.stdout), len(res.stderr or ""), res.stdout[:200],
+            )
         return AdapterMetrics(
             duration_ms=int((time.monotonic() - t_start) * 1000),
             tokens_in=parsed.tokens_in,
