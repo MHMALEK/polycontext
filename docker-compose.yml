@@ -55,7 +55,9 @@ services:
       - sourcebot_data:/data/.sourcebot
     environment:
       - CONFIG_PATH=/data/config.json
-      - AUTH_URL=http://localhost:3000
+      # Sourcebot's NextAuth callback URL — must match the browser-visible
+      # origin (i.e. the host publish from compose.local.yaml).
+      - AUTH_URL=http://localhost:${SOURCEBOT_HOST_PORT:-13000}
       - AUTH_SECRET=${SOURCEBOT_AUTH_SECRET}
       - SOURCEBOT_ENCRYPTION_KEY=${SOURCEBOT_ENCRYPTION_KEY}
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-changeme}@postgres:5432/postgres
@@ -102,7 +104,9 @@ services:
       sourcebot:
         condition: service_started
     ports:
-      - "8000:8000"
+      # Container always listens on 8000 internally; host publish is
+      # configurable so it doesn't fight other local services on :8000.
+      - "${API_PORT:-18000}:8000"
     volumes:
       - tech_decomposition_outputs:/app/outputs
     environment:

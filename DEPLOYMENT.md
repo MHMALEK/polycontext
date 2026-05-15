@@ -42,7 +42,7 @@ The Docker image is **the same**. Only configuration changes via env file + the 
 | | Local (`make up`) | Prod (`make prod`) |
 |---|---|---|
 | Env file | `.env` | `.env.prod` |
-| Sourcebot host port | `:3000` exposed | not exposed (docker network only) |
+| Sourcebot host port | `${SOURCEBOT_HOST_PORT:-13000}` exposed | not exposed (docker network only) |
 | Uvicorn log level | info | warning |
 | `--proxy-headers` | off | on (for reverse proxies) |
 | Sourcebot HTTP timeout | 30 s | 60 s |
@@ -56,27 +56,29 @@ The app image is built once and reused across modes. Switching modes is just a d
 
 ```bash
 make dev    # backends in Docker, FastAPI + Vite on host
-# open http://localhost:5173 (Vite proxies API calls to FastAPI :8000)
+# open http://localhost:${UI_PORT}    (Vite proxies API calls to FastAPI on :${API_PORT})
+# defaults: UI_PORT=15173, API_PORT=18000 — override in .env if they collide.
 ```
 
 ## Quick start (local)
 
 ```bash
 make up     # everything in Docker
-# open http://localhost:8000/ui
+# open http://localhost:${API_PORT}/ui    (default :18000/ui)
 ```
 
 Wait ~30 s on first run for Sourcebot to index, then:
 
 ```bash
 # from the host
-curl -sS http://localhost:8000/health
+curl -sS http://localhost:18000/health
 # {"status":"ok"}
 
-curl -sS http://localhost:8000/ask \
+# Every Q&A request routes through an adapter — pick one from /v1/adapters.
+curl -sS http://localhost:18000/v1/adapters/opencode/ask \
   -H 'content-type: application/json' \
-  -d '{"question":"Where is the supplier creation endpoint defined?"}' \
-  | jq '{engine, wall_seconds, cost_usd, citations: .citations | length}'
+  -d '{"query":"Where is the supplier creation endpoint defined?"}' \
+  | jq '{adapter: .result.adapter, run_id, model: .result.metrics.model}'
 ```
 
 CLI alternative (one-shot, in the running container):
@@ -181,18 +183,19 @@ talks to the FastAPI endpoints (`/ask`, `/runs`) — no separate backend.
 ```bash
 cd web
 npm install        # first time only
-npm run dev        # → http://localhost:5173, proxies /ask + /runs to :8000
+npm run dev        # → http://localhost:${UI_PORT}, proxies /v1 + /runs to :${API_PORT}
 ```
 
 Run the FastAPI server in another shell (`tech-decomposition serve` or
 `docker compose up app`); the Vite dev proxy forwards API calls to it.
+Both ports come from `.env` (`UI_PORT` / `API_PORT`).
 
 **Prod (bundled into FastAPI):**
 
 ```bash
 cd web && npm run build       # writes web/dist/
 # FastAPI auto-detects web/dist and mounts it at /ui
-# Visit http://localhost:8000/ui
+# Visit http://localhost:${API_PORT}/ui    (default :18000/ui)
 ```
 
 The static mount in [api.py](src/tech_decomposition/api.py) is gated on the directory

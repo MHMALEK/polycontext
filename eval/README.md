@@ -125,7 +125,7 @@ brew install opencode                  # or: curl -fsSL https://opencode.ai/inst
 # Cline SDK sidecar (used by cline_sdk + cline_sdk_grounded)
 make adapters                          # starts the cline_sdk_bridge container
 # Then add to .env:
-#   CLINE_SDK_BRIDGE_URL=http://localhost:3040
+#   CLINE_SDK_BRIDGE_URL=http://localhost:13040
 ```
 
 Then `make eval-adapters` to confirm health turned green.
@@ -134,7 +134,7 @@ Then `make eval-adapters` to confirm health turned green.
 
 - **No network**: the in-process TestClient backend lets the harness run
   fully offline if your adapters do (e.g. OpenCode pointed at a local Ollama).
-- **Real network**: set `--base-url http://localhost:8000` to run against
+- **Real network**: set `--base-url http://localhost:${API_PORT:-18000}` to run against
   a `make dev` instance — necessary for adapters that need Docker sidecars.
 - **Filters**: use `--ids id1 id2` to re-run just a handful of cases, or
   `--tags validation cross-repo` to scope by topic.

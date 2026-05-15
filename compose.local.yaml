@@ -3,11 +3,12 @@
 # Used by `make up` and `make dev`:
 #   docker compose -f docker-compose.yml -f compose.local.yaml up -d
 #
-# Publishes Sourcebot's :3000 on the host so you can hit the Sourcebot UI
-# directly (Settings → API Keys, etc.). Prod mode skips this overlay and
-# Sourcebot stays internal-only.
+# Publishes Sourcebot on the host so you can hit the Sourcebot UI directly
+# (Settings → API Keys, etc.). Override SOURCEBOT_HOST_PORT in .env if the
+# default collides with another local service. Prod mode skips this overlay
+# and Sourcebot stays internal-only.
 
 services:
   sourcebot:
     ports:
-      - "3000:3000"
+      - "${SOURCEBOT_HOST_PORT:-13000}:3000"

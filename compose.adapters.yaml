@@ -16,13 +16,13 @@ services:
     build:
       context: ./bridge/cline_sdk
     ports:
-      - "${CLINE_SDK_BRIDGE_PORT:-3040}:3040"
+      - "${CLINE_SDK_BRIDGE_PORT:-13040}:3040"
     environment:
       LOG_LEVEL: ${CLINE_SDK_BRIDGE_LOG_LEVEL:-info}
       # Sourcebot is reachable from the bridge container via the host's
       # localhost. ``host.docker.internal`` works out-of-the-box on Docker
       # Desktop; the extra_hosts entry below makes it work on Linux too.
-      SOURCEBOT_URL: ${BRIDGE_SOURCEBOT_URL:-http://host.docker.internal:3000}
+      SOURCEBOT_URL: ${BRIDGE_SOURCEBOT_URL:-http://host.docker.internal:${SOURCEBOT_HOST_PORT:-13000}}
       SOURCEBOT_API_KEY: ${SOURCEBOT_API_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"

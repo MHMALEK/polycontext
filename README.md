@@ -137,7 +137,7 @@ docker compose up -d
 docker compose logs -f sourcebot          # wait ~30s for indexing to finish
 ```
 
-- Sourcebot UI at http://localhost:3000 → sign up to create the admin user → **Settings → API keys** → generate one → paste into `.env` as `SOURCEBOT_API_KEY`.
+- Sourcebot UI at http://localhost:${SOURCEBOT_HOST_PORT:-13000} → sign up to create the admin user → **Settings → API keys** → generate one → paste into `.env` as `SOURCEBOT_API_KEY`.
 - Serena MCP-over-SSE at http://localhost:9121/sse — no auth, app talks directly.
 
 Both containers bind-mount `REPOS_ROOT`. Sourcebot reads only; Serena needs
@@ -268,7 +268,7 @@ All in `.env`. Defaults work for the Tract setup out of the box.
 | `GITLAB_BASE_URL` | `https://gitlab.com` | |
 | `GITLAB_PROJECTS` | configured | per-repo project paths for permalinks |
 | `JIRA_BASE_URL` / `JIRA_EMAIL` / `JIRA_API_TOKEN` | empty | only needed for `ticket_key` / `ticket_url` input or `post_to_jira` |
-| `SOURCEBOT_URL` | `http://localhost:3000` | |
+| `SOURCEBOT_URL` | `http://localhost:13000` | keep port in sync with `SOURCEBOT_HOST_PORT` |
 | `SOURCEBOT_API_KEY` | empty | generate in Sourcebot UI |
 | `SERENA_URL` | `http://localhost:9121/sse` | |
 | `ENRICH_MODEL` | `gemini-2.5-flash` | any Pydantic AI–supported model |

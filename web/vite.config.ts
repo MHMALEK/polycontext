@@ -5,15 +5,21 @@ import tailwindcss from "@tailwindcss/vite";
 // Vite dev server proxies FastAPI endpoints so the browser hits one origin
 // (avoids CORS preflights on every fetch). In production the React build is
 // mounted by FastAPI at /ui.
+//
+// Ports come from the env so they stay in lockstep with the Makefile and
+// docker-compose. Defaults match .env.example.
+const API_PORT = Number(process.env.API_PORT) || 18000;
+const UI_PORT = Number(process.env.UI_PORT) || 15173;
+const apiTarget = `http://127.0.0.1:${API_PORT}`;
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
-    port: 5173,
+    port: UI_PORT,
     proxy: {
-      "/health": "http://127.0.0.1:8000",
-      "/ask": "http://127.0.0.1:8000",
-      "/decompose": "http://127.0.0.1:8000",
-      "/runs": "http://127.0.0.1:8000",
+      "/health": apiTarget,
+      "/v1": apiTarget,
+      "/runs": apiTarget,
     },
   },
   build: {
