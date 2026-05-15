@@ -118,6 +118,68 @@ def test_parse_jsonl_events_ignores_garbage_lines() -> None:
     assert parsed.answer == "answer"
 
 
+def test_parse_jsonl_events_handles_opencode_shape() -> None:
+    """Real-world shape from ``opencode run --format json``.
+
+    Final answer is nested under ``part.text`` on a ``type: "text"``
+    event. Tokens live in ``part.tokens.{input,output,total}`` on
+    ``step_finish`` events. Cost is ``part.cost``. Grep tool output
+    must NOT be picked up as text content.
+    """
+    stream = "\n".join([
+        json.dumps({"type": "step_start", "part": {"id": "p1", "type": "step-start"}}),
+        json.dumps({
+            "type": "tool_use",
+            "part": {
+                "type": "tool",
+                "tool": "grep",
+                "state": {
+                    "status": "completed",
+                    "input": {"pattern": "Suppliers"},
+                    "output": "Found 20 matches\nfile1.tsx: line 60: Suppliers page",
+                },
+            },
+        }),
+        json.dumps({
+            "type": "step_finish",
+            "part": {
+                "type": "step-finish",
+                "reason": "tool-calls",
+                "tokens": {"total": 11935, "input": 11877, "output": 13},
+                "cost": 0.015,
+            },
+        }),
+        json.dumps({
+            "type": "text",
+            "part": {
+                "type": "text",
+                "text": "The Suppliers page is rendered in the frontend repo.",
+            },
+        }),
+        json.dumps({
+            "type": "step_finish",
+            "part": {
+                "type": "step-finish",
+                "reason": "stop",
+                "tokens": {"total": 47789, "input": 12102, "output": 53},
+                "cost": 0.0235,
+            },
+        }),
+    ])
+    parsed = parse_jsonl_events(stream)
+    assert parsed is not None
+    # Final answer is the text event's nested text — NOT grep results.
+    assert parsed.answer == "The Suppliers page is rendered in the frontend repo."
+    assert "Found 20 matches" not in parsed.answer
+    # Tokens picked up from nested {tokens: {input, output}}.
+    assert parsed.tokens_in == 12102  # max across the two step_finish events
+    assert parsed.tokens_out == 53
+    # Cost picked up from nested part.cost.
+    assert parsed.cost_usd == pytest.approx(0.0235)
+    # Only the grep tool_use counts as a tool call.
+    assert parsed.tool_calls == 1
+
+
 # ---------------------------------------------------------------------------
 # Prompt helpers
 # ---------------------------------------------------------------------------

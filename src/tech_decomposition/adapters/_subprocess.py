@@ -105,7 +105,13 @@ async def run_cli(
         *cmd,
         cwd=str(cwd),
         env=full_env,
-        stdin=asyncio.subprocess.PIPE if stdin is not None else None,
+        # When the caller has no stdin to send, point at /dev/null rather
+        # than inheriting from the parent. opencode (and other CLI agents)
+        # have been observed to detect an inherited TTY-less stdin as
+        # "interactive but empty" and silently exit producing 0 bytes of
+        # stdout/stderr. DEVNULL gives them a clean EOF so they commit to
+        # non-interactive mode.
+        stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         # New process group so a hung child gets the whole tree killed cleanly.

@@ -142,7 +142,11 @@ _TOKEN_OUT_KEYS = (
 )
 _COST_KEYS = ("cost_usd", "cost", "total_cost", "totalCost")
 _MODEL_KEYS = ("model", "model_id", "modelId")
-_TEXT_KEYS = ("text", "content", "message", "answer", "say", "output")
+# Keys whose values are the agent's final reply. Intentionally NOT
+# including ``"output"`` — that collides with tool-call result fields
+# (e.g. opencode's grep emits ``{state:{output:"Found 20 matches..."}}``
+# inside tool_use events).
+_TEXT_KEYS = ("text", "content", "message", "answer", "say")
 
 
 def _walk(obj: Any) -> Iterable[Any]:
@@ -192,6 +196,41 @@ def _coerce_float(v: Any) -> float | None:
     return None
 
 
+def _collect_text_chunks(node: Any, out: list[str]) -> None:
+    """Walk ``node`` and collect every string value under a key in _TEXT_KEYS.
+
+    Used so we pick up answers nested inside event payloads (e.g. opencode
+    emits ``{type:"text", part:{type:"text", text:"..."}}`` — the answer is
+    under ``part.text``, not at the top level).
+    """
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in _TEXT_KEYS and isinstance(v, str) and v.strip():
+                out.append(v)
+            else:
+                _collect_text_chunks(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _collect_text_chunks(v, out)
+
+
+def _tokens_block(obj: Any) -> dict | None:
+    """Return the first nested ``tokens: {...}`` dict, or None.
+
+    Different CLIs put usage either at the top level (Anthropic-style:
+    ``{usage: {input_tokens, output_tokens}}``) or inside a sub-object
+    (opencode-style: ``{part: {tokens: {input, output, total}}}``). We
+    look for any nested ``{"tokens": {...}}`` first since it's the
+    distinctive shape, then fall back to flat keys.
+    """
+    for node in _walk(obj):
+        if isinstance(node, dict):
+            t = node.get("tokens")
+            if isinstance(t, dict):
+                return t
+    return None
+
+
 def parse_jsonl_events(stdout: str) -> ParsedAgentRun | None:
     """Best-effort parser for JSON-event-stream CLI output.
 
@@ -223,15 +262,16 @@ def parse_jsonl_events(stdout: str) -> ParsedAgentRun | None:
             continue
         events.append(obj)
 
-        # Pull out per-event text chunks. We're permissive about the
-        # event "type" since vendor names vary (say/assistant/text/...).
+        # Pull out per-event text chunks (recursive — opencode nests the
+        # actual answer under ``part.text``, not at the top level).
+        # Skip text collection for tool events so tool inputs/outputs
+        # don't leak into the answer.
         etype = str(obj.get("type") or obj.get("event") or obj.get("kind") or "").lower()
-        if "tool" in etype or obj.get("tool_use") or obj.get("toolUse"):
+        is_tool_event = "tool" in etype or _find_first(obj, ("tool_use", "toolUse")) is not None
+        if is_tool_event:
             tool_calls += 1
-        for k in _TEXT_KEYS:
-            v = obj.get(k)
-            if isinstance(v, str) and v:
-                text_chunks.append(v)
+        else:
+            _collect_text_chunks(obj, text_chunks)
 
         # Per-event usage rollup — keep the largest value seen (final
         # events typically restate the cumulative usage).
@@ -243,6 +283,17 @@ def parse_jsonl_events(stdout: str) -> ParsedAgentRun | None:
             v = _coerce_int(_find_first(obj, (k,)))
             if v is not None and (tokens_out is None or v > tokens_out):
                 tokens_out = v
+        # opencode shape: ``{tokens: {input, output, total}}``. Bare
+        # "input"/"output" are too generic to scan globally, so we only
+        # accept them inside a ``tokens`` block.
+        tb = _tokens_block(obj)
+        if tb is not None:
+            v_in = _coerce_int(tb.get("input"))
+            if v_in is not None and (tokens_in is None or v_in > tokens_in):
+                tokens_in = v_in
+            v_out = _coerce_int(tb.get("output"))
+            if v_out is not None and (tokens_out is None or v_out > tokens_out):
+                tokens_out = v_out
         for k in _COST_KEYS:
             v = _coerce_float(_find_first(obj, (k,)))
             if v is not None and (cost is None or v > cost):
@@ -255,19 +306,23 @@ def parse_jsonl_events(stdout: str) -> ParsedAgentRun | None:
     if not events:
         return None
 
-    # Prefer the last meaningful text chunk as the final answer; fall
-    # back to a joined transcript when no event marked itself "final".
+    # Prefer the last "text"-type event's text as the final answer (that's
+    # what opencode and cline both emit at the end). Otherwise fall back
+    # to the last "final"/"done"/"result" event, then to the joined
+    # transcript of every text chunk seen.
     answer = ""
     for obj in reversed(events):
-        if obj.get("final") or obj.get("done") or str(obj.get("type", "")).lower() in {
-            "result", "final", "answer", "complete", "completion",
-        }:
-            for k in _TEXT_KEYS:
-                v = obj.get(k)
-                if isinstance(v, str) and v.strip():
-                    answer = v.strip()
-                    break
-            if answer:
+        etype = str(obj.get("type", "")).lower()
+        is_final = (
+            obj.get("final")
+            or obj.get("done")
+            or etype in {"text", "result", "final", "answer", "complete", "completion"}
+        )
+        if is_final:
+            chunks: list[str] = []
+            _collect_text_chunks(obj, chunks)
+            if chunks:
+                answer = chunks[-1].strip()
                 break
     if not answer:
         answer = "\n".join(text_chunks).strip()
