@@ -521,13 +521,21 @@ class CliAgentAdapter(Adapter):
     # Internals --------------------------------------------------------------
 
     async def _assemble_prompt(self, *, preamble: str, body: str, kind: JobKind) -> str:
-        """Prepend grounding block (if enabled) and the preamble to the body."""
+        """Prepend grounding block (if enabled) and the preamble to the body.
+
+        Stashes the retrieved file list on ``self._last_grounding_paths``
+        so ``_metrics`` can surface it as ``extra.retrieved_files``.
+        Adapters are instantiated per request (see ``_resolve_adapter``
+        in api.py), so per-instance state is per-call.
+        """
+        self._last_grounding_paths = []
         grounding = ""
         if self._grounded and kind in ("ask", "decompose"):
             try:
                 paths = await retrieve_context_paths(
                     body, self.settings, max_files=DEFAULT_MAX_FILES,
                 )
+                self._last_grounding_paths = paths
                 grounding = format_grounding_block(paths, self.settings.repos_root)
             except Exception as e:  # noqa: BLE001 — never block on retrieval
                 log.warning("%s: grounding prelude failed: %s", self.name, e)
@@ -562,6 +570,13 @@ class CliAgentAdapter(Adapter):
             extra.setdefault("stderr_excerpt", res.stderr[:200])
         if self._grounded:
             extra.setdefault("grounded", True)
+            # Surface the file pointers the prelude injected so callers
+            # can audit retrieval quality without re-running.
+            paths = getattr(self, "_last_grounding_paths", None) or []
+            extra["retrieved_files"] = [
+                str(p.relative_to(self.settings.repos_root)) if p.is_absolute() else str(p)
+                for p in paths
+            ]
         # When the parser yielded no answer, surface enough of the raw
         # stdout to debug it without re-running. CLIs sometimes write the
         # final answer to stderr, or emit a JSON shape we don't yet
