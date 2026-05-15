@@ -50,6 +50,27 @@ async def test_run_cli_propagates_env(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_cli_rewrites_pwd_to_match_cwd(tmp_path: Path) -> None:
+    """Regression: PWD in the child must match the cwd we hand it.
+
+    Without this, tools that trust ``$PWD`` over ``getcwd()`` (notably
+    opencode, which runs on Bun) silently produce no output when the
+    parent's PWD points elsewhere.
+    """
+    res = await run_cli(
+        cmd=[sys.executable, "-c", "import os; print(os.environ.get('PWD', 'unset'))"],
+        cwd=tmp_path,
+    )
+    assert str(tmp_path) in res.stdout
+    # And OLDPWD from the parent is stripped so the child doesn't act on it.
+    res2 = await run_cli(
+        cmd=[sys.executable, "-c", "import os; print(os.environ.get('OLDPWD', 'unset'))"],
+        cwd=tmp_path,
+    )
+    assert res2.stdout.strip() == "unset"
+
+
+@pytest.mark.asyncio
 async def test_run_cli_raises_on_nonzero_exit(tmp_path: Path) -> None:
     with pytest.raises(CliFailed) as ei:
         await run_cli(

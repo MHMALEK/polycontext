@@ -97,6 +97,16 @@ async def run_cli(
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
+    # POSIX shells set PWD when they `cd`; many tools (notably opencode,
+    # which runs on Bun) trust PWD over getcwd() when deciding which
+    # project to scope to. If the parent's PWD points somewhere other
+    # than the cwd we're handing the child, those tools quietly resolve
+    # paths against the wrong directory and produce no output. Rewrite
+    # PWD so they agree.
+    full_env["PWD"] = str(cwd)
+    # OLDPWD inherited from the parent is meaningless to the child and
+    # can confuse shells; drop it.
+    full_env.pop("OLDPWD", None)
 
     log.info("subprocess: cwd=%s cmd=%s timeout=%s", cwd, shlex.join(cmd), timeout)
     t0 = time.monotonic()
