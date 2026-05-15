@@ -486,9 +486,20 @@ class CliAgentAdapter(Adapter):
         except CliTimeout as e:
             raise RuntimeError(str(e)) from e
         except CliFailed as e:
-            raise RuntimeError(
-                f"{self.name} failed (exit {e.returncode}): {e.stderr[:500]}"
-            ) from e
+            # Surface stdout too — some CLIs (opencode, cline) write the
+            # actual failure reason to stdout when --format json is on and
+            # stderr stays empty. Truncate each side independently so we
+            # always see *something* even when one channel is silent.
+            stderr_part = (e.stderr or "").strip()[:500]
+            stdout_part = (e.stdout or "").strip()[:500]
+            parts = [f"{self.name} failed (exit {e.returncode})"]
+            if stderr_part:
+                parts.append(f"stderr: {stderr_part}")
+            if stdout_part:
+                parts.append(f"stdout: {stdout_part}")
+            if not stderr_part and not stdout_part:
+                parts.append("(both stdout and stderr were empty)")
+            raise RuntimeError(" | ".join(parts)) from e
 
     def _metrics(self, parsed: ParsedAgentRun, t_start: float, res: CliResult) -> AdapterMetrics:
         extra = dict(parsed.extra)
