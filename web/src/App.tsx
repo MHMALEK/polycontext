@@ -3,6 +3,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "./api";
 import type { AdapterInfo, RunDetail, RunListItem } from "./api";
+import { Decompose } from "./Decompose";
+
+type View = "ask" | "decompose";
 
 /** Prefix for a synthetic sidebar row shown until /runs lists the real thread. */
 const PENDING_SIDEBAR_PREFIX = "__pending__:";
@@ -567,6 +570,7 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
 // ---------------------------------------------------------------------------
 
 export function App() {
+  const [view, setView] = useState<View>("ask");
   const [form, setForm] = useState<AskFormState>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -928,21 +932,51 @@ export function App() {
 
         <main className="min-h-0 flex flex-col h-full min-w-0 bg-base-200/40">
           <header className="shrink-0 border-b border-base-300/80 bg-base-100/70 backdrop-blur-md shadow-sm shadow-base-300/10 px-4 sm:px-6 py-3 sm:py-4">
-            <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight">
-              Workspace
-            </h1>
-            <p className="text-xs text-base-content/75 mt-1 leading-relaxed max-w-2xl">
-              Ask with follow-ups in one thread. History on the left keeps prior sessions.
-            </p>
-            <p className="text-[11px] text-base-content/70 mt-2 border-t border-base-300/70 pt-2">
-              {activeThreadId
-                ? "Follow-ups use this thread — prior turns are sent as context."
-                : pickedAdapter
-                  ? `Routing through ${pickedAdapter.name}.`
-                  : "Pick an adapter before sending."}
-            </p>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight">
+                  Workspace
+                </h1>
+                <p className="text-xs text-base-content/75 mt-1 leading-relaxed max-w-2xl">
+                  {view === "ask"
+                    ? "Ask with follow-ups in one thread. History on the left keeps prior sessions."
+                    : "Decompose a ticket into structured subtasks across repos."}
+                </p>
+              </div>
+              <div role="tablist" className="tabs tabs-boxed tabs-sm shrink-0">
+                <button
+                  type="button"
+                  role="tab"
+                  className={`tab ${view === "ask" ? "tab-active" : ""}`}
+                  onClick={() => setView("ask")}
+                >
+                  Ask
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`tab ${view === "decompose" ? "tab-active" : ""}`}
+                  onClick={() => setView("decompose")}
+                >
+                  Decompose
+                </button>
+              </div>
+            </div>
+            {view === "ask" && (
+              <p className="text-[11px] text-base-content/70 mt-2 border-t border-base-300/70 pt-2">
+                {activeThreadId
+                  ? "Follow-ups use this thread — prior turns are sent as context."
+                  : pickedAdapter
+                    ? `Routing through ${pickedAdapter.name}.`
+                    : "Pick an adapter before sending."}
+              </p>
+            )}
           </header>
 
+          {view === "decompose" ? (
+            <Decompose />
+          ) : (
+          <>
           <div
             ref={threadRef}
             className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-6"
@@ -1085,6 +1119,8 @@ export function App() {
               </div>
             </form>
           </div>
+          </>
+          )}
         </main>
       </div>
     </div>

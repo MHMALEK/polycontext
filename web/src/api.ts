@@ -127,11 +127,55 @@ export interface AdapterAskBody {
   top_k?: number;
 }
 
+// Subtask + Decomposition mirror src/tech_decomposition/models.py Subtask + Decomposition.
+export interface Subtask {
+  title: string;
+  description: string;
+  repo: string;
+  files: string[];
+  file_links: string[];
+  acceptance_criteria: string[];
+  estimated_complexity: "small" | "medium" | "large" | "unknown";
+}
+
+export interface Decomposition {
+  query: string;
+  overview: string;
+  affected_repos: string[];
+  risks: string[];
+  open_questions: string[];
+  subtasks: Subtask[];
+  enrichment_model?: string;
+  decomposition_model?: string;
+}
+
+export interface AdapterDecomposeBody {
+  query: string;
+  repos?: string[];
+  mode?: "cheap" | "deep" | "auto";
+}
+
+export interface AdapterDecomposeResponse {
+  run_id: string;
+  result: {
+    adapter: string;
+    decomposition: Decomposition;
+    markdown: string;
+    metrics: AdapterMetrics;
+  };
+}
+
 export const api = {
   health: () => jsonReq<{ status: string }>("/health"),
 
   adapterAsk: (name: string, body: AdapterAskBody) =>
     jsonReq<AdapterCallResponse>(`/v1/adapters/${encodeURIComponent(name)}/ask`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  adapterDecompose: (name: string, body: AdapterDecomposeBody) =>
+    jsonReq<AdapterDecomposeResponse>(`/v1/adapters/${encodeURIComponent(name)}/decompose`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
