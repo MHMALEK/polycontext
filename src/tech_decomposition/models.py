@@ -7,18 +7,16 @@ from pydantic import BaseModel, Field
 
 
 class Ticket(BaseModel):
-    """Raw Jira ticket — before enrichment."""
     key: str | None = None
+    title: str | None = None
     url: str | None = None
-    title: str
-    body: str
+    body: str | None = None
     labels: list[str] = Field(default_factory=list)
     components: list[str] = Field(default_factory=list)
 
-
 class EnrichedQuery(BaseModel):
     """Output of the cheap rewrite step. Drives retrieval."""
-    summary: str = Field(description="One-paragraph plain-English summary of the ticket.")
+    summary: str = Field(description="One-paragraph plain-English summary of the query.")
     intent: Literal["bug", "feature", "refactor", "investigation", "chore", "unknown"]
     entities: list[str] = Field(
         default_factory=list,
@@ -84,10 +82,8 @@ class Subtask(BaseModel):
 
 class Decomposition(BaseModel):
     """Final structured output."""
-    ticket_key: str | None
-    ticket_title: str
-    ticket_url: str | None
-
+    query: str
+    
     overview: str = Field(description="2-4 sentence engineer-readable framing of what needs to happen.")
     affected_repos: list[str]
     risks: list[str] = Field(default_factory=list)
@@ -101,26 +97,20 @@ class Decomposition(BaseModel):
 
 class DecomposeRequest(BaseModel):
     """API input."""
-    ticket_url: str | None = None
-    ticket_key: str | None = None
-    ticket_text: str | None = Field(
+    query: str | None = Field(
         default=None,
-        description="Raw ticket title+body. Use this when Jira is not configured or for tests.",
+        description="The natural language question or task.",
     )
     repos: list[str] | None = Field(
         default=None,
         description="Override the configured repo list for this request.",
-    )
-    post_to_jira: bool = Field(
-        default=False,
-        description="When true and a ticket key is known, post the decomposition as a Jira comment.",
     )
     mode: Literal["cheap", "deep", "auto"] = Field(
         default="auto",
         description=(
             "cheap = single-pass static retrieval (default, ~$0.06, ~50s). "
             "deep = agentic loop with Pro using read_file/search_code/find_symbol tools (~$0.30+, ~3-5min). "
-            "auto = run cheap first, escalate to deep if confidence is low or contradiction-check fires."
+            "auto = run cheap first, escalate to deep if confidence is low."
         ),
     )
 
@@ -130,5 +120,4 @@ class DecomposeResponse(BaseModel):
     enriched_query: EnrichedQuery
     markdown_path: str
     markdown: str
-    jira_comment_id: str | None = None
     metrics: dict | None = None

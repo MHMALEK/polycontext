@@ -33,7 +33,7 @@ from pydantic_ai.usage import UsageLimits
 
 from ..config import Settings
 from ..import_index import load_or_build_index, transitive_imports, who_imports
-from ..models import Decomposition, EnrichedQuery, Ticket
+from ..models import Decomposition, EnrichedQuery
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ DEEP_MAX_LIST_ENTRIES = 60
 
 
 _SYSTEM = """\
-You are a senior Tract engineer producing a tech decomposition for a Jira ticket.
+You are a senior Tract engineer producing a tech decomposition for a task.
 You have tools that let you read code from four repos:
   - traceability  (Python API)
   - frontend  (TypeScript / Next.js)
@@ -352,7 +352,7 @@ async def _call_serena(settings: Settings, tool_name: str, args: dict) -> str:
 
 async def deep_decompose(
     *,
-    ticket: Ticket,
+    query_text: str,
     enriched: EnrichedQuery,
     settings: Settings,
 ):

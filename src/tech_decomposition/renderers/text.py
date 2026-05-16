@@ -3,7 +3,7 @@
 Renders code blocks as-is, replaces inline code with backticks (kept as
 plain backticks), strips emphasis markers (``*`` / ``_``) and link syntax
 (keeps the link label, drops the URL). Useful for piping into terminals,
-plain-text channels (Slack DMs), or `--format text` CLI usage.
+plain-text channels, or `--format text` CLI usage.
 """
 from __future__ import annotations
 

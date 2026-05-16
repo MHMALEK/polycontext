@@ -94,7 +94,7 @@ class Pipeline:
             rendered_list.append(rendered)
 
         # Sinks consume the first rendered output by default; specialized sinks
-        # (e.g. JiraADFSink) can pick a different format from the list.
+        # (e.g. specialized sinks) can pick a different format from the list.
         primary = rendered_list[0] if rendered_list else Rendered(format="markdown", body=engine_result.answer_markdown)
         sink_results: list[SinkResult] = []
         for sink in self.sinks:

@@ -176,9 +176,7 @@ export const api = {
       adapters: string[];
       ask?: { query: string; repos?: string[]; top_k?: number };
       decompose?: {
-        ticket_key?: string;
-        ticket_url?: string;
-        ticket_text?: string;
+        query?: string;
         repos?: string[];
         mode?: "cheap" | "deep" | "auto";
       };

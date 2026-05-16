@@ -7,10 +7,10 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.settings import ModelSettings
 
 from ..config import Settings
-from ..models import EnrichedQuery, Ticket
+from ..models import EnrichedQuery
 
 _SYSTEM = """\
-You are a senior Tract engineer triaging a Jira ticket so an autonomous coding agent
+You are a senior Tract engineer triaging a task so an autonomous coding agent
 can act on it. Your job is to produce a STRUCTURED, KEYWORD-DENSE rewrite that drives
 multi-repo code search downstream.
 

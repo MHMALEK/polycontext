@@ -7,11 +7,11 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.settings import ModelSettings
 
 from ..config import Settings
-from ..models import Decomposition, EnrichedQuery, RetrievedContext, Snippet, Ticket
+from ..models import Decomposition, EnrichedQuery, RetrievedContext, Snippet
 
 
 _SYSTEM = """\
-You are a senior Tract engineer producing a tech decomposition for a Jira ticket so that
+You are a senior Tract engineer producing a tech decomposition for a task so that
 autonomous coding agents can pick up sub-tasks and act.
 
 GROUNDING — HARD RULES (do not violate, even if it makes the output less complete):
@@ -79,7 +79,7 @@ def _build_agent(settings: Settings) -> Agent[None, Decomposition]:
 
 async def decompose(
     *,
-    ticket: Ticket,
+    query_text: str,
     query: EnrichedQuery,
     context: RetrievedContext,
     settings: Settings,

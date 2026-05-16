@@ -21,13 +21,13 @@ Question:
 """
 
 
-DECOMPOSE_PREAMBLE = """Decompose this Jira ticket into a tech decomposition. Use
+DECOMPOSE_PREAMBLE = """Decompose this query into a tech decomposition. Use
 file-reading tools to ground every reference; never invent paths.
 
 Output ONE JSON object matching this schema and nothing else (no prose, no fences):
 
 {{
-  "ticket_key": str | null, "ticket_title": str, "ticket_url": str | null,
+  "query": str,
   "overview": str, "affected_repos": [str], "risks": [str], "open_questions": [str],
   "subtasks": [
     {{"title": str, "description": str, "repo": str, "files": [str],
@@ -37,7 +37,7 @@ Output ONE JSON object matching this schema and nothing else (no prose, no fence
   "enrichment_model": "", "decomposition_model": "{model_tag}"
 }}
 
-Ticket:
+Query:
 """
 
 
@@ -49,14 +49,10 @@ Subtask:
 """
 
 
-def ticket_blob(inp: AdapterDecomposeInput) -> str:
+def query_blob(inp: AdapterDecomposeInput) -> str:
     parts: list[str] = []
-    if inp.ticket_key:
-        parts.append(f"Ticket key: {inp.ticket_key}")
-    if inp.ticket_url:
-        parts.append(f"Ticket URL: {inp.ticket_url}")
-    if inp.ticket_text:
-        parts.append(inp.ticket_text)
+    if inp.query:
+        parts.append(inp.query)
     if inp.repos:
         parts.append(f"Repos to consider: {', '.join(inp.repos)}")
     return "\n\n".join(parts)

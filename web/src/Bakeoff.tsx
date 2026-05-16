@@ -17,8 +17,7 @@ export function Bakeoff() {
   const [job, setJob] = useState<Job>("ask");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
-  const [ticketText, setTicketText] = useState("");
-  const [ticketKey, setTicketKey] = useState("");
+  const [decomposeQuery, setDecomposeQuery] = useState("");
   const [implementRepo, setImplementRepo] = useState("");
   const [implementText, setImplementText] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -62,15 +61,13 @@ export function Bakeoff() {
         if (job === "ask") body.ask = { query: query.trim() };
         if (job === "decompose")
           body.decompose = {
-            ticket_key: ticketKey.trim() || undefined,
-            ticket_text: ticketText.trim() || undefined,
+            query: decomposeQuery.trim() || undefined,
             mode: "auto",
           };
         if (job === "implement")
           body.implement = {
             repo: implementRepo.trim(),
             free_text: implementText.trim() || undefined,
-            ticket_key: ticketKey.trim() || undefined,
             draft: true,
           };
         const r = await api.bakeoff(job, body);
@@ -81,7 +78,7 @@ export function Bakeoff() {
         setSubmitting(false);
       }
     },
-    [job, selected, submitting, query, ticketKey, ticketText, implementRepo, implementText],
+    [job, selected, submitting, query, decomposeQuery, implementRepo, implementText],
   );
 
   return (
@@ -127,17 +124,10 @@ export function Bakeoff() {
 
           {job === "decompose" && (
             <div className="flex flex-col gap-2">
-              <input
-                type="text"
-                placeholder="Ticket key (e.g. SCRUM-17)"
-                value={ticketKey}
-                onChange={(e) => setTicketKey(e.target.value)}
-                className="input input-bordered input-sm w-full"
-              />
               <textarea
-                placeholder="…or paste ticket text"
-                value={ticketText}
-                onChange={(e) => setTicketText(e.target.value)}
+                placeholder="Query text"
+                value={decomposeQuery}
+                onChange={(e) => setDecomposeQuery(e.target.value)}
                 rows={4}
                 className="textarea textarea-bordered w-full text-sm"
               />
@@ -151,13 +141,6 @@ export function Bakeoff() {
                 placeholder="Repo name (e.g. traceability)"
                 value={implementRepo}
                 onChange={(e) => setImplementRepo(e.target.value)}
-                className="input input-bordered input-sm w-full"
-              />
-              <input
-                type="text"
-                placeholder="Ticket key (optional)"
-                value={ticketKey}
-                onChange={(e) => setTicketKey(e.target.value)}
                 className="input input-bordered input-sm w-full"
               />
               <textarea

@@ -240,12 +240,12 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
 
 @app.post("/v1/adapters/{name}/decompose")
 async def adapter_decompose(name: str, inp: AdapterDecomposeInput) -> dict[str, Any]:
-    if not (inp.ticket_key or inp.ticket_url or inp.ticket_text):
-        raise HTTPException(status_code=400, detail="Provide one of: ticket_key, ticket_url, ticket_text.")
+    if not inp.query:
+        raise HTTPException(status_code=400, detail="Provide a query.")
     adapter = _resolve_adapter(name)
     store = open_default_store(get_settings())
     ctx = RunContext(settings=get_settings(), mode="decompose")
-    preview = (inp.ticket_key or inp.ticket_url or (inp.ticket_text or ""))[:160].strip()
+    preview = (inp.query or "")[:160].strip()
     try:
         store.start(
             run_id=ctx.run_id, mode="decompose",

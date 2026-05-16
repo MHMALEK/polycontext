@@ -14,17 +14,14 @@ from ..engines.deep_decompose import DeepDecomposeEngine
 from ..engines.local_agent import LocalAgentEngine
 from ..engines.sourcebot import SourcebotEngine
 from ..enrichers.cheap import CheapEnricher
-from ..inputs.jira_ticket import JiraTicketSource
 from ..inputs.raw import RawQuestionSource
 from ..inputs.text_file import TextFileSource
 from ..renderers.html import HtmlRenderer
-from ..renderers.jira_adf import JiraADFRenderer
 from ..renderers.markdown import MarkdownRenderer
 from ..renderers.passthrough import PassthroughMarkdownRenderer
 from ..renderers.text import TextRenderer
 from ..sinks.cli import CLISink
 from ..sinks.file import FileSink
-from ..sinks.jira_comment import JiraCommentSink
 from .metrics import JsonlMetricsObserver
 from .pipeline import Pipeline
 from .protocols import Engine, InputSource
@@ -32,7 +29,7 @@ from .structurer import PydanticAIStructurer
 
 AskEngineName = Literal["sourcebot", "local"]
 DecomposeMode = Literal["cheap", "deep", "auto"]
-TicketSourceName = Literal["jira", "text_file"]
+TicketSourceName = Literal["text_file"]
 OutputFormat = Literal["markdown", "html", "text"]
 
 
@@ -55,8 +52,6 @@ def build_ask_engine(name: AskEngineName, *, max_steps: int | None = None) -> En
 
 
 def build_ticket_source(name: TicketSourceName) -> InputSource:
-    if name == "jira":
-        return JiraTicketSource()
     if name == "text_file":
         return TextFileSource()
     raise ValueError(f"unknown ticket source: {name!r}")
@@ -107,10 +102,9 @@ def build_ask_pipeline(
 def build_decompose_pipeline(
     settings: Settings,
     *,
-    source: TicketSourceName = "jira",
+    source: TicketSourceName = "text_file",
     mode: DecomposeMode = "cheap",
     repos: list[str] | None = None,
-    post_to_jira: bool = False,
     output_format: OutputFormat = "markdown",
     include_file_sink: bool = True,
     include_cli_sink: bool = True,
@@ -142,11 +136,6 @@ def build_decompose_pipeline(
         sinks.append(CLISink())
     if include_file_sink:
         sinks.append(FileSink(subdir="decompositions", format=output_format))
-    if post_to_jira:
-        # JiraCommentSink consumes the jira_adf rendering; append the ADF
-        # renderer at the end of the list so the sink can find it.
-        renderers.append(JiraADFRenderer())
-        sinks.append(JiraCommentSink())
 
     return Pipeline(
         input_source=build_ticket_source(source),

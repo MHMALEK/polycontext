@@ -114,7 +114,6 @@ Optional (each opt-in by setting the credential):
 - `OPENROUTER_API_KEY` — to use `openrouter:anthropic/claude-...` or any other OR-routed model.
 - `CUSTOM_LLM_BASE_URL` + `CUSTOM_LLM_API_KEY` — any OpenAI-compatible endpoint (LiteLLM proxy, vLLM, Ollama).
 - `GITLAB_TOKEN` — needed only when the `gitlab-company` connector in [config/sourcebot/config.json](config/sourcebot/config.json) is active.
-- `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` — needed for `decompose --ticket-key` and `--post-to-jira`.
 
 Per-stage model selection — set in `.env`:
 

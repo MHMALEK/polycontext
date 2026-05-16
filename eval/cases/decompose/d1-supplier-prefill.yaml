@@ -1,13 +1,13 @@
 id: d1-supplier-prefill
 tags: [cross-repo, traceability, frontend, ux-flow]
 description: |
-  Multi-repo behavior question framed as a Jira ticket. Tests whether the
+  Multi-repo behavior question framed as a query. Tests whether the
   decompose pipeline can: identify both the frontend and traceability repos,
   call out the data-flow risk when the editing user is deleted, and break
   the work into a handful of concrete subtasks.
 
 input:
-  ticket_text: |
+  query: |
     Title: Pre-fill supplier questionnaire on behalf of supplier
 
     An internal employee logs in on behalf of a supplier, pre-fills a

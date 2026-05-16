@@ -14,11 +14,10 @@ async def main():
 
     input_data = AdapterAskInput(
         query=query,
-        repos=repos,
-        ticket_url=None
+        repos=repos
     )
 
-    adapters_to_test = ["gemini", "gemini-grounded"]
+    adapters_to_test = ["gemini"]
     
     results = {}
 

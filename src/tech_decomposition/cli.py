@@ -2,7 +2,7 @@
 
 Subcommands:
     ask        - ask a code question via Sourcebot (or local agent, experimental)
-    decompose  - decompose a Jira ticket / text file into subtasks
+    decompose  - decompose a query into subtasks
     compare    - run a TOML batch of questions through engines side-by-side
     serve      - run the FastAPI server
     analyze    - print a summary of outputs/metrics/runs.jsonl
@@ -84,26 +84,20 @@ def _cmd_ask(args, settings) -> int:
 
 
 def _cmd_decompose(args, settings) -> int:
-    if args.ticket_text_file:
-        source = "text_file"
-        ref = {"path": args.ticket_text_file, "key": args.ticket_key, "url": args.ticket_url}
-    elif args.ticket_key:
-        source = "jira"
-        ref = {"key": args.ticket_key}
-    elif args.ticket_url:
-        source = "jira"
-        ref = {"url": args.ticket_url}
+    if args.query:
+        ref = {"query": args.query}
+    elif args.query_file:
+        ref = {"path": args.query_file}
     else:
-        console.print("[red]decompose: one of --ticket-key / --ticket-url / --ticket-text-file required[/]")
+        console.print("[red]decompose: --query or --query-file required[/]")
         return 2
 
     repos = [s.strip() for s in args.repos.split(",")] if args.repos else None
     pipeline = build_decompose_pipeline(
         settings,
-        source=source,
+        source="text_file" if args.query_file else "raw",
         mode=args.mode,
         repos=repos,
-        post_to_jira=args.post_to_jira,
         output_format=args.format,
         include_cli_sink=False,  # we print our own summary
         include_file_sink=True,
@@ -140,9 +134,6 @@ def _cmd_decompose(args, settings) -> int:
     if er.input_tokens or er.output_tokens:
         bits.append(f"tokens: {er.input_tokens or 0}/{er.output_tokens or 0}")
     console.print("  " + " · ".join(bits))
-    jira_sr = next((sr for sr in run.sink_results if sr.sink == "jira_comment"), None)
-    if jira_sr and jira_sr.location:
-        console.print(f"  posted jira: [magenta]{jira_sr.location}[/]")
     if args.print_json:
         decomp = er.payload.get("decomposition") or {}
         print(json.dumps(decomp, indent=2, default=str))
@@ -272,10 +263,9 @@ def _history_replay(args, settings) -> int:
         return _cmd_ask(ns, settings)
     if mode == "decompose":
         ns = argparse.Namespace(
-            ticket_key=(ref or {}).get("key") if isinstance(ref, dict) else None,
-            ticket_url=(ref or {}).get("url") if isinstance(ref, dict) else None,
-            ticket_text_file=(ref or {}).get("path") if isinstance(ref, dict) else None,
-            mode="auto", repos=None, post_to_jira=False,
+            query=(ref or {}).get("query") if isinstance(ref, dict) else None,
+            query_file=(ref or {}).get("path") if isinstance(ref, dict) else None,
+            mode="auto", repos=None,
             print_json=False, format=fmt,
         )
         return _cmd_decompose(ns, settings)
@@ -305,7 +295,7 @@ def _cmd_analyze(args, settings) -> int:
 def _build_parser(settings) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="tech-decomposition",
-        description="tech-decomposition: multi-repo code Q&A and Jira ticket decomposition",
+        description="tech-decomposition: multi-repo code Q&A and query decomposition",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -336,11 +326,10 @@ def _build_parser(settings) -> argparse.ArgumentParser:
     p_ask.set_defaults(func=_cmd_ask)
 
     # decompose --------------------------------------------------------------
-    p_dec = sub.add_parser("decompose", help="Decompose a Jira ticket into subtasks")
+    p_dec = sub.add_parser("decompose", help="Decompose a query into subtasks")
     src = p_dec.add_mutually_exclusive_group(required=True)
-    src.add_argument("--ticket-key", help="Jira ticket key (e.g. DEV-7543)")
-    src.add_argument("--ticket-url", help="Jira ticket URL")
-    src.add_argument("--ticket-text-file", help="Path to a .txt/.md file with ticket title+body")
+    src.add_argument("--query", help="Raw question/query string")
+    src.add_argument("--query-file", help="Path to a .txt/.md file with query")
     p_dec.add_argument(
         "--mode",
         choices=["cheap", "deep", "auto"],
@@ -350,15 +339,13 @@ def _build_parser(settings) -> argparse.ArgumentParser:
              "auto = cheap, escalate to deep on low-confidence / migration cues.",
     )
     p_dec.add_argument("--repos", default=None, help="Comma-separated repo dir names")
-    p_dec.add_argument("--post-to-jira", action="store_true",
-                       help="Post the decomposition as a Jira comment (requires ticket key)")
     p_dec.add_argument("--print-json", action="store_true",
                        help="Print the structured Decomposition JSON to stdout too")
     p_dec.add_argument(
         "--format",
         choices=["markdown", "html", "text"],
         default="markdown",
-        help="Output format. Affects the saved file extension; Jira posts always use ADF.",
+        help="Output format. Affects the saved file extension.",
     )
     p_dec.set_defaults(func=_cmd_decompose)
 

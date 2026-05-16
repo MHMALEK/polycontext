@@ -15,7 +15,7 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.settings import ModelSettings
 
 from ..config import Settings
-from ..models import Decomposition, Ticket
+from ..models import Decomposition
 
 
 class Contradiction(BaseModel):
@@ -31,7 +31,7 @@ class ContradictionReport(BaseModel):
 
 
 _SYSTEM = """\
-You are a strict reviewer. You receive a Jira ticket and a proposed tech decomposition for it.
+You are a strict reviewer. You receive a task query and a proposed tech decomposition for it.
 Your job is to find any subtask that contradicts a criterion stated in the ticket.
 
 Be conservative — only flag actual contradictions (a subtask says X, the ticket says NOT-X

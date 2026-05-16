@@ -24,10 +24,10 @@ class LoadedInput(BaseModel):
     """Output of InputSource.load(): a normalized question with metadata.
 
     `kind` identifies the input type so downstream stages can branch
-    (e.g. JiraTicketSource → kind="jira_ticket", supplies title/body/labels).
+    (e.g. TextFileSource → kind="text_file", supplies title/body).
     """
 
-    kind: Literal["question", "jira_ticket", "text_file", "raw"]
+    kind: Literal["question", "text_file", "raw"]
     title: str = ""
     body: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -69,7 +69,7 @@ class EngineResult(BaseModel):
 class Rendered(BaseModel):
     """Output of Renderer.render(): the final shape to deliver."""
 
-    format: Literal["markdown", "html", "text", "json", "jira_adf"]
+    format: Literal["markdown", "html", "text", "json"]
     body: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 

@@ -31,10 +31,6 @@ class Settings(BaseSettings):
         "frontend-webapp": "your-company/frontend-webapp",
     })
 
-    jira_base_url: str = ""
-    jira_email: str = ""
-    jira_api_token: str = ""
-
     sourcebot_url: str = ""
     sourcebot_api_key: str = ""
     # Base URL for Sourcebot as seen by agent-node when it proxies ``/api/chat/blocking``.

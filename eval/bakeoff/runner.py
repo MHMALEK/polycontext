@@ -65,9 +65,7 @@ def _case_input_for_adapter(case: Case) -> dict[str, Any]:
         }
     if case.job == "decompose":
         return {
-            "ticket_key": case.input.get("ticket_key"),
-            "ticket_url": case.input.get("ticket_url"),
-            "ticket_text": case.input.get("ticket_text"),
+            "query": case.input.get("query"),
             "repos": case.input.get("repos"),
             "mode": case.input.get("mode", "auto"),
         }

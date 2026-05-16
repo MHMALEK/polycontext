@@ -10,7 +10,7 @@ import httpx
 from ..models import Decomposition
 from ._ask_pipeline import AskInvocation, AskPipeline, AskPipelinePolicy
 from ._extract_json import extract_json
-from ._prompts import ASK_PREAMBLE, DECOMPOSE_PREAMBLE, IMPLEMENT_PREAMBLE, subtask_prompt, ticket_blob
+from ._prompts import ASK_PREAMBLE, DECOMPOSE_PREAMBLE, IMPLEMENT_PREAMBLE, subtask_prompt, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
@@ -30,7 +30,7 @@ _ASK_SYSTEM = (
     "Keep the answer concise and engineer-oriented."
 )
 _DECOMPOSE_SYSTEM = (
-    "You decompose Jira tickets into structured tech work. Use file-reading "
+    "You decompose tasks into structured tech work. Use file-reading "
     "tools to verify every file reference; never invent paths. Output EXACTLY "
     "one JSON object matching the schema in the user message — no prose, no "
     "markdown fences."
@@ -133,7 +133,7 @@ class ClaudeCodeSDKAdapter(Adapter):
     async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
         t = time.monotonic()
         user_prompt = (
-            DECOMPOSE_PREAMBLE.format(model_tag=self.name) + ticket_blob(inp)
+            DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
         )
         out = await self._run(
             system=_DECOMPOSE_SYSTEM,

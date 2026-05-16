@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from ..config import Settings
-from ..models import EnrichedQuery, RepoContext, RetrievedContext, Snippet, Ticket
+from ..models import EnrichedQuery, RepoContext, RetrievedContext, Snippet
 from .anchors import gather_anchor_snippets
 from .base import Retriever
 from .ripgrep import RipgrepRetriever
@@ -46,7 +46,7 @@ async def gather_context(
     repos: list[str],
     query: EnrichedQuery,
     settings: Settings,
-    ticket: Ticket | None = None,
+    ticket: str | None = None,
 ) -> RetrievedContext:
     """Run anchor pre-retrieval (whole-file reads of any path mentioned in the
     ticket) THEN keyword retrievers in parallel. Anchors get score 10.0 so they

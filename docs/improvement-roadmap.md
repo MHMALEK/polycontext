@@ -176,7 +176,7 @@ Pydantic AI has first-class OTel support. Wire up LangFuse via OTel for
 free traces.
 
 ### User feedback collection
-Add a thumbs-up/down on each Jira comment posted. Track which decompositions
+Add a thumbs-up/down on each response. Track which decompositions
 were useful (delivered) vs not. Use to iterate prompts / build training data.
 
 ### Prompt versioning + A/B
@@ -244,10 +244,10 @@ as follow-up turns. Closer to a conversation. Bigger product change.
 
 ## 7. Less-obvious quality wins
 
-### Read the ticket's history (Jira comments)
+### Read the task's history (ticket system comments)
 Tickets accumulate clarifying comments. Right now we only read the
 description. Pulling the comment thread often resolves ambiguities the
-description leaves open. Free, just an extra Jira API call.
+description leaves open. Free, just an extra API call.
 
 ### Cross-reference adjacent tickets
 "This ticket is one of 5 in epic X. Read the other 4 first." Costs more

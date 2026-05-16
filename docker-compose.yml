@@ -141,10 +141,6 @@ services:
       # Per-stage model selection (see core/models.py for spec syntax).
       - ENRICH_MODEL=${ENRICH_MODEL:-gemini:gemini-2.5-pro}
       - DECOMPOSE_MODEL=${DECOMPOSE_MODEL:-gemini:gemini-2.5-pro}
-      # Jira posting (optional — only needed for --post-to-jira).
-      - JIRA_BASE_URL=${JIRA_BASE_URL:-}
-      - JIRA_EMAIL=${JIRA_EMAIL:-}
-      - JIRA_API_TOKEN=${JIRA_API_TOKEN:-}
       # Outputs live in a named volume so they persist across restarts.
       - OUTPUT_DIR=/app/outputs
 

@@ -756,13 +756,6 @@ export function App() {
                 <h1 className="text-xl font-semibold">tech-decomposition</h1>
                 <p className="text-sm text-base-content/60">multi-repo code Q&amp;A</p>
               </div>
-              <button
-                type="button"
-                className="btn btn-sm btn-outline"
-                onClick={() => setView("bakeoff")}
-              >
-                Adapter bake-off →
-              </button>
             </header>
 
             {adapterListHydrated &&
@@ -809,40 +802,28 @@ export function App() {
                 className="w-full p-4 bg-transparent text-sm resize-y focus:outline-none placeholder:text-base-content/40"
               />
               <div className="flex items-center gap-3 flex-wrap px-3 py-2 border-t border-base-200">
-                <label className="flex items-center gap-1.5 text-xs text-base-content/60">
-                  <span>adapter</span>
-                  <select
-                    className="select select-bordered select-xs"
-                    value={form.adapter}
-                    onChange={(e) => setForm({ ...form, adapter: e.target.value })}
-                    title="Routes the question through POST /v1/adapters/{name}/ask."
-                  >
-                    {adapters.map((a) => (
-                      <option
-                        key={a.name}
-                        value={a.name}
-                        title={a.health.ok ? a.description : (a.health.reason ?? "unhealthy")}
-                      >
-                        {a.name}
-                        {a.health.ok ? "" : " (unhealthy)"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex items-center gap-1.5 text-xs text-base-content/60">
-                  <span>format</span>
-                  <select
-                    className="select select-bordered select-xs"
-                    value={form.format}
-                    onChange={(e) =>
-                      setForm({ ...form, format: e.target.value as OutputFormat })
-                    }
-                  >
-                    <option value="markdown">markdown</option>
-                    <option value="html">html</option>
-                    <option value="text">text</option>
-                  </select>
-                </label>
+                {adapters.length > 1 && (
+                  <label className="flex items-center gap-1.5 text-xs text-base-content/60">
+                    <span>adapter</span>
+                    <select
+                      className="select select-bordered select-xs"
+                      value={form.adapter}
+                      onChange={(e) => setForm({ ...form, adapter: e.target.value })}
+                      title="Routes the question through POST /v1/adapters/{name}/ask."
+                    >
+                      {adapters.map((a) => (
+                        <option
+                          key={a.name}
+                          value={a.name}
+                          title={a.health.ok ? a.description : (a.health.reason ?? "unhealthy")}
+                        >
+                          {a.name}
+                          {a.health.ok ? "" : " (unhealthy)"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <span className="text-[10px] text-base-content/40 hidden sm:inline">
                   ⌘+↵ to send
                 </span>

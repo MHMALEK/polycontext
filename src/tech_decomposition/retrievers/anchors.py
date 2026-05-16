@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ..config import Settings
 from ..import_index import load_or_build_index, transitive_imports
-from ..models import RepoContext, Snippet, Ticket
+from ..models import RepoContext, Snippet
 
 log = logging.getLogger(__name__)
 

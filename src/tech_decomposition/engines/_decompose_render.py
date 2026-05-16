@@ -39,13 +39,7 @@ def render_markdown(
 ) -> str:
     head_by_repo = {rc.repo: rc.head_sha for rc in ctx.repos}
     lines: list[str] = []
-    title = decomp.ticket_title or "(untitled)"
-    if decomp.ticket_key:
-        lines.append(f"# {decomp.ticket_key}: {title}")
-    else:
-        lines.append(f"# {title}")
-    if decomp.ticket_url:
-        lines.append(f"\n[Open in Jira]({decomp.ticket_url})")
+    lines.append(f"# {decomp.query}")
     lines.append("")
     lines.append(f"_Generated {decomp.generated_at.isoformat(timespec='seconds')}Z "
                  f"— enrich={decomp.enrichment_model}, decompose={decomp.decomposition_model}_")
@@ -120,9 +114,7 @@ def render_markdown(
 def write_markdown(markdown: str, decomp: Decomposition, settings: Settings) -> Path:
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    key = decomp.ticket_key or "ticket"
-    safe = "".join(ch for ch in key if ch.isalnum() or ch in "-_") or "ticket"
-    out = settings.output_dir / f"{stamp}-{safe}.md"
+    out = settings.output_dir / f"{stamp}-query.md"
     out.write_text(markdown)
     return out
 

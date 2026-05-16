@@ -87,9 +87,7 @@ class AdapterAskResult(BaseModel):
 
 
 class AdapterDecomposeInput(BaseModel):
-    ticket_key: str | None = None
-    ticket_url: str | None = None
-    ticket_text: str | None = None
+    query: str | None = None
     repos: list[str] | None = None
     # Each adapter interprets this as it wishes; adapters that don't
     # distinguish modes simply ignore the field.

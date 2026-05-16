@@ -6,7 +6,7 @@ description: |
   exploding into unrelated changes.
 
 input:
-  ticket_text: |
+  query: |
     Title: Allow accented characters in Farm Name and ReferenceID
 
     Right now the Farm Name and ReferenceID validators reject characters

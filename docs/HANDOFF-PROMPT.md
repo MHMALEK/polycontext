@@ -5,7 +5,7 @@ Copy everything between the `---` lines below into your other AI tool.
 ---
 
 You're picking up work on **tech-decomposition**, a Python service that turns
-Jira tickets into AI-friendly tech decompositions with multi-repo
+queries into AI-friendly tech decompositions with multi-repo
 context and clickable GitLab permalinks. The project lives at
 `/path/to/tech-decomposition` and runs against
 four real repos cloned at `/path/to/repos/`:
@@ -15,7 +15,7 @@ four real repos cloned at `/path/to/repos/`:
 
 The pipeline:
 ```
-Jira ticket
+Query
     │
     ▼  enrich (Gemini 2.5 Flash + Pydantic AI, temp=0, structured output)
     │  Outputs: entities, code keywords, suspected repos, confidence
@@ -45,8 +45,7 @@ Jira ticket
     ▼  contradiction-check (Flash, ~$0.001) — flags subtasks that
     │   contradict ticket criteria. Findings appended to risks section.
     │
-    ▼  attach_gitlab_links + render_markdown + write_markdown
-    │  + optionally post_comment to Jira (ADF format)
+    ▼  render_markdown + write_markdown
     │
     ▼  metrics row appended to outputs/metrics/runs.jsonl
        (latency per stage, tokens, cost, retrieval breakdown by source)
@@ -92,7 +91,7 @@ actually at 763).
 - `outputs/metrics/runs.jsonl` — one JSON row per pipeline run
 - `outputs/COMPARISON-*.md` — manual-vs-app comparisons for two tickets
 - `docs/improvement-roadmap.md` — surveyed tools and what would help most
-- `.env` — has GEMINI_API_KEY, JIRA_*, SOURCEBOT_*, Postgres password
+- `.env` — has GEMINI_API_KEY, SOURCEBOT_*, Postgres password
 
 ## What we got stuck on
 
@@ -249,11 +248,9 @@ ls -t outputs/*.md | head -1 | xargs cat
    `Citation` are the contracts. Downstream agents will eventually consume
    them via the JSON API. Don't loosen the schemas.
 4. **Never write a real API key to the repo.** `.env` is gitignored. The
-   GEMINI_API_KEY, JIRA_API_TOKEN, and SOURCEBOT_API_KEY currently in `.env`
+   GEMINI_API_KEY and SOURCEBOT_API_KEY currently in `.env`
    were pasted in chat by the user — they should be rotated, but that's the
    user's call.
-5. **Don't auto-post to Jira without `post_to_jira=True`.** It's gated for
-   a reason — accidentally commenting on real tickets is bad.
 6. **Don't fine-tune anything.** No eval set, no training data, way too early.
 
 ## Quick reference: where things live
@@ -265,7 +262,6 @@ ls -t outputs/*.md | head -1 | xargs cat
 | Config (env, defaults) | `src/tech_decomposition/config.py` |
 | Typed models | `src/tech_decomposition/models.py` |
 | Pipeline orchestration | `src/tech_decomposition/pipeline.py` |
-| Jira fetch + comment | `src/tech_decomposition/jira.py` |
 | Enrich (Flash) | `src/tech_decomposition/enrich.py` |
 | Decompose (Pro, cheap) | `src/tech_decomposition/decompose.py` |
 | Decompose (Pro, agentic) | `src/tech_decomposition/deep_decompose.py` |
@@ -273,7 +269,6 @@ ls -t outputs/*.md | head -1 | xargs cat
 | Local Q&A agent | `src/tech_decomposition/local_ask.py` |
 | Sourcebot /api/ask adapter | `src/tech_decomposition/ask.py` |
 | Markdown render + GitLab links | `src/tech_decomposition/output.py` |
-| Markdown → ADF for Jira | `src/tech_decomposition/markdown_to_adf.py` |
 | Metrics + cost | `src/tech_decomposition/metrics.py` |
 | Run summary CLI | `src/tech_decomposition/analyze.py` |
 | Per-repo import index | `src/tech_decomposition/import_index.py` |

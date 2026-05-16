@@ -18,7 +18,6 @@ _EXT_BY_FORMAT: dict[str, str] = {
     "markdown": "md",
     "html": "html",
     "text": "txt",
-    "jira_adf": "json",
 }
 
 
@@ -34,7 +33,7 @@ class FileSink:
         self,
         *,
         subdir: str = "answers",
-        format: Literal["markdown", "html", "text", "jira_adf"] = "markdown",
+        format: Literal["markdown", "html", "text"] = "markdown",
         slug_source: str = "",
     ):
         self.subdir = subdir
