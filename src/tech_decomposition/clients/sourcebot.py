@@ -149,7 +149,7 @@ async def _ask_via_chat_blocking(
     lm = body.get("languageModel") or {}
     return AskResult(
         answer=answer,
-        citations=[],  # Citations are extracted downstream by the structurer.
+        citations=[],  # Inline in the answer markdown; no structured extraction.
         metadata=AskMetadata(
             model_name=lm.get("model") or lm.get("displayName"),
             chat_id=body.get("chatId"),
@@ -210,7 +210,7 @@ async def _ask_via_mcp_ask_codebase(
     wall = round(time.monotonic() - t0, 2)
     return AskResult(
         answer=raw,
-        citations=[],  # Citations are extracted downstream by the structurer.
+        citations=[],  # Inline in the answer markdown; no structured extraction.
         metadata=AskMetadata(transport="mcp"),
         wall_seconds=wall,
     )
