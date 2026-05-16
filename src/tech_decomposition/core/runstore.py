@@ -53,6 +53,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_status  ON runs(status);
 _MIGRATIONS = (
     ("current_stage", "TEXT"),
     ("stages_done", "TEXT"),
+    ("thread_id", "TEXT"),
 )
 
 
@@ -95,6 +96,9 @@ class RunStore:
         for col, typ in _MIGRATIONS:
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {typ}")
+        self._conn.execute(
+            "UPDATE runs SET thread_id = id WHERE thread_id IS NULL OR TRIM(COALESCE(thread_id, '')) = ''"
+        )
         self._conn.commit()
 
     def close(self) -> None:
@@ -110,19 +114,25 @@ class RunStore:
         input_ref: Any,
         input_preview: str | None = None,
         output_format: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
         """Insert a placeholder ``running`` row so live progress updates and
         history polling can find this run before the pipeline finishes."""
         self._conn.execute(
             """
             INSERT OR IGNORE INTO runs
-                (id, mode, status, input_ref_json, input_preview, output_format, created_at)
-            VALUES (?, ?, 'running', ?, ?, ?, ?)
+                (id, mode, status, input_ref_json, input_preview, output_format,
+                 thread_id, created_at)
+            VALUES (?, ?, 'running', ?, ?, ?, ?, ?)
             """,
             (
-                run_id, mode,
+                run_id,
+                mode,
                 json.dumps(input_ref, default=str),
-                input_preview, output_format, _now(),
+                input_preview,
+                output_format,
+                thread_id,
+                _now(),
             ),
         )
         self._conn.commit()
@@ -162,6 +172,7 @@ class RunStore:
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         input_preview: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
         """Insert (or replace) a row for this run.
 
@@ -222,18 +233,90 @@ class RunStore:
                 (id, mode, status, engine, model, output_format, input_ref_json,
                  input_preview, answer, citations_json, payload_json,
                  total_seconds, total_cost_usd, input_tokens, output_tokens,
-                 error, created_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 thread_id, error, created_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id, mode, status, engine, model_val, output_format,
                 json.dumps(input_ref, default=str), input_preview_val,
                 answer_val, citations_json, payload_json,
                 total_seconds_val, total_cost_usd_val, input_tokens_val, output_tokens_val,
-                error, created_at or _now(), _now() if status != "running" else None,
+                thread_id, error, created_at or _now(), _now() if status != "running" else None,
             ),
         )
         self._conn.commit()
+
+    def thread_exists(self, thread_id: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM runs WHERE id = ? OR thread_id = ? LIMIT 1",
+            (thread_id, thread_id),
+        )
+        return cur.fetchone() is not None
+
+    def list_thread_completed(
+        self,
+        thread_id: str,
+        *,
+        exclude_run_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Completed ask turns in a thread, oldest first (for building transcripts)."""
+        where = ["mode = ?", "status = ?", "thread_id = ?"]
+        params: list[Any] = ["ask", "completed", thread_id]
+        if exclude_run_id:
+            where.append("id != ?")
+            params.append(exclude_run_id)
+        sql = "SELECT * FROM runs WHERE " + " AND ".join(where) + " ORDER BY created_at ASC"
+        cur = self._conn.execute(sql, params)
+        return [_row_to_dict(r) for r in cur.fetchall()]
+
+    def list_latest_per_thread(
+        self,
+        *,
+        mode: str = "ask",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """One row per conversation: the newest run in each ``thread_id`` group."""
+        cur = self._conn.execute(
+            """
+            SELECT id, mode, status, engine, model, output_format, input_ref_json,
+                   input_preview, answer, citations_json, payload_json,
+                   total_seconds, total_cost_usd, input_tokens, output_tokens,
+                   error, created_at, completed_at, current_stage, stages_done, thread_id
+            FROM (
+                SELECT *,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY COALESCE(NULLIF(TRIM(thread_id), ''), id)
+                           ORDER BY datetime(created_at) DESC
+                       ) AS _rn
+                FROM runs
+                WHERE mode = ?
+            ) x
+            WHERE x._rn = 1
+            ORDER BY datetime(x.created_at) DESC
+            LIMIT ?
+            """,
+            (mode, int(limit)),
+        )
+        return [_row_to_dict(r) for r in cur.fetchall()]
+
+    def list_by_thread(
+        self,
+        thread_id: str,
+        *,
+        mode: str = "ask",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """All runs in a thread (any status), chronological order."""
+        cur = self._conn.execute(
+            """
+            SELECT * FROM runs
+            WHERE thread_id = ? AND mode = ?
+            ORDER BY datetime(created_at) ASC
+            LIMIT ?
+            """,
+            (thread_id, mode, int(limit)),
+        )
+        return [_row_to_dict(r) for r in cur.fetchall()]
 
     # ----- reads ----------------------------------------------------------
 
@@ -249,6 +332,8 @@ class RunStore:
         status: str | None = None,
         engine_contains: str | None = None,
         since_iso: str | None = None,
+        thread_id: str | None = None,
+        order_desc: bool = True,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         where: list[str] = []
@@ -265,10 +350,14 @@ class RunStore:
         if since_iso:
             where.append("created_at >= ?")
             params.append(since_iso)
+        if thread_id:
+            where.append("thread_id = ?")
+            params.append(thread_id)
         sql = "SELECT * FROM runs"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        sql += " ORDER BY created_at " + ("DESC" if order_desc else "ASC")
+        sql += " LIMIT ?"
         params.append(int(limit))
         cur = self._conn.execute(sql, params)
         return [_row_to_dict(r) for r in cur.fetchall()]

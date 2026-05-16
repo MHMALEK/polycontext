@@ -35,7 +35,63 @@ from .adapters import (
 from .config import get_settings
 from .core.context import RunContext
 from .core.implement_runner import run_implement
-from .core.runstore import open_default_store
+from .core.runstore import RunStore, open_default_store
+
+
+def _storage_ask_ref(inp: AdapterAskInput, thread_key: str) -> dict[str, Any]:
+    d = inp.model_dump()
+    d["thread_id"] = thread_key
+    return d
+
+
+def _augmented_ask_query_for_thread(
+    store: RunStore,
+    thread_id: str,
+    exclude_run_id: str,
+    user_query: str,
+) -> str:
+    """Fold prior turns into one prompt so adapters stay single-shot."""
+    rows = store.list_thread_completed(thread_id, exclude_run_id=exclude_run_id)
+    if not rows:
+        return user_query
+    parts: list[str] = [
+        "You are continuing an existing conversation. Use the prior turns for context. "
+        "Answer only the final user message at the end.\n",
+    ]
+    for i, row in enumerate(rows, 1):
+        ref = row.get("input_ref")
+        q = ""
+        if isinstance(ref, dict) and isinstance(ref.get("query"), str):
+            q = ref["query"].strip()
+        if not q:
+            q = (row.get("input_preview") or "").strip()
+        ans = (row.get("answer") or "").strip()
+        parts.append(f"--- Turn {i} ---\nUser: {q}\nAssistant:\n{ans}\n")
+    parts.append(f"--- Current ---\nUser: {user_query.strip()}")
+    return "\n".join(parts)
+
+
+def _adapter_progress_started(store: RunStore, run_id: str, *, decompose: bool) -> None:
+    """Set runstore progress columns so /runs polling can drive the UI timeline.
+
+    Adapter calls are opaque (no per-stage hooks), so we emit coarse stages
+    that match the web client's ``input`` / ``enrich`` / ``engine`` / ``render`` keys.
+    """
+    store.update_progress(
+        run_id=run_id,
+        current_stage="engine:decompose" if decompose else "engine:structured",
+        stages_done=["input:blocking", "enrich:(none)"],
+    )
+
+
+def _adapter_progress_finishing(store: RunStore, run_id: str, *, decompose: bool) -> None:
+    """Last hop before the row is finalized — brief ``render`` state for pollers."""
+    engine_tag = "engine:decompose" if decompose else "engine:structured"
+    store.update_progress(
+        run_id=run_id,
+        current_stage="render:markdown",
+        stages_done=["input:blocking", "enrich:(none)", engine_tag],
+    )
 
 
 app = FastAPI(title="tech-decomposition", version="0.2.0")
@@ -84,6 +140,7 @@ class RunListItem(BaseModel):
     output_tokens: int | None = None
     input_preview: str | None = None
     output_format: str | None = None
+    thread_id: str | None = None
     created_at: str
     completed_at: str | None = None
     current_stage: str | None = None
@@ -105,18 +162,55 @@ def list_runs(
     engine: str | None = None,
     since: str | None = None,
     limit: int = 20,
+    per_thread: bool = False,
+    thread_id: str | None = None,
+    order: Literal["asc", "desc"] = "desc",
 ) -> list[RunListItem]:
-    """List recent runs. ``since`` is an ISO-8601 timestamp."""
+    """List recent runs. ``since`` is an ISO-8601 timestamp.
+
+    ``per_thread`` (ask mode): return only the latest row per chat thread.
+    ``thread_id``: filter to one conversation; use with ``order=asc`` for transcript order.
+    """
     settings = get_settings()
     store = open_default_store(settings)
     try:
-        rows = store.list(
-            mode=mode, status=status, engine_contains=engine,
-            since_iso=since, limit=limit,
-        )
+        if per_thread and mode in (None, "ask"):
+            rows = store.list_latest_per_thread(mode=mode or "ask", limit=limit)
+        elif thread_id is not None:
+            rows = store.list(
+                mode=mode,
+                status=status,
+                engine_contains=engine,
+                since_iso=since,
+                thread_id=thread_id,
+                order_desc=(order == "desc"),
+                limit=limit,
+            )
+        else:
+            rows = store.list(
+                mode=mode, status=status, engine_contains=engine,
+                since_iso=since, limit=limit,
+            )
     finally:
         store.close()
     return [RunListItem(**{k: v for k, v in r.items() if k in RunListItem.model_fields}) for r in rows]
+
+
+@app.get("/runs/thread/{thread_id}", response_model=list[RunDetail])
+def list_thread_runs(thread_id: str, limit: int = 100) -> list[RunDetail]:
+    """All ask turns in a thread (chronological), including answers — for chat UI."""
+    settings = get_settings()
+    store = open_default_store(settings)
+    try:
+        if not store.thread_exists(thread_id):
+            raise HTTPException(status_code=404, detail="thread not found")
+        rows = store.list_by_thread(thread_id, mode="ask", limit=limit)
+    finally:
+        store.close()
+    out: list[RunDetail] = []
+    for r in rows:
+        out.append(RunDetail(**{k: v for k, v in r.items() if k in RunDetail.model_fields}))
+    return out
 
 
 @app.get("/runs/{run_id}", response_model=RunDetail)
@@ -166,6 +260,8 @@ async def replay_run(run_id: str) -> dict[str, Any]:
         if not isinstance(ref, dict):
             raise HTTPException(status_code=400, detail="run input_ref is not an adapter ask payload")
         inp = AdapterAskInput.model_validate(ref)
+        # Re-run as a single turn so the adapter is not fed a duplicate transcript.
+        inp = inp.model_copy(update={"thread_id": None})
         resp = await adapter_ask(adapter_name, inp)
         return {"replayed_from": run_id, "new_run_id": resp["run_id"]}
     if mode == "decompose":
@@ -208,38 +304,54 @@ def list_adapters_endpoint() -> dict[str, Any]:
 @app.post("/v1/adapters/{name}/ask")
 async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
     adapter = _resolve_adapter(name)
-    store = open_default_store(get_settings())
-    ctx = RunContext(settings=get_settings(), mode="ask")
+    settings = get_settings()
+    store = open_default_store(settings)
+    ctx = RunContext(settings=settings, mode="ask")
     try:
+        thread_key = inp.thread_id or ctx.run_id
+        if inp.thread_id and not store.thread_exists(inp.thread_id):
+            raise HTTPException(status_code=404, detail="thread not found")
+
+        ref_for_store = _storage_ask_ref(inp, thread_key)
+        q_preview = inp.query[:160].strip()
+        aug_query = _augmented_ask_query_for_thread(
+            store, thread_key, ctx.run_id, inp.query,
+        )
+        adapter_inp = inp.model_copy(update={"query": aug_query})
+
         # Pre-seed a ``running`` row so the UI can find this run and poll
         # progress while the adapter is still executing.
         store.start(
             run_id=ctx.run_id, mode="ask",
-            input_ref=inp.model_dump(),
-            input_preview=inp.query[:160].strip(),
+            input_ref=ref_for_store,
+            input_preview=q_preview,
             output_format="markdown",
+            thread_id=thread_key,
         )
-        q_preview = inp.query[:160].strip()
+        _adapter_progress_started(store, ctx.run_id, decompose=False)
         try:
-            result = await adapter.ask(inp)
+            result = await adapter.ask(adapter_inp)
         except NotSupported as e:
             store.record(
                 run_id=ctx.run_id, mode="ask", status="failed",
-                input_ref=inp.model_dump(), engine=f"{name}:ask",
+                input_ref=ref_for_store, engine=f"{name}:ask",
                 error=str(e), input_preview=q_preview,
+                thread_id=thread_key,
             )
             raise HTTPException(status_code=501, detail=str(e)) from e
         except Exception as e:
             store.record(
                 run_id=ctx.run_id, mode="ask", status="failed",
-                input_ref=inp.model_dump(), engine=f"{name}:ask",
+                input_ref=ref_for_store, engine=f"{name}:ask",
                 error=f"{type(e).__name__}: {e}", input_preview=q_preview,
+                thread_id=thread_key,
             )
             raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+        _adapter_progress_finishing(store, ctx.run_id, decompose=False)
         m = result.metrics
         store.record(
             run_id=ctx.run_id, mode="ask", status="completed",
-            input_ref=inp.model_dump(), engine=f"{name}:ask",
+            input_ref=ref_for_store, engine=f"{name}:ask",
             answer=result.answer,
             citations=list(result.citations),
             model=m.model,
@@ -248,10 +360,11 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
             input_tokens=m.tokens_in,
             output_tokens=m.tokens_out,
             input_preview=q_preview,
+            thread_id=thread_key,
         )
     finally:
         store.close()
-    return {"run_id": ctx.run_id, "result": result.model_dump()}
+    return {"run_id": ctx.run_id, "thread_id": thread_key, "result": result.model_dump()}
 
 
 @app.post("/v1/adapters/{name}/decompose")
@@ -269,6 +382,7 @@ async def adapter_decompose(name: str, inp: AdapterDecomposeInput) -> dict[str, 
             input_preview=preview,
             output_format="markdown",
         )
+        _adapter_progress_started(store, ctx.run_id, decompose=True)
         try:
             result = await adapter.decompose(inp)
         except NotSupported as e:
@@ -285,6 +399,7 @@ async def adapter_decompose(name: str, inp: AdapterDecomposeInput) -> dict[str, 
                 error=f"{type(e).__name__}: {e}", input_preview=preview,
             )
             raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+        _adapter_progress_finishing(store, ctx.run_id, decompose=True)
         dm = result.metrics
         store.record(
             run_id=ctx.run_id, mode="decompose", status="completed",

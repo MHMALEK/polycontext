@@ -68,6 +68,10 @@ class AdapterMetrics(BaseModel):
 
 class AdapterAskInput(BaseModel):
     query: str = Field(min_length=1)
+    thread_id: str | None = Field(
+        default=None,
+        description="First message's run id — continue this chat. Omit to start a new thread.",
+    )
     repos: list[str] | None = None
     top_k: int = Field(default=8, ge=1, le=50)
     branch: str | None = None

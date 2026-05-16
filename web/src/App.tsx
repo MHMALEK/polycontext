@@ -2,13 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "./api";
-import type {
-  AdapterInfo,
-  AskResponse,
-  RunDetail,
-  RunListItem,
-} from "./api";
-import { Bakeoff } from "./Bakeoff";
+import type { AdapterInfo, RunDetail, RunListItem } from "./api";
 
 // ---------------------------------------------------------------------------
 // Types & utilities
@@ -44,8 +38,6 @@ type DisplayedRun = {
   output_tokens?: number | null;
   citations: Array<Record<string, unknown>>;
 };
-
-type View = "ask" | "bakeoff";
 
 const INITIAL_FORM: AskFormState = {
   question: "",
@@ -179,9 +171,27 @@ function engineAdapterLabel(engine: string | undefined | null): string | null {
   return name || null;
 }
 
+/** Canonical chat id: shared by all turns in a session (first turn's run id). */
+function threadKey(run: RunListItem | RunDetail): string {
+  const t = "thread_id" in run ? run.thread_id : null;
+  return (t && String(t).trim()) || run.id;
+}
+
 // ---------------------------------------------------------------------------
 // Small components
 // ---------------------------------------------------------------------------
+
+function RoleLabel({ role, align }: { role: string; align: "left" | "right" }) {
+  return (
+    <p
+      className={`text-[10px] font-semibold uppercase tracking-[0.16em] text-base-content/40 mb-1 ${
+        align === "right" ? "text-right pr-1" : "text-left pl-1"
+      }`}
+    >
+      {role}
+    </p>
+  );
+}
 
 function HistoryItem({
   run,
@@ -198,11 +208,11 @@ function HistoryItem({
   return (
     <button
       type="button"
-      onClick={() => onSelect(run.id)}
-      className={`group w-full text-left rounded-xl px-3 py-2.5 transition-all border outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 ${
+      onClick={() => onSelect(threadKey(run))}
+      className={`group relative w-full text-left rounded-2xl px-3 py-3 transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-primary/35 focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 ${
         selected
-          ? "bg-primary/8 border-primary/35 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
-          : "bg-base-100/40 border-base-300/60 hover:bg-base-200/80 hover:border-base-300"
+          ? "bg-base-100 shadow-md ring-1 ring-primary/25 border-l-[3px] border-l-primary"
+          : "bg-base-100/50 hover:bg-base-100 hover:shadow-sm border border-base-300/50 border-l-[3px] border-l-transparent"
       }`}
     >
       <div className="flex items-start gap-2.5">
@@ -213,17 +223,17 @@ function HistoryItem({
           aria-hidden
         />
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] leading-snug line-clamp-2 text-base-content font-medium">
+          <p className="text-[13px] leading-snug line-clamp-2 text-base-content font-medium tracking-tight">
             {historyTitle(run)}
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-base-content/50">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-base-content/45">
             <span className="tabular-nums">{formatTimeAgo(run.created_at)}</span>
             {adapter && (
               <>
                 <span aria-hidden className="text-base-content/30">
                   ·
                 </span>
-                <span className="font-mono text-[10px] uppercase tracking-wide text-base-content/45">
+                <span className="font-mono-ui text-[10px] uppercase tracking-wider text-base-content/40">
                   {adapter}
                 </span>
               </>
@@ -258,39 +268,37 @@ function HistoryItem({
 
 function ProgressTimeline({ progress }: { progress: LiveProgress }) {
   return (
-    <div className="rounded-xl border border-base-300 bg-base-100 p-5">
-      <div className="flex items-center gap-3 mb-4">
+    <div className="rounded-2xl border border-base-300/80 bg-gradient-to-br from-base-100 to-base-200/40 p-5 shadow-inner ring-1 ring-base-content/[0.04] animate-msg-enter">
+      <div className="flex items-center gap-3 mb-5">
         <span className="loading loading-spinner loading-sm text-primary" />
-        <span className="text-sm font-medium">
-          {prettyStage(progress.currentStage)}…
-        </span>
-        <span className="ml-auto text-xs text-base-content/50 font-mono tabular-nums">
+        <span className="text-sm font-medium tracking-tight">{prettyStage(progress.currentStage)}…</span>
+        <span className="ml-auto font-mono-ui text-xs text-base-content/50 tabular-nums">
           {progress.elapsed.toFixed(1)}s
         </span>
       </div>
-      <ol className="flex flex-col gap-2">
+      <ol className="flex flex-col gap-2.5">
         {PIPELINE_STAGES.map((s) => {
           const st = stageState(s.key, progress.stagesDone, progress.currentStage);
           return (
             <li key={s.key} className="flex items-center gap-3 text-sm">
               <span
-                className={`inline-flex items-center justify-center w-5 h-5 rounded-full shrink-0 text-[10px] font-bold ${
+                className={`inline-flex items-center justify-center w-6 h-6 rounded-full shrink-0 text-[11px] font-semibold transition-colors ${
                   st === "done"
-                    ? "bg-success/15 text-success"
+                    ? "bg-success/20 text-success"
                     : st === "active"
-                      ? "bg-primary/15 text-primary"
-                      : "bg-base-200 text-base-content/30"
+                      ? "bg-primary/20 text-primary shadow-sm"
+                      : "bg-base-300/50 text-base-content/25"
                 }`}
               >
-                {st === "done" ? "✓" : st === "active" ? "•" : ""}
+                {st === "done" ? "✓" : st === "active" ? "●" : ""}
               </span>
               <span
                 className={
                   st === "pending"
-                    ? "text-base-content/40"
+                    ? "text-base-content/38"
                     : st === "active"
                       ? "text-base-content font-medium"
-                      : "text-base-content/70"
+                      : "text-base-content/65"
                 }
               >
                 {s.label}
@@ -299,9 +307,8 @@ function ProgressTimeline({ progress }: { progress: LiveProgress }) {
           );
         })}
       </ol>
-      <p className="mt-4 text-xs text-base-content/50">
-        Sourcebot questions usually take 10–60s while the model searches indexed
-        repos and drafts a structured answer.
+      <p className="mt-5 text-[11px] leading-relaxed text-base-content/45 border-t border-base-300/50 pt-4">
+        Adapter calls often take 10–60s while the model searches and drafts an answer.
       </p>
     </div>
   );
@@ -310,8 +317,9 @@ function ProgressTimeline({ progress }: { progress: LiveProgress }) {
 function QuestionBubble({ text }: { text: string }) {
   if (!text) return null;
   return (
-    <div className="flex justify-end">
-      <div className="max-w-[min(100%,38rem)] rounded-2xl rounded-tr-md bg-primary text-primary-content px-4 py-3 text-sm whitespace-pre-wrap shadow-md shadow-primary/10">
+    <div className="flex flex-col items-end animate-msg-enter">
+      <RoleLabel role="You" align="right" />
+      <div className="max-w-[min(100%,40rem)] rounded-3xl rounded-tr-lg bg-gradient-to-br from-primary to-primary/90 text-primary-content px-4 py-3.5 text-[15px] leading-snug whitespace-pre-wrap shadow-lg shadow-primary/20 ring-1 ring-primary-content/10">
         {text}
       </div>
     </div>
@@ -329,12 +337,20 @@ function AnswerBody({ text }: { text: string }) {
 function Citations({ citations }: { citations: Array<Record<string, unknown>> }) {
   if (!citations.length) return null;
   return (
-    <details className="mt-6 rounded-lg border border-base-300 bg-base-100/60 group">
-      <summary className="cursor-pointer select-none px-4 py-2.5 text-sm font-medium text-base-content/80 flex items-center gap-2 hover:bg-base-200/50 rounded-lg">
-        <span className="text-base-content/60">📎</span>
-        Sources <span className="text-xs text-base-content/50">({citations.length})</span>
+    <details className="mt-6 rounded-xl border border-base-300/80 bg-base-200/25 shadow-inner ring-1 ring-base-content/[0.03] group open:bg-base-200/35">
+      <summary className="cursor-pointer select-none list-none px-4 py-3 text-sm font-medium text-base-content/85 flex items-center gap-3 hover:bg-base-200/40 rounded-xl transition-colors [&::-webkit-details-marker]:hidden">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-base-100/80 text-[11px] font-semibold tabular-nums text-base-content/55 ring-1 ring-base-300/60">
+          {citations.length}
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className="block tracking-tight">Sources</span>
+          <span className="block text-[11px] font-normal text-base-content/45 mt-0.5">
+            Citations from the indexed codebase
+          </span>
+        </span>
+        <span className="text-base-content/35 text-xs transition-transform group-open:rotate-90">›</span>
       </summary>
-      <ul className="px-4 pb-3 pt-1 flex flex-col gap-2 text-sm">
+      <ul className="px-3 pb-3 pt-0 flex flex-col gap-2.5 text-sm border-t border-base-300/50">
         {citations.map((c, i) => {
           const repo = (c.repo as string) || "";
           const path = (c.path as string) || "";
@@ -343,14 +359,17 @@ function Citations({ citations }: { citations: Array<Record<string, unknown>> })
           const snippet = (c.snippet as string) || "";
           const range = ls != null ? (le != null && le !== ls ? `:${ls}-${le}` : `:${ls}`) : "";
           return (
-            <li key={i} className="border-l-2 border-base-300 pl-3">
-              <code className="text-xs text-base-content/80">
+            <li
+              key={i}
+              className="mt-3 first:mt-3 rounded-lg border border-base-300/55 bg-base-100/70 pl-3 pr-3 py-2.5"
+            >
+              <code className="font-mono-ui text-[11px] leading-relaxed text-base-content/80 block break-all">
                 {repo ? `${repo} / ` : ""}
                 {path}
                 {range}
               </code>
               {snippet && (
-                <pre className="mt-1 whitespace-pre-wrap text-[12px] leading-snug text-base-content/70 font-mono bg-base-200/60 rounded p-2 overflow-x-auto">
+                <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-base-content/72 font-mono-ui bg-base-300/35 rounded-md px-2.5 py-2 overflow-x-auto border border-base-300/40">
                   {snippet}
                 </pre>
               )}
@@ -381,10 +400,12 @@ function MetaStrip({ run }: { run: DisplayedRun }) {
       {items.map((it) => (
         <span
           key={it.label}
-          className="inline-flex items-center gap-1 rounded-full bg-base-200/80 px-2.5 py-0.5 text-[11px] text-base-content/75 border border-base-300/50"
+          className="inline-flex items-center gap-1.5 rounded-full bg-base-200/90 px-3 py-1 text-[11px] text-base-content/80 border border-base-300/60 shadow-sm"
         >
-          <span className="text-base-content/45 font-medium">{it.label}</span>
-          <span className="font-mono tabular-nums text-[11px]">{it.value}</span>
+          <span className="text-base-content/40 font-semibold uppercase tracking-wide text-[10px]">
+            {it.label}
+          </span>
+          <span className="font-mono-ui tabular-nums text-[11px] text-base-content/90">{it.value}</span>
         </span>
       ))}
     </div>
@@ -405,30 +426,102 @@ function CopyButton({ text }: { text: string }) {
           /* clipboard blocked — silently ignore */
         }
       }}
-      className="btn btn-ghost btn-xs gap-1.5"
+      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+        copied
+          ? "border-success/35 bg-success/10 text-success"
+          : "border-base-300/70 bg-base-100/80 text-base-content/70 hover:bg-base-100 hover:border-primary/25 hover:text-base-content"
+      }`}
       title="Copy answer"
     >
-      <span>{copied ? "✓" : "📋"}</span>
+      <span className="font-mono-ui text-xs opacity-80">{copied ? "✓" : "⎘"}</span>
       <span>{copied ? "Copied" : "Copy"}</span>
     </button>
   );
 }
 
+function turnToDisplayed(turn: RunDetail): DisplayedRun {
+  return {
+    question: extractQuestion(turn),
+    answer: turn.answer ?? "",
+    engine: turn.engine,
+    model: turn.model,
+    wall_seconds: turn.total_seconds,
+    cost_usd: turn.total_cost_usd,
+    input_tokens: turn.input_tokens,
+    output_tokens: turn.output_tokens,
+    citations: (turn.citations ?? []) as Array<Record<string, unknown>>,
+  };
+}
+
+function ChatTurn({
+  turn,
+  suppressRunningAssistant,
+}: {
+  turn: RunDetail;
+  /** While the user just submitted, ProgressTimeline shows progress — hide duplicate "Thinking…". */
+  suppressRunningAssistant?: boolean;
+}) {
+  const q = extractQuestion(turn);
+  const disp = turnToDisplayed(turn);
+  return (
+    <div className="flex flex-col gap-3">
+      {q ? <QuestionBubble text={q} /> : null}
+      {turn.status === "running" && !suppressRunningAssistant && (
+        <div className="flex flex-col animate-msg-enter">
+          <RoleLabel role="Assistant" align="left" />
+          <p className="text-sm text-base-content/60 pl-1 flex items-center gap-2">
+            <span className="loading loading-dots loading-sm text-primary" />
+            Thinking…
+          </p>
+        </div>
+      )}
+      {turn.status === "failed" && (
+        <div className="rounded-2xl border border-error/30 bg-error/5 p-4 text-sm shadow-sm ring-1 ring-error/10">
+          {turn.error ? (
+            <pre className="text-xs text-error font-mono-ui whitespace-pre-wrap">{turn.error}</pre>
+          ) : (
+            <p className="text-base-content/70">This turn failed.</p>
+          )}
+        </div>
+      )}
+      {turn.status === "completed" && (turn.answer?.length ?? 0) > 0 && (
+        <div className="flex flex-col animate-msg-enter">
+          <RoleLabel role="Assistant" align="left" />
+          <article className="rounded-2xl border border-base-300/70 bg-gradient-to-b from-base-100 to-base-100/95 shadow-lg shadow-base-300/15 overflow-hidden ring-1 ring-base-content/[0.04]">
+            <div className="h-1 bg-gradient-to-r from-primary/50 via-secondary/40 to-primary/30" aria-hidden />
+            <div className="px-4 sm:px-5 pt-3.5 pb-3 flex flex-col sm:flex-row sm:items-start gap-3 sm:justify-between border-b border-base-200/80 bg-base-200/20">
+              <MetaStrip run={disp} />
+              <CopyButton text={disp.answer} />
+            </div>
+            <div className="px-4 sm:px-5 py-5">
+              <AnswerBody text={disp.answer} />
+              <Citations citations={disp.citations} />
+            </div>
+          </article>
+        </div>
+      )}
+      {turn.status === "completed" && !(turn.answer?.length ?? 0) && (
+        <p className="text-sm text-base-content/50 pl-1">No answer text for this turn.</p>
+      )}
+    </div>
+  );
+}
+
 function EmptyState({ onPick }: { onPick: (q: string) => void }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center py-12 px-4">
-      <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-2xl">
+    <div className="flex flex-col items-center justify-center text-center py-10 sm:py-14 px-4">
+      <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/15 to-secondary/10 text-xl font-display font-semibold text-primary shadow-inner ring-1 ring-primary/15">
         ◈
       </div>
-      <h2 className="font-display text-2xl sm:text-[1.65rem] font-semibold tracking-tight mb-2 text-base-content">
+      <h2 className="font-display text-2xl sm:text-[1.7rem] font-semibold tracking-tight mb-2 text-base-content">
         Ask the codebase
       </h2>
       <p className="text-sm text-base-content/55 mb-8 max-w-md leading-relaxed">
-        Questions route through your chosen adapter. You get grounded answers, citations when
-        available, and full history on the left — click any past run to reopen it.
+        Each sidebar chat is its own session: follow-ups keep prior turns in context. Open a chat to
+        continue, or start fresh below.
       </p>
-      <div className="flex flex-col gap-2 w-full max-w-lg text-left">
-        <p className="text-[10px] uppercase tracking-wider text-base-content/40 font-semibold px-1">
+      <div className="flex flex-col gap-2.5 w-full max-w-lg text-left rounded-2xl border border-base-300/70 bg-base-100/70 p-4 shadow-md ring-1 ring-base-content/[0.03] backdrop-blur-sm">
+        <p className="text-[10px] uppercase tracking-wider text-base-content/40 font-semibold px-0.5">
           Try
         </p>
         {SUGGESTED_PROMPTS.map((p) => (
@@ -436,7 +529,7 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
             key={p}
             type="button"
             onClick={() => onPick(p)}
-            className="text-left text-sm px-4 py-3 rounded-xl border border-base-300/80 bg-base-100/80 hover:bg-base-100 hover:border-primary/25 transition-colors shadow-sm"
+            className="text-left text-sm px-4 py-3.5 rounded-xl border border-base-300/60 bg-base-200/30 hover:bg-base-100 hover:border-primary/30 hover:shadow-sm transition-all duration-200"
           >
             {p}
           </button>
@@ -451,26 +544,31 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
 // ---------------------------------------------------------------------------
 
 export function App() {
-  const [view, setView] = useState<View>("ask");
   const [form, setForm] = useState<AskFormState>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
-  const [answer, setAnswer] = useState<AskResponse | null>(null);
-  const [answeredQuestion, setAnsweredQuestion] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<RunListItem[]>([]);
-  const [selectedRun, setSelectedRun] = useState<string | null>(null);
-  const [selectedDetail, setSelectedDetail] = useState<RunDetail | null>(null);
-  const [selectedLoading, setSelectedLoading] = useState(false);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [threadMessages, setThreadMessages] = useState<RunDetail[]>([]);
+  const [threadListLoading, setThreadListLoading] = useState(false);
+  const [optimisticUser, setOptimisticUser] = useState<string | null>(null);
   const [progress, setProgress] = useState<LiveProgress | null>(null);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapterListHydrated, setAdapterListHydrated] = useState(false);
   const [adapterListError, setAdapterListError] = useState<string | null>(null);
   const progressTimer = useRef<number | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  /** Invalidate stale thread / detail fetches when starting a new action. */
+  const detailFetchGen = useRef(0);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  /** Skip wiping transcript when re-opening the same thread from the sidebar. */
+  const displayedThreadRef = useRef<string | null>(null);
+  /** Count progress polls during an in-flight ask; refresh sidebar every N ticks. */
+  const historyPollDuringProgressRef = useRef(0);
 
   const loadHistory = useCallback(async () => {
     try {
-      const rows = await api.listRuns({ mode: "ask", limit: 50 });
+      const rows = await api.listRuns({ mode: "ask", limit: 50, per_thread: true });
       setHistory(rows);
     } catch (e) {
       console.warn("history fetch failed", e);
@@ -479,15 +577,11 @@ export function App() {
 
   useEffect(() => {
     loadHistory();
-    // Adapter list is fetched once at mount; status changes (e.g. starting
-    // the cline-sdk-bridge sidecar) require a refresh anyway.
     api.listAdapters()
       .then((r) => {
         setAdapterListError(null);
         const askables = r.adapters.filter((a) => a.capabilities.includes("ask"));
         setAdapters(askables);
-        // If the default adapter is missing or unhealthy, pick the first
-        // healthy one so the user doesn't land on a broken selection.
         setForm((f) => {
           const current = askables.find((a) => a.name === f.adapter);
           if (current && current.health.ok) return f;
@@ -502,12 +596,66 @@ export function App() {
       .finally(() => setAdapterListHydrated(true));
   }, [loadHistory]);
 
+  /** Auto-refresh sidebar history while the tab is visible; also refresh when returning to the tab. */
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === "visible") {
+        void loadHistory();
+      }
+    };
+    const intervalId = window.setInterval(tick, 15_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [loadHistory]);
+
   const startNew = useCallback(() => {
-    setSelectedRun(null);
-    setSelectedDetail(null);
-    setAnswer(null);
-    setAnsweredQuestion("");
+    detailFetchGen.current += 1;
+    if (progressTimer.current != null) {
+      window.clearInterval(progressTimer.current);
+      progressTimer.current = null;
+    }
+    setActiveThreadId(null);
+    setThreadMessages([]);
     setError(null);
+    setThreadListLoading(false);
+    setProgress(null);
+    setOptimisticUser(null);
+    displayedThreadRef.current = null;
+    setForm((f) => ({ ...f, question: "" }));
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      threadRef.current?.scrollTo({ top: 0 });
+    });
+  }, []);
+
+  const openThread = useCallback(async (tid: string) => {
+    const gen = ++detailFetchGen.current;
+    const prev = displayedThreadRef.current;
+    const switching = prev !== null && prev !== tid;
+    displayedThreadRef.current = tid;
+    setActiveThreadId(tid);
+    setError(null);
+    setOptimisticUser(null);
+    if (switching) {
+      setThreadMessages([]);
+    }
+    setThreadListLoading(true);
+    try {
+      const rows = await api.listThreadRuns(tid);
+      if (gen !== detailFetchGen.current) return;
+      setThreadMessages(rows);
+    } catch (err) {
+      if (gen !== detailFetchGen.current) return;
+      setError((err as Error).message);
+    } finally {
+      if (gen === detailFetchGen.current) setThreadListLoading(false);
+    }
   }, []);
 
   const pickedAdapter = useMemo(
@@ -535,16 +683,26 @@ export function App() {
 
       setSubmitting(true);
       setError(null);
-      setAnswer(null);
-      setSelectedRun(null);
-      setSelectedDetail(null);
-      setAnsweredQuestion(question);
+      detailFetchGen.current += 1;
+      const submitGen = detailFetchGen.current;
+      setThreadListLoading(false);
+      setOptimisticUser(question);
+      setForm((f) => ({ ...f, question: "" }));
 
       const startedAt = Date.now();
       const sinceIso = new Date(startedAt - 1000).toISOString();
-      setProgress({ startedAt, elapsed: 0, currentStage: null, stagesDone: [] });
-
+      setProgress({
+        startedAt,
+        elapsed: 0,
+        currentStage: "engine:structured",
+        stagesDone: ["input:blocking", "enrich:(none)"],
+      });
+      historyPollDuringProgressRef.current = 0;
       const tick = async () => {
+        historyPollDuringProgressRef.current += 1;
+        if (historyPollDuringProgressRef.current % 6 === 0) {
+          void loadHistory();
+        }
         try {
           const rows = await api.listRuns({
             mode: "ask",
@@ -572,46 +730,41 @@ export function App() {
       progressTimer.current = window.setInterval(tick, 1000);
       void tick();
 
+      let askCompleted = false;
       try {
         if (!form.adapter) {
           throw new Error("pick an adapter from the dropdown before submitting");
         }
-        // Route every question through POST /v1/adapters/{name}/ask. The
-        // adapter result is flattened into the AskResponse shape the
-        // answer view already binds to.
-        const r = await api.adapterAsk(form.adapter, { query: question });
-        const ar = r.result;
-        const res: AskResponse = {
-          engine: ar.adapter,
-          answer: ar.answer ?? "",
-          citations: (ar.citations ?? []) as Array<Record<string, unknown>>,
-          model: ar.metrics?.model ?? null,
-          transport: null,
-          wall_seconds: ar.metrics?.duration_ms != null
-            ? ar.metrics.duration_ms / 1000
-            : null,
-          input_tokens: ar.metrics?.tokens_in ?? null,
-          output_tokens: ar.metrics?.tokens_out ?? null,
-          cost_usd: ar.metrics?.cost_usd ?? null,
-          markdown_path: null,
-          run_id: r.run_id,
-        };
-        setAnswer(res);
-        setSelectedRun(res.run_id);
-        setForm((f) => ({ ...f, question: "" }));
+        const r = await api.adapterAsk(form.adapter, {
+          query: question,
+          ...(activeThreadId ? { thread_id: activeThreadId } : {}),
+        });
+        askCompleted = true;
+        if (submitGen !== detailFetchGen.current) return;
+        setActiveThreadId(r.thread_id);
+        displayedThreadRef.current = r.thread_id;
         await loadHistory();
+        const rows = await api.listThreadRuns(r.thread_id);
+        if (submitGen !== detailFetchGen.current) return;
+        setThreadMessages(rows);
       } catch (err) {
-        setError((err as Error).message);
+        if (submitGen === detailFetchGen.current) {
+          setError((err as Error).message);
+          if (!askCompleted) {
+            setForm((f) => ({ ...f, question: question }));
+          }
+        }
       } finally {
         if (progressTimer.current != null) {
           window.clearInterval(progressTimer.current);
           progressTimer.current = null;
         }
         setProgress(null);
+        setOptimisticUser(null);
         setSubmitting(false);
       }
     },
-    [form, submitting, loadHistory, adapters, adapterListHydrated],
+    [form, submitting, loadHistory, adapters, adapterListHydrated, activeThreadId],
   );
 
   useEffect(() => {
@@ -620,23 +773,6 @@ export function App() {
         window.clearInterval(progressTimer.current);
       }
     };
-  }, []);
-
-  const handleSelectRun = useCallback(async (id: string) => {
-    setSelectedRun(id);
-    setSelectedDetail(null);
-    setSelectedLoading(true);
-    setAnswer(null);
-    setAnsweredQuestion("");
-    setError(null);
-    try {
-      const detail = await api.getRun(id);
-      setSelectedDetail(detail);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSelectedLoading(false);
-    }
   }, []);
 
   const handleReplay = useCallback(
@@ -653,70 +789,29 @@ export function App() {
     [loadHistory],
   );
 
-  const displayed: DisplayedRun | null = useMemo(() => {
-    if (answer) {
-      return {
-        question: answeredQuestion,
-        answer: answer.answer,
-        engine: answer.engine,
-        model: answer.model,
-        wall_seconds: answer.wall_seconds,
-        cost_usd: answer.cost_usd,
-        input_tokens: answer.input_tokens,
-        output_tokens: answer.output_tokens,
-        citations: answer.citations ?? [],
-      };
-    }
-    if (selectedDetail && selectedDetail.answer != null) {
-      return {
-        question: extractQuestion(selectedDetail),
-        answer: selectedDetail.answer,
-        engine: selectedDetail.engine,
-        model: selectedDetail.model,
-        wall_seconds: selectedDetail.total_seconds,
-        cost_usd: selectedDetail.total_cost_usd,
-        input_tokens: selectedDetail.input_tokens,
-        output_tokens: selectedDetail.output_tokens,
-        citations: selectedDetail.citations ?? [],
-      };
-    }
-    return null;
-  }, [answer, answeredQuestion, selectedDetail]);
-
   const historyGroups = useMemo(() => groupHistoryByDay(history), [history]);
 
   useEffect(() => {
-    threadRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-  }, [selectedRun, answer?.run_id]);
-
-  if (view === "bakeoff") {
-    return (
-      <div className="min-h-screen bg-base-200 text-base-content">
-        <div className="border-b border-base-300 bg-base-100/90 backdrop-blur-md px-4 py-3 flex items-center gap-4">
-          <h1 className="font-display text-lg font-semibold tracking-tight flex-1">Bake-off</h1>
-          <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => setView("ask")}>
-            ← Ask
-          </button>
-        </div>
-        <Bakeoff />
-      </div>
-    );
-  }
+    const el = threadRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [threadMessages, submitting, optimisticUser, threadListLoading]);
 
   return (
-    <div className="min-h-screen bg-base-200 text-base-content relative">
-      <div
-        className="pointer-events-none absolute inset-0 opacity-[0.35] dark:opacity-25"
-        style={{
-          background:
-            "radial-gradient(ellipse 90% 70% at 100% -10%, oklch(var(--p) / 0.14), transparent 55%), radial-gradient(ellipse 70% 50% at -10% 110%, oklch(var(--in) / 0.1), transparent 50%)",
-        }}
-      />
-      <div className="relative grid grid-cols-1 md:grid-cols-[minmax(17rem,20rem)_1fr] h-screen min-h-0">
-        <aside className="min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-base-300 bg-base-100/85 backdrop-blur-md z-10">
-          <div className="px-4 pt-4 pb-3 border-b border-base-300/80">
-            <p className="font-display text-lg font-semibold tracking-tight leading-tight">decomp</p>
-            <p className="text-[11px] text-base-content/50 mt-0.5">Multi-repo Q&amp;A</p>
+    <div className="app-surface min-h-screen text-base-content">
+      <div className="app-grain" aria-hidden />
+      <div className="app-shell-content grid grid-cols-1 md:grid-cols-[minmax(17rem,20rem)_1fr] h-screen min-h-0">
+        <aside className="min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-base-300/90 bg-base-100/80 backdrop-blur-md">
+          <div className="px-4 pt-4 pb-3 border-b border-base-300/80 bg-base-200/15">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary/25 to-secondary/10 text-base font-display font-semibold text-primary shadow-sm ring-1 ring-primary/20">
+                ◈
+              </div>
+              <div className="min-w-0 pt-0.5">
+                <p className="font-display text-lg font-semibold tracking-tight leading-tight">decomp</p>
+                <p className="text-[11px] text-base-content/50 mt-0.5">Multi-repo Q&amp;A</p>
+              </div>
+            </div>
           </div>
           <div className="px-3 py-3 border-b border-base-300/60">
             <button
@@ -738,7 +833,7 @@ export function App() {
               onClick={loadHistory}
               className="btn btn-ghost btn-xs btn-square text-base-content/50"
               aria-label="Refresh history"
-              title="Refresh"
+              title="Refresh now (also updates every 15s while this tab is visible)"
             >
               ↻
             </button>
@@ -747,7 +842,7 @@ export function App() {
           <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-4">
             {history.length === 0 ? (
               <p className="text-xs text-base-content/50 px-2 py-6 leading-relaxed">
-                No runs yet. Use the composer below to ask your first question — it will appear here.
+                No runs yet. Ask a question in the composer — it will show up here.
               </p>
             ) : (
               <div className="flex flex-col gap-4">
@@ -761,8 +856,8 @@ export function App() {
                         <li key={r.id}>
                           <HistoryItem
                             run={r}
-                            selected={r.id === selectedRun}
-                            onSelect={handleSelectRun}
+                            selected={threadKey(r) === activeThreadId}
+                            onSelect={openThread}
                             onReplay={handleReplay}
                           />
                         </li>
@@ -773,37 +868,30 @@ export function App() {
               </div>
             )}
           </div>
-
-          <div className="shrink-0 p-3 border-t border-base-300/70">
-            <button
-              type="button"
-              className="btn btn-outline btn-sm w-full rounded-xl border-base-300"
-              onClick={() => setView("bakeoff")}
-            >
-              Adapter bake-off
-            </button>
-          </div>
         </aside>
 
-        <main className="min-h-0 flex flex-col h-full min-w-0 bg-base-200/40">
-          <header className="shrink-0 flex items-center justify-between gap-3 px-5 py-4 border-b border-base-300/70 bg-base-100/50 backdrop-blur-sm">
-            <div>
-              <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight">
-                Workspace
-              </h1>
-              <p className="text-xs text-base-content/50 mt-0.5">
-                {pickedAdapter
-                  ? `Routing questions through ${pickedAdapter.name}`
-                  : "Pick an adapter when you send"}
-              </p>
-            </div>
+        <main className="min-h-0 flex flex-col h-full min-w-0 bg-base-200/25">
+          <header className="shrink-0 border-b border-base-300/70 bg-base-100/45 backdrop-blur-md shadow-sm shadow-base-300/10 px-4 sm:px-6 py-3 sm:py-4">
+            <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight">
+              Workspace
+            </h1>
+            <p className="text-xs text-base-content/50 mt-1 leading-relaxed max-w-2xl">
+              Ask with follow-ups in one thread. History on the left keeps prior sessions.
+            </p>
+            <p className="text-[11px] text-base-content/45 mt-2 border-t border-base-300/50 pt-2">
+              {activeThreadId
+                ? "Follow-ups use this thread — prior turns are sent as context."
+                : pickedAdapter
+                  ? `Routing through ${pickedAdapter.name}.`
+                  : "Pick an adapter before sending."}
+            </p>
           </header>
 
           <div
             ref={threadRef}
             className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-6"
           >
-            <div className="max-w-3xl mx-auto flex flex-col gap-5">
+            <div className="max-w-3xl mx-auto flex flex-col gap-6">
               {adapterListHydrated && !adapterListError && adapters.length === 0 && (
                 <div className="alert alert-warning text-xs shadow-sm">
                   No adapters with <code>ask</code> capability. Check{" "}
@@ -838,68 +926,44 @@ export function App() {
                 </div>
               )}
 
-              <section className="flex flex-col gap-5">
-                {submitting && progress && (
-                  <>
-                    {answeredQuestion && <QuestionBubble text={answeredQuestion} />}
-                    <ProgressTimeline progress={progress} />
-                  </>
-                )}
-
-                {selectedLoading && !submitting && (
+              <section className="flex flex-col gap-6">
+                {threadListLoading && threadMessages.length === 0 && !submitting && (
                   <div className="rounded-2xl border border-base-300 bg-base-100/90 p-6 flex items-center gap-3 text-sm text-base-content/70 shadow-sm">
                     <span className="loading loading-spinner loading-sm text-primary" />
-                    Opening conversation…
+                    Loading chat…
                   </div>
                 )}
 
-                {!submitting && displayed && (
-                  <>
-                    {displayed.question && <QuestionBubble text={displayed.question} />}
-                    <article className="rounded-2xl border border-base-300/90 bg-base-100/95 shadow-lg shadow-base-300/20 overflow-hidden">
-                      <div className="px-4 sm:px-5 pt-4 pb-3 flex flex-col sm:flex-row sm:items-start gap-3 sm:justify-between border-b border-base-200/90">
-                        <MetaStrip run={displayed} />
-                        <CopyButton text={displayed.answer} />
-                      </div>
-                      <div className="px-4 sm:px-5 py-5">
-                        <AnswerBody text={displayed.answer} />
-                        <Citations citations={displayed.citations} />
-                      </div>
-                    </article>
-                  </>
-                )}
+                {threadMessages.map((turn) => (
+                  <ChatTurn
+                    key={turn.id}
+                    turn={turn}
+                    suppressRunningAssistant={submitting && turn.status === "running"}
+                  />
+                ))}
 
-                {!submitting && !displayed && selectedDetail && !selectedLoading && (
-                  <div className="rounded-2xl border border-base-300 bg-base-100/95 p-5 text-sm shadow-sm">
-                    <div className="flex items-center gap-2 mb-3">
-                      <span
-                        className={`inline-block w-2 h-2 rounded-full ${statusDotClass(
-                          selectedDetail.status,
-                        )}`}
-                      />
-                      <span className="text-base-content/70">
-                        {selectedDetail.status === "failed" ? "Run failed" : "No answer on file"}
-                      </span>
+                {submitting && progress && (
+                  <div className="flex flex-col gap-3">
+                    {optimisticUser &&
+                      !(
+                        threadMessages.length > 0 &&
+                        threadMessages[threadMessages.length - 1]?.status === "running" &&
+                        extractQuestion(threadMessages[threadMessages.length - 1]).trim() === optimisticUser.trim()
+                      ) && <QuestionBubble text={optimisticUser} />}
+                    <div className="flex flex-col">
+                      <RoleLabel role="Assistant" align="left" />
+                      <ProgressTimeline progress={progress} />
                     </div>
-                    {extractQuestion(selectedDetail) && (
-                      <QuestionBubble text={extractQuestion(selectedDetail)} />
-                    )}
-                    {selectedDetail.error ? (
-                      <pre className="mt-3 text-xs text-error font-mono whitespace-pre-wrap bg-error/5 rounded-xl p-3 border border-error/20">
-                        {selectedDetail.error}
-                      </pre>
-                    ) : (
-                      <p className="text-base-content/55 text-sm">
-                        This run has no saved response
-                        {selectedDetail.status === "completed" ? " (legacy run or empty reply)." : "."}
-                      </p>
-                    )}
                   </div>
                 )}
 
-                {!submitting && !displayed && !selectedDetail && !selectedLoading && (
-                  <EmptyState onPick={(q) => setForm((f) => ({ ...f, question: q }))} />
-                )}
+                {!submitting &&
+                  !threadListLoading &&
+                  threadMessages.length === 0 &&
+                  activeThreadId === null &&
+                  !optimisticUser && (
+                    <EmptyState onPick={(q) => setForm((f) => ({ ...f, question: q }))} />
+                  )}
               </section>
             </div>
           </div>
@@ -907,12 +971,13 @@ export function App() {
           <div className="shrink-0 border-t border-base-300/80 bg-base-100/90 backdrop-blur-md px-4 sm:px-6 py-4">
             <form
               onSubmit={handleSubmit}
-              className="max-w-3xl mx-auto rounded-2xl bg-base-100 border border-base-300 shadow-md focus-within:border-primary/35 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15 transition-all"
+              className="max-w-3xl mx-auto w-full rounded-2xl bg-base-100 border border-base-300 shadow-md focus-within:border-primary/35 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15 transition-all"
             >
               <textarea
+                ref={composerRef}
                 placeholder="Ask about architecture, flows, or where something lives…"
                 value={form.question}
-                onChange={(e) => setForm({ ...form, question: e.target.value })}
+                onChange={(e) => setForm((f) => ({ ...f, question: e.target.value }))}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                     e.preventDefault();
@@ -929,7 +994,7 @@ export function App() {
                     <select
                       className="select select-bordered select-xs rounded-lg"
                       value={form.adapter}
-                      onChange={(e) => setForm({ ...form, adapter: e.target.value })}
+                      onChange={(e) => setForm((f) => ({ ...f, adapter: e.target.value }))}
                       title="POST /v1/adapters/{name}/ask"
                     >
                       {adapters.map((a) => (

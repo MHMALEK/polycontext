@@ -6,22 +6,76 @@
 
 @layer base {
   html {
-    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    font-family: "Outfit", system-ui, sans-serif;
+    font-feature-settings: "ss01" on, "cv11" on;
   }
+
   .font-display {
-    font-family: "Fraunces", ui-serif, Georgia, serif;
+    font-family: "Source Serif 4", ui-serif, Georgia, serif;
+  }
+
+  .font-mono-ui {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
   }
 }
 
-/* Softer prose inside answers */
+/* Atmospheric shell (works with DaisyUI semantic colors) */
+.app-surface {
+  background-color: oklch(var(--b2) / 1);
+  background-image:
+    radial-gradient(ellipse 120% 80% at 100% 0%, oklch(var(--p) / 0.09), transparent 50%),
+    radial-gradient(ellipse 90% 60% at 0% 100%, oklch(var(--in) / 0.06), transparent 45%),
+    linear-gradient(180deg, oklch(var(--b1) / 0.4) 0%, transparent 32%);
+}
+
+@media (prefers-color-scheme: dark) {
+  .app-surface {
+    background-image:
+      radial-gradient(ellipse 100% 70% at 90% -10%, oklch(var(--p) / 0.12), transparent 52%),
+      radial-gradient(ellipse 80% 50% at -5% 100%, oklch(var(--in) / 0.08), transparent 48%),
+      linear-gradient(180deg, oklch(var(--b1) / 0.15) 0%, transparent 40%);
+  }
+}
+
+.app-grain {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  opacity: 0.035;
+  z-index: 1;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.app-shell-content {
+  position: relative;
+  z-index: 2;
+}
+
+/* Message transcript */
 .conversation-prose {
   @apply prose prose-sm sm:prose-base max-w-none;
-  @apply prose-pre:bg-base-300/50 prose-pre:text-base-content;
+  @apply prose-p:leading-relaxed prose-pre:bg-base-300/45 prose-pre:text-base-content;
   @apply prose-code:before:content-none prose-code:after:content-none;
-  @apply prose-code:bg-base-300/40 prose-code:px-1 prose-code:py-0.5 prose-code:rounded-md prose-code:text-[0.9em];
+  @apply prose-code:bg-base-300/35 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:text-[0.88em];
 }
 
 .conversation-prose :where(h1, h2, h3, h4) {
-  font-family: "Fraunces", ui-serif, Georgia, serif;
-  letter-spacing: -0.025em;
+  font-family: "Source Serif 4", ui-serif, Georgia, serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+@keyframes msg-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-msg-enter {
+  animation: msg-enter 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }

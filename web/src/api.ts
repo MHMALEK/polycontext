@@ -32,6 +32,8 @@ export interface RunListItem {
   output_tokens?: number | null;
   input_preview?: string | null;
   output_format?: string | null;
+  /** Canonical chat id (first turn's run id); may equal `id` on the first message. */
+  thread_id?: string | null;
   created_at: string;
   completed_at?: string | null;
   current_stage?: string | null;
@@ -111,6 +113,7 @@ export interface BakeoffItem {
 // Shape returned by POST /v1/adapters/{name}/{ask,decompose,implement}.
 export interface AdapterCallResponse {
   run_id: string;
+  thread_id: string;
   result: {
     adapter: string;
     answer?: string;
@@ -127,6 +130,7 @@ export interface AdapterCallResponse {
 
 export interface AdapterAskBody {
   query: string;
+  thread_id?: string;
   repos?: string[];
   top_k?: number;
 }
@@ -147,14 +151,30 @@ export const api = {
       since?: string;
       engine?: string;
       status?: string;
+      per_thread?: boolean;
+      thread_id?: string;
+      order?: "asc" | "desc";
     } = {},
   ) => {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+      if (v === undefined || v === null) continue;
+      if (typeof v === "string" && v === "") continue;
+      q.set(k, String(v));
     }
     const suffix = q.toString() ? `?${q}` : "";
     return jsonReq<RunListItem[]>(`/runs${suffix}`);
+  },
+
+  listThreadRuns: (threadId: string, params: { limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v === undefined || v === null) continue;
+      if (typeof v === "string" && v === "") continue;
+      q.set(k, String(v));
+    }
+    const suffix = q.toString() ? `?${q}` : "";
+    return jsonReq<RunDetail[]>(`/runs/thread/${encodeURIComponent(threadId)}${suffix}`);
   },
 
   getRun: (id: string) => jsonReq<RunDetail>(`/runs/${encodeURIComponent(id)}`),
