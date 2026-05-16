@@ -153,30 +153,69 @@ class RunStore:
         engine: str | None = None,
         error: str | None = None,
         created_at: str | None = None,
+        answer: str | None = None,
+        citations: list[Any] | None = None,
+        payload: dict[str, Any] | None = None,
+        model: str | None = None,
+        total_seconds: float | None = None,
+        total_cost_usd: float | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        input_preview: str | None = None,
     ) -> None:
         """Insert (or replace) a row for this run.
 
         ``engine`` may be supplied directly when there's no PipelineRun — used
         by the adapter bake-off routes which record a tag like ``cline_sdk:ask``
         without running through the legacy Pipeline class.
+
+        When ``pipeline_run`` is omitted (HTTP adapter path), pass
+        ``answer`` / metrics fields explicitly so history and GET /runs/:id
+        can replay the saved response.
         """
-        model = answer = None
-        citations_json = payload_json = None
-        total_seconds = total_cost_usd = None
-        input_tokens = output_tokens = None
-        input_preview = None
+        model_val: str | None = None
+        answer_val: str | None = None
+        citations_json: str | None = None
+        payload_json: str | None = None
+        total_seconds_val: float | None = None
+        total_cost_usd_val: float | None = None
+        input_tokens_val: int | None = None
+        output_tokens_val: int | None = None
+        input_preview_val: str | None = input_preview
+
         if pipeline_run is not None:
             er = pipeline_run.engine_result
             engine = engine or er.engine
-            model = er.model
-            answer = er.answer_markdown
+            model_val = er.model
+            answer_val = er.answer_markdown
             citations_json = json.dumps(er.citations or [])
             payload_json = json.dumps(er.payload or {})
-            total_seconds = pipeline_run.total_seconds
-            total_cost_usd = er.cost_usd
-            input_tokens = er.input_tokens
-            output_tokens = er.output_tokens
-            input_preview = (pipeline_run.loaded.title or pipeline_run.loaded.body or "")[:160].strip()
+            total_seconds_val = pipeline_run.total_seconds
+            total_cost_usd_val = er.cost_usd
+            input_tokens_val = er.input_tokens
+            output_tokens_val = er.output_tokens
+            input_preview_val = (
+                pipeline_run.loaded.title or pipeline_run.loaded.body or ""
+            )[:160].strip()
+        else:
+            model_val = model
+            answer_val = answer
+            total_seconds_val = total_seconds
+            total_cost_usd_val = total_cost_usd
+            input_tokens_val = input_tokens
+            output_tokens_val = output_tokens
+            if citations is not None:
+                serialized: list[Any] = []
+                for c in citations:
+                    if hasattr(c, "model_dump"):
+                        serialized.append(c.model_dump(mode="json"))
+                    elif isinstance(c, dict):
+                        serialized.append(c)
+                    else:
+                        serialized.append(dict(c))
+                citations_json = json.dumps(serialized, default=str)
+            if payload is not None:
+                payload_json = json.dumps(payload, default=str)
         self._conn.execute(
             """
             INSERT OR REPLACE INTO runs
@@ -187,10 +226,10 @@ class RunStore:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                run_id, mode, status, engine, model, output_format,
-                json.dumps(input_ref, default=str), input_preview,
-                answer, citations_json, payload_json,
-                total_seconds, total_cost_usd, input_tokens, output_tokens,
+                run_id, mode, status, engine, model_val, output_format,
+                json.dumps(input_ref, default=str), input_preview_val,
+                answer_val, citations_json, payload_json,
+                total_seconds_val, total_cost_usd_val, input_tokens_val, output_tokens_val,
                 error, created_at or _now(), _now() if status != "running" else None,
             ),
         )

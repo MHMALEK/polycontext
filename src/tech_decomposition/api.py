@@ -219,20 +219,36 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
             input_preview=inp.query[:160].strip(),
             output_format="markdown",
         )
+        q_preview = inp.query[:160].strip()
         try:
             result = await adapter.ask(inp)
         except NotSupported as e:
-            store.record(run_id=ctx.run_id, mode="ask", status="failed",
-                         input_ref=inp.model_dump(), engine=f"{name}:ask",
-                         error=str(e))
+            store.record(
+                run_id=ctx.run_id, mode="ask", status="failed",
+                input_ref=inp.model_dump(), engine=f"{name}:ask",
+                error=str(e), input_preview=q_preview,
+            )
             raise HTTPException(status_code=501, detail=str(e)) from e
         except Exception as e:
-            store.record(run_id=ctx.run_id, mode="ask", status="failed",
-                         input_ref=inp.model_dump(), engine=f"{name}:ask",
-                         error=f"{type(e).__name__}: {e}")
+            store.record(
+                run_id=ctx.run_id, mode="ask", status="failed",
+                input_ref=inp.model_dump(), engine=f"{name}:ask",
+                error=f"{type(e).__name__}: {e}", input_preview=q_preview,
+            )
             raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
-        store.record(run_id=ctx.run_id, mode="ask", status="completed",
-                     input_ref=inp.model_dump(), engine=f"{name}:ask")
+        m = result.metrics
+        store.record(
+            run_id=ctx.run_id, mode="ask", status="completed",
+            input_ref=inp.model_dump(), engine=f"{name}:ask",
+            answer=result.answer,
+            citations=list(result.citations),
+            model=m.model,
+            total_seconds=(m.duration_ms / 1000.0) if m.duration_ms else None,
+            total_cost_usd=m.cost_usd,
+            input_tokens=m.tokens_in,
+            output_tokens=m.tokens_out,
+            input_preview=q_preview,
+        )
     finally:
         store.close()
     return {"run_id": ctx.run_id, "result": result.model_dump()}
@@ -256,17 +272,33 @@ async def adapter_decompose(name: str, inp: AdapterDecomposeInput) -> dict[str, 
         try:
             result = await adapter.decompose(inp)
         except NotSupported as e:
-            store.record(run_id=ctx.run_id, mode="decompose", status="failed",
-                         input_ref=inp.model_dump(), engine=f"{name}:decompose",
-                         error=str(e))
+            store.record(
+                run_id=ctx.run_id, mode="decompose", status="failed",
+                input_ref=inp.model_dump(), engine=f"{name}:decompose",
+                error=str(e), input_preview=preview,
+            )
             raise HTTPException(status_code=501, detail=str(e)) from e
         except Exception as e:
-            store.record(run_id=ctx.run_id, mode="decompose", status="failed",
-                         input_ref=inp.model_dump(), engine=f"{name}:decompose",
-                         error=f"{type(e).__name__}: {e}")
+            store.record(
+                run_id=ctx.run_id, mode="decompose", status="failed",
+                input_ref=inp.model_dump(), engine=f"{name}:decompose",
+                error=f"{type(e).__name__}: {e}", input_preview=preview,
+            )
             raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
-        store.record(run_id=ctx.run_id, mode="decompose", status="completed",
-                     input_ref=inp.model_dump(), engine=f"{name}:decompose")
+        dm = result.metrics
+        store.record(
+            run_id=ctx.run_id, mode="decompose", status="completed",
+            input_ref=inp.model_dump(), engine=f"{name}:decompose",
+            answer=result.markdown or "",
+            citations=[],
+            payload=result.decomposition.model_dump(mode="json"),
+            model=dm.model,
+            total_seconds=(dm.duration_ms / 1000.0) if dm.duration_ms else None,
+            total_cost_usd=dm.cost_usd,
+            input_tokens=dm.tokens_in,
+            output_tokens=dm.tokens_out,
+            input_preview=preview,
+        )
     finally:
         store.close()
     return {"run_id": ctx.run_id, "result": result.model_dump()}
@@ -291,8 +323,35 @@ async def adapter_implement(name: str, inp: AdapterImplementInput) -> dict[str, 
                          input_ref=inp.model_dump(), engine=f"{name}:implement",
                          error=f"{type(e).__name__}: {e}")
             raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
-        store.record(run_id=ctx.run_id, mode="implement", status="completed",
-                     input_ref=inp.model_dump(), engine=f"{name}:implement")
+        imp_lines: list[str] = []
+        if result.mr_url:
+            imp_lines.append(f"**Merge request:** {result.mr_url}")
+        if result.branch:
+            imp_lines.append(f"**Branch:** `{result.branch}`")
+        if result.files_changed:
+            tail = ", ".join(f"`{f}`" for f in result.files_changed[:24])
+            imp_lines.append(f"**Files:** {tail}")
+        if result.diff_summary:
+            imp_lines.append(result.diff_summary.strip())
+        imp_body = "\n\n".join(imp_lines) if imp_lines else "_(implement completed)_"
+        im = result.metrics
+        store.record(
+            run_id=ctx.run_id, mode="implement", status="completed",
+            input_ref=inp.model_dump(), engine=f"{name}:implement",
+            answer=imp_body,
+            citations=[],
+            payload={
+                "mr_url": result.mr_url,
+                "branch": result.branch,
+                "commits": result.commits,
+                "files_changed": result.files_changed,
+            },
+            model=im.model,
+            total_seconds=(im.duration_ms / 1000.0) if im.duration_ms else None,
+            total_cost_usd=im.cost_usd,
+            input_tokens=im.tokens_in,
+            output_tokens=im.tokens_out,
+        )
     finally:
         store.close()
     return {"run_id": ctx.run_id, "result": result.model_dump()}

@@ -3,3 +3,25 @@
 @plugin "daisyui" {
   themes: light --default, dark --prefersdark;
 }
+
+@layer base {
+  html {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+  }
+  .font-display {
+    font-family: "Fraunces", ui-serif, Georgia, serif;
+  }
+}
+
+/* Softer prose inside answers */
+.conversation-prose {
+  @apply prose prose-sm sm:prose-base max-w-none;
+  @apply prose-pre:bg-base-300/50 prose-pre:text-base-content;
+  @apply prose-code:before:content-none prose-code:after:content-none;
+  @apply prose-code:bg-base-300/40 prose-code:px-1 prose-code:py-0.5 prose-code:rounded-md prose-code:text-[0.9em];
+}
+
+.conversation-prose :where(h1, h2, h3, h4) {
+  font-family: "Fraunces", ui-serif, Georgia, serif;
+  letter-spacing: -0.025em;
+}

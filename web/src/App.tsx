@@ -160,7 +160,23 @@ function extractQuestion(detail: RunDetail | null): string {
   if (!detail) return "";
   const ref = detail.input_ref;
   if (typeof ref === "string") return ref;
-  return detail.input_preview ?? "";
+  if (ref && typeof ref === "object" && "query" in ref) {
+    const q = (ref as { query: unknown }).query;
+    if (typeof q === "string" && q.trim()) return q;
+  }
+  return (detail.input_preview ?? "").trim();
+}
+
+function historyTitle(run: RunListItem): string {
+  const t = (run.input_preview ?? "").trim();
+  return t || "Untitled question";
+}
+
+function engineAdapterLabel(engine: string | undefined | null): string | null {
+  if (!engine) return null;
+  const i = engine.indexOf(":");
+  const name = i > 0 ? engine.slice(0, i) : engine;
+  return name || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,53 +194,63 @@ function HistoryItem({
   onSelect: (id: string) => void;
   onReplay: (id: string) => void;
 }) {
+  const adapter = engineAdapterLabel(run.engine);
   return (
     <button
       type="button"
       onClick={() => onSelect(run.id)}
-      className={`group w-full text-left rounded-lg px-3 py-2.5 transition-colors border ${
+      className={`group w-full text-left rounded-xl px-3 py-2.5 transition-all border outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 ${
         selected
-          ? "bg-primary/10 border-primary/30"
-          : "bg-transparent border-transparent hover:bg-base-200 hover:border-base-300"
+          ? "bg-primary/8 border-primary/35 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
+          : "bg-base-100/40 border-base-300/60 hover:bg-base-200/80 hover:border-base-300"
       }`}
     >
-      <div className="flex items-center gap-2 mb-1">
+      <div className="flex items-start gap-2.5">
         <span
-          className={`inline-block w-2 h-2 rounded-full shrink-0 ${statusDotClass(run.status)}`}
-          aria-label={run.status}
+          className={`mt-1.5 inline-block w-2 h-2 rounded-full shrink-0 ring-2 ring-base-100 ${statusDotClass(
+            run.status,
+          )}`}
+          aria-hidden
         />
-        <span className="text-[11px] uppercase tracking-wide text-base-content/50 font-medium">
-          {run.status}
-        </span>
-        <span className="ml-auto text-[11px] text-base-content/50">
-          {formatTimeAgo(run.created_at)}
-        </span>
-      </div>
-      <p className="text-sm leading-snug line-clamp-2 text-base-content/90">
-        {run.input_preview || run.id}
-      </p>
-      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-base-content/55">
-        {run.total_seconds != null && <span>{formatWall(run.total_seconds)}</span>}
-        {run.total_cost_usd != null && <span>· {formatCost(run.total_cost_usd)}</span>}
-        <span
-          role="button"
-          tabIndex={0}
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] leading-snug line-clamp-2 text-base-content font-medium">
+            {historyTitle(run)}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-base-content/50">
+            <span className="tabular-nums">{formatTimeAgo(run.created_at)}</span>
+            {adapter && (
+              <>
+                <span aria-hidden className="text-base-content/30">
+                  ·
+                </span>
+                <span className="font-mono text-[10px] uppercase tracking-wide text-base-content/45">
+                  {adapter}
+                </span>
+              </>
+            )}
+          </div>
+          {(run.total_seconds != null || run.total_cost_usd != null) && (
+            <div className="mt-1 text-[10px] text-base-content/45 tabular-nums">
+              {run.total_seconds != null && <span>{formatWall(run.total_seconds)}</span>}
+              {run.total_seconds != null && run.total_cost_usd != null && (
+                <span className="mx-1 text-base-content/30">·</span>
+              )}
+              {run.total_cost_usd != null && <span>{formatCost(run.total_cost_usd)}</span>}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             onReplay(run.id);
           }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              e.stopPropagation();
-              onReplay(run.id);
-            }
-          }}
-          className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-primary hover:underline cursor-pointer"
+          className="btn btn-ghost btn-xs btn-square shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
           title="Re-run this question"
+          aria-label="Re-run this question"
         >
-          ↻ replay
-        </span>
+          ↻
+        </button>
       </div>
     </button>
   );
@@ -285,7 +311,7 @@ function QuestionBubble({ text }: { text: string }) {
   if (!text) return null;
   return (
     <div className="flex justify-end">
-      <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-primary text-primary-content px-4 py-3 text-sm whitespace-pre-wrap shadow-sm">
+      <div className="max-w-[min(100%,38rem)] rounded-2xl rounded-tr-md bg-primary text-primary-content px-4 py-3 text-sm whitespace-pre-wrap shadow-md shadow-primary/10">
         {text}
       </div>
     </div>
@@ -294,7 +320,7 @@ function QuestionBubble({ text }: { text: string }) {
 
 function AnswerBody({ text }: { text: string }) {
   return (
-    <div className="prose prose-sm sm:prose-base max-w-none prose-pre:bg-base-200 prose-pre:text-base-content prose-code:before:content-none prose-code:after:content-none prose-code:bg-base-200 prose-code:px-1 prose-code:py-0.5 prose-code:rounded">
+    <div className="conversation-prose">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
     </div>
   );
@@ -338,24 +364,27 @@ function Citations({ citations }: { citations: Array<Record<string, unknown>> })
 
 function MetaStrip({ run }: { run: DisplayedRun }) {
   const items: Array<{ label: string; value: string }> = [];
-  if (run.engine) items.push({ label: "engine", value: run.engine });
-  if (run.model) items.push({ label: "model", value: run.model });
+  if (run.engine) items.push({ label: "Engine", value: run.engine });
+  if (run.model) items.push({ label: "Model", value: run.model });
   if (run.wall_seconds != null)
-    items.push({ label: "wall", value: formatWall(run.wall_seconds) });
-  if (run.cost_usd != null) items.push({ label: "cost", value: formatCost(run.cost_usd) });
+    items.push({ label: "Time", value: formatWall(run.wall_seconds) });
+  if (run.cost_usd != null) items.push({ label: "Cost", value: formatCost(run.cost_usd) });
   if (run.input_tokens != null || run.output_tokens != null) {
     items.push({
-      label: "tokens",
-      value: `${run.input_tokens ?? 0} in / ${run.output_tokens ?? 0} out`,
+      label: "Tokens",
+      value: `${run.input_tokens ?? 0} → ${run.output_tokens ?? 0}`,
     });
   }
   if (!items.length) return null;
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-base-content/55">
+    <div className="flex flex-wrap gap-1.5">
       {items.map((it) => (
-        <span key={it.label}>
-          <span className="text-base-content/40">{it.label}:</span>{" "}
-          <span className="font-mono text-base-content/70">{it.value}</span>
+        <span
+          key={it.label}
+          className="inline-flex items-center gap-1 rounded-full bg-base-200/80 px-2.5 py-0.5 text-[11px] text-base-content/75 border border-base-300/50"
+        >
+          <span className="text-base-content/45 font-medium">{it.label}</span>
+          <span className="font-mono tabular-nums text-[11px]">{it.value}</span>
         </span>
       ))}
     </div>
@@ -387,20 +416,27 @@ function CopyButton({ text }: { text: string }) {
 
 function EmptyState({ onPick }: { onPick: (q: string) => void }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center py-16 px-4">
-      <div className="text-5xl mb-4 opacity-70">💬</div>
-      <h2 className="text-xl font-semibold mb-2">Ask anything about the codebase</h2>
-      <p className="text-sm text-base-content/60 mb-6 max-w-md">
-        Pose a question and the agent will search the indexed repositories, read
-        the relevant code, and draft a grounded answer with sources.
+    <div className="flex flex-col items-center justify-center text-center py-12 px-4">
+      <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-2xl">
+        ◈
+      </div>
+      <h2 className="font-display text-2xl sm:text-[1.65rem] font-semibold tracking-tight mb-2 text-base-content">
+        Ask the codebase
+      </h2>
+      <p className="text-sm text-base-content/55 mb-8 max-w-md leading-relaxed">
+        Questions route through your chosen adapter. You get grounded answers, citations when
+        available, and full history on the left — click any past run to reopen it.
       </p>
-      <div className="flex flex-col gap-2 w-full max-w-md">
+      <div className="flex flex-col gap-2 w-full max-w-lg text-left">
+        <p className="text-[10px] uppercase tracking-wider text-base-content/40 font-semibold px-1">
+          Try
+        </p>
         {SUGGESTED_PROMPTS.map((p) => (
           <button
             key={p}
             type="button"
             onClick={() => onPick(p)}
-            className="text-left text-sm px-4 py-2.5 rounded-lg border border-base-300 bg-base-100 hover:bg-base-200 transition-colors"
+            className="text-left text-sm px-4 py-3 rounded-xl border border-base-300/80 bg-base-100/80 hover:bg-base-100 hover:border-primary/25 transition-colors shadow-sm"
           >
             {p}
           </button>
@@ -430,6 +466,7 @@ export function App() {
   const [adapterListHydrated, setAdapterListHydrated] = useState(false);
   const [adapterListError, setAdapterListError] = useState<string | null>(null);
   const progressTimer = useRef<number | null>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -560,6 +597,7 @@ export function App() {
           run_id: r.run_id,
         };
         setAnswer(res);
+        setSelectedRun(res.run_id);
         setForm((f) => ({ ...f, question: "" }));
         await loadHistory();
       } catch (err) {
@@ -647,16 +685,16 @@ export function App() {
 
   const historyGroups = useMemo(() => groupHistoryByDay(history), [history]);
 
+  useEffect(() => {
+    threadRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [selectedRun, answer?.run_id]);
+
   if (view === "bakeoff") {
     return (
       <div className="min-h-screen bg-base-200 text-base-content">
-        <div className="navbar bg-base-100 border-b border-base-300 px-4">
-          <h1 className="text-lg font-bold flex-1">tech-decomposition</h1>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => setView("ask")}
-          >
+        <div className="border-b border-base-300 bg-base-100/90 backdrop-blur-md px-4 py-3 flex items-center gap-4">
+          <h1 className="font-display text-lg font-semibold tracking-tight flex-1">Bake-off</h1>
+          <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={() => setView("ask")}>
             ← Ask
           </button>
         </div>
@@ -666,49 +704,59 @@ export function App() {
   }
 
   return (
-    <div className="min-h-screen bg-base-200 text-base-content">
-      <div className="grid grid-cols-1 md:grid-cols-[300px_1fr] h-screen">
-        {/* ── Sidebar ─────────────────────────────────────────────────────── */}
-        <aside className="bg-base-100 border-r border-base-300 flex flex-col overflow-hidden">
-          <div className="px-4 py-4 border-b border-base-300">
+    <div className="min-h-screen bg-base-200 text-base-content relative">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.35] dark:opacity-25"
+        style={{
+          background:
+            "radial-gradient(ellipse 90% 70% at 100% -10%, oklch(var(--p) / 0.14), transparent 55%), radial-gradient(ellipse 70% 50% at -10% 110%, oklch(var(--in) / 0.1), transparent 50%)",
+        }}
+      />
+      <div className="relative grid grid-cols-1 md:grid-cols-[minmax(17rem,20rem)_1fr] h-screen min-h-0">
+        <aside className="min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-base-300 bg-base-100/85 backdrop-blur-md z-10">
+          <div className="px-4 pt-4 pb-3 border-b border-base-300/80">
+            <p className="font-display text-lg font-semibold tracking-tight leading-tight">decomp</p>
+            <p className="text-[11px] text-base-content/50 mt-0.5">Multi-repo Q&amp;A</p>
+          </div>
+          <div className="px-3 py-3 border-b border-base-300/60">
             <button
               type="button"
               onClick={startNew}
-              className="btn btn-primary btn-sm w-full gap-2"
+              className="btn btn-primary btn-sm w-full gap-2 rounded-xl"
             >
-              <span>＋</span>
+              <span className="text-lg leading-none">+</span>
               <span>New question</span>
             </button>
           </div>
 
-          <div className="px-4 pt-4 pb-2 flex items-center justify-between">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-base-content/50">
+          <div className="px-3 pt-3 pb-1 flex items-center justify-between">
+            <h2 className="text-[10px] font-bold uppercase tracking-widest text-base-content/45">
               History
             </h2>
             <button
               type="button"
               onClick={loadHistory}
-              className="btn btn-ghost btn-xs text-base-content/60"
-              aria-label="refresh history"
+              className="btn btn-ghost btn-xs btn-square text-base-content/50"
+              aria-label="Refresh history"
               title="Refresh"
             >
               ↻
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-2 pb-4">
+          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-4">
             {history.length === 0 ? (
-              <p className="text-sm text-base-content/50 px-2 py-4">
-                No prior runs yet. Ask a question to get started.
+              <p className="text-xs text-base-content/50 px-2 py-6 leading-relaxed">
+                No runs yet. Use the composer below to ask your first question — it will appear here.
               </p>
             ) : (
               <div className="flex flex-col gap-4">
                 {historyGroups.map((g) => (
                   <div key={g.label}>
-                    <p className="text-[10px] uppercase tracking-wider text-base-content/40 px-2 mb-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-base-content/40 px-1.5 mb-1.5">
                       {g.label}
                     </p>
-                    <ul className="flex flex-col gap-0.5">
+                    <ul className="flex flex-col gap-1.5">
                       {g.items.map((r) => (
                         <li key={r.id}>
                           <HistoryItem
@@ -725,50 +773,144 @@ export function App() {
               </div>
             )}
           </div>
+
+          <div className="shrink-0 p-3 border-t border-base-300/70">
+            <button
+              type="button"
+              className="btn btn-outline btn-sm w-full rounded-xl border-base-300"
+              onClick={() => setView("bakeoff")}
+            >
+              Adapter bake-off
+            </button>
+          </div>
         </aside>
 
-        {/* ── Main ────────────────────────────────────────────────────────── */}
-        <main className="overflow-y-auto">
-          <div className="max-w-3xl mx-auto px-6 py-8">
-            <header className="mb-6 flex items-baseline justify-between gap-4">
-              <div>
-                <h1 className="text-xl font-semibold">tech-decomposition</h1>
-                <p className="text-sm text-base-content/60">multi-repo code Q&amp;A</p>
-              </div>
-            </header>
+        <main className="min-h-0 flex flex-col h-full min-w-0 bg-base-200/40">
+          <header className="shrink-0 flex items-center justify-between gap-3 px-5 py-4 border-b border-base-300/70 bg-base-100/50 backdrop-blur-sm">
+            <div>
+              <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight">
+                Workspace
+              </h1>
+              <p className="text-xs text-base-content/50 mt-0.5">
+                {pickedAdapter
+                  ? `Routing questions through ${pickedAdapter.name}`
+                  : "Pick an adapter when you send"}
+              </p>
+            </div>
+          </header>
 
-            {adapterListHydrated &&
-              !adapterListError &&
-              adapters.length === 0 && (
-                <div className="alert alert-warning mb-4 text-xs">
-                  No adapters with <code>ask</code> capability were returned. Check API configuration
-                  (e.g. <code>ENABLED_ADAPTERS</code>) or server logs.
+          <div
+            ref={threadRef}
+            className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-6"
+          >
+            <div className="max-w-3xl mx-auto flex flex-col gap-5">
+              {adapterListHydrated && !adapterListError && adapters.length === 0 && (
+                <div className="alert alert-warning text-xs shadow-sm">
+                  No adapters with <code>ask</code> capability. Check{" "}
+                  <code className="text-[10px]">ENABLED_ADAPTERS</code> and server logs.
                 </div>
               )}
 
-            {adapterListError && (
-              <div className="alert alert-warning mb-4 text-xs font-mono whitespace-pre-wrap">
-                Could not load adapter list (/v1/adapters): {adapterListError}
-              </div>
-            )}
-            {!adapterListError &&
-              adapterListHydrated &&
-              pickedAdapter &&
-              !pickedAdapter.health.ok && (
-                <div className="alert alert-warning mb-4 text-xs">
-                  Selected adapter <strong>{pickedAdapter.name}</strong> reports unhealthy —
-                  Ask stays disabled until it passes health ({pickedAdapter.health.reason ?? "reason unknown"}
-                  ).
+              {adapterListError && (
+                <div className="alert alert-warning text-xs font-mono whitespace-pre-wrap shadow-sm">
+                  Could not load /v1/adapters: {adapterListError}
                 </div>
               )}
 
-            {/* Ask form */}
+              {!adapterListError && adapterListHydrated && pickedAdapter && !pickedAdapter.health.ok && (
+                <div className="alert alert-warning text-xs shadow-sm">
+                  Adapter <strong>{pickedAdapter.name}</strong> is unhealthy —{" "}
+                  {pickedAdapter.health.reason ?? "waiting for readiness"}.
+                </div>
+              )}
+
+              {error && (
+                <div className="alert alert-error text-xs font-mono whitespace-pre-wrap shadow-lg">
+                  <div className="flex-1">{error}</div>
+                  <button
+                    type="button"
+                    onClick={() => setError(null)}
+                    className="btn btn-ghost btn-xs"
+                    aria-label="Dismiss error"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              <section className="flex flex-col gap-5">
+                {submitting && progress && (
+                  <>
+                    {answeredQuestion && <QuestionBubble text={answeredQuestion} />}
+                    <ProgressTimeline progress={progress} />
+                  </>
+                )}
+
+                {selectedLoading && !submitting && (
+                  <div className="rounded-2xl border border-base-300 bg-base-100/90 p-6 flex items-center gap-3 text-sm text-base-content/70 shadow-sm">
+                    <span className="loading loading-spinner loading-sm text-primary" />
+                    Opening conversation…
+                  </div>
+                )}
+
+                {!submitting && displayed && (
+                  <>
+                    {displayed.question && <QuestionBubble text={displayed.question} />}
+                    <article className="rounded-2xl border border-base-300/90 bg-base-100/95 shadow-lg shadow-base-300/20 overflow-hidden">
+                      <div className="px-4 sm:px-5 pt-4 pb-3 flex flex-col sm:flex-row sm:items-start gap-3 sm:justify-between border-b border-base-200/90">
+                        <MetaStrip run={displayed} />
+                        <CopyButton text={displayed.answer} />
+                      </div>
+                      <div className="px-4 sm:px-5 py-5">
+                        <AnswerBody text={displayed.answer} />
+                        <Citations citations={displayed.citations} />
+                      </div>
+                    </article>
+                  </>
+                )}
+
+                {!submitting && !displayed && selectedDetail && !selectedLoading && (
+                  <div className="rounded-2xl border border-base-300 bg-base-100/95 p-5 text-sm shadow-sm">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span
+                        className={`inline-block w-2 h-2 rounded-full ${statusDotClass(
+                          selectedDetail.status,
+                        )}`}
+                      />
+                      <span className="text-base-content/70">
+                        {selectedDetail.status === "failed" ? "Run failed" : "No answer on file"}
+                      </span>
+                    </div>
+                    {extractQuestion(selectedDetail) && (
+                      <QuestionBubble text={extractQuestion(selectedDetail)} />
+                    )}
+                    {selectedDetail.error ? (
+                      <pre className="mt-3 text-xs text-error font-mono whitespace-pre-wrap bg-error/5 rounded-xl p-3 border border-error/20">
+                        {selectedDetail.error}
+                      </pre>
+                    ) : (
+                      <p className="text-base-content/55 text-sm">
+                        This run has no saved response
+                        {selectedDetail.status === "completed" ? " (legacy run or empty reply)." : "."}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {!submitting && !displayed && !selectedDetail && !selectedLoading && (
+                  <EmptyState onPick={(q) => setForm((f) => ({ ...f, question: q }))} />
+                )}
+              </section>
+            </div>
+          </div>
+
+          <div className="shrink-0 border-t border-base-300/80 bg-base-100/90 backdrop-blur-md px-4 sm:px-6 py-4">
             <form
               onSubmit={handleSubmit}
-              className="rounded-2xl bg-base-100 border border-base-300 shadow-sm mb-6 focus-within:border-primary/40 focus-within:shadow transition-all"
+              className="max-w-3xl mx-auto rounded-2xl bg-base-100 border border-base-300 shadow-md focus-within:border-primary/35 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15 transition-all"
             >
               <textarea
-                placeholder="Ask a question about the codebase…"
+                placeholder="Ask about architecture, flows, or where something lives…"
                 value={form.question}
                 onChange={(e) => setForm({ ...form, question: e.target.value })}
                 onKeyDown={(e) => {
@@ -778,17 +920,17 @@ export function App() {
                   }
                 }}
                 rows={3}
-                className="w-full p-4 bg-transparent text-sm resize-y focus:outline-none placeholder:text-base-content/40"
+                className="w-full p-4 bg-transparent text-sm resize-y min-h-18 focus:outline-none placeholder:text-base-content/35"
               />
-              <div className="flex items-center gap-3 flex-wrap px-3 py-2 border-t border-base-200">
+              <div className="flex items-center gap-3 flex-wrap px-3 py-2.5 border-t border-base-200/90 bg-base-200/20 rounded-b-2xl">
                 {adapters.length > 1 && (
-                  <label className="flex items-center gap-1.5 text-xs text-base-content/60">
-                    <span>adapter</span>
+                  <label className="flex items-center gap-2 text-[11px] text-base-content/55 font-medium">
+                    <span>Adapter</span>
                     <select
-                      className="select select-bordered select-xs"
+                      className="select select-bordered select-xs rounded-lg"
                       value={form.adapter}
                       onChange={(e) => setForm({ ...form, adapter: e.target.value })}
-                      title="Routes the question through POST /v1/adapters/{name}/ask."
+                      title="POST /v1/adapters/{name}/ask"
                     >
                       {adapters.map((a) => (
                         <option
@@ -797,18 +939,18 @@ export function App() {
                           title={a.health.ok ? a.description : (a.health.reason ?? "unhealthy")}
                         >
                           {a.name}
-                          {a.health.ok ? "" : " (unhealthy)"}
+                          {a.health.ok ? "" : " ⚠"}
                         </option>
                       ))}
                     </select>
                   </label>
                 )}
-                <span className="text-[10px] text-base-content/40 hidden sm:inline">
-                  ⌘+↵ to send
+                <span className="text-[10px] text-base-content/40 hidden sm:inline ml-auto sm:ml-0">
+                  ⌘↵ send
                 </span>
                 <button
                   type="submit"
-                  className="btn btn-primary btn-sm ml-auto gap-2"
+                  className="btn btn-primary btn-sm rounded-xl gap-2 sm:ml-auto"
                   disabled={
                     submitting ||
                     !adapterListHydrated ||
@@ -821,85 +963,6 @@ export function App() {
                 </button>
               </div>
             </form>
-
-            {/* Error */}
-            {error && (
-              <div className="alert alert-error mb-4 text-xs font-mono whitespace-pre-wrap">
-                <div className="flex-1">{error}</div>
-                <button
-                  type="button"
-                  onClick={() => setError(null)}
-                  className="btn btn-ghost btn-xs"
-                  aria-label="dismiss"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-
-            {/* Conversation area */}
-            <section className="flex flex-col gap-4">
-              {/* While submitting a NEW question */}
-              {submitting && progress && (
-                <>
-                  {answeredQuestion && <QuestionBubble text={answeredQuestion} />}
-                  <ProgressTimeline progress={progress} />
-                </>
-              )}
-
-              {/* While loading a clicked history item */}
-              {selectedLoading && !submitting && (
-                <div className="rounded-xl border border-base-300 bg-base-100 p-5 flex items-center gap-3 text-sm text-base-content/70">
-                  <span className="loading loading-spinner loading-sm" />
-                  Loading run…
-                </div>
-              )}
-
-              {/* Displayed answer (fresh or historical) */}
-              {!submitting && displayed && (
-                <>
-                  {displayed.question && <QuestionBubble text={displayed.question} />}
-                  <article className="rounded-2xl border border-base-300 bg-base-100 shadow-sm">
-                    <div className="px-5 pt-4 pb-3 flex items-center justify-between gap-3 border-b border-base-200">
-                      <MetaStrip run={displayed} />
-                      <CopyButton text={displayed.answer} />
-                    </div>
-                    <div className="px-5 py-5">
-                      <AnswerBody text={displayed.answer} />
-                      <Citations citations={displayed.citations} />
-                    </div>
-                  </article>
-                </>
-              )}
-
-              {/* Error on selected run with no answer (e.g., failed run) */}
-              {!submitting && !displayed && selectedDetail && !selectedLoading && (
-                <div className="rounded-xl border border-base-300 bg-base-100 p-5 text-sm">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span
-                      className={`inline-block w-2 h-2 rounded-full ${statusDotClass(selectedDetail.status)}`}
-                    />
-                    <span className="text-base-content/60">
-                      Run {selectedDetail.id.slice(0, 8)} · {selectedDetail.status}
-                    </span>
-                  </div>
-                  {selectedDetail.error ? (
-                    <pre className="text-xs text-error font-mono whitespace-pre-wrap">
-                      {selectedDetail.error}
-                    </pre>
-                  ) : (
-                    <p className="text-base-content/60">
-                      No answer recorded for this run.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Empty state */}
-              {!submitting && !displayed && !selectedDetail && !selectedLoading && (
-                <EmptyState onPick={(q) => setForm((f) => ({ ...f, question: q }))} />
-              )}
-            </section>
           </div>
         </main>
       </div>
