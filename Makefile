@@ -10,7 +10,9 @@
 #                   separately (see make dev-all).
 #
 #   make dev-all   — Same as dev, plus agent-node in Docker so SDK adapters work.
-#                   One command for UI + API + Sourcebot backends + agent-node.
+#                   Defaults SOURCEBOT_URL_FOR_AGENT_NODE for the uvicorn process to
+#                   host.docker.internal:<SOURCEBOT_HOST_PORT> so Sourcebot blocking
+#                   works (localhost in POST body resolves inside agent-node).
 #
 #   make up       — Full local stack in Docker. Image is built (incl. UI
 #                   bundle baked in). Same image artifact you'd ship to prod.
@@ -107,11 +109,13 @@ dev-all: install ui-install  ## dev + agent-node (Docker): one command so adapte
 	@echo "Starting Postgres, Redis, Sourcebot, and agent-node in Docker..."
 	docker compose $(COMPOSE_ADAPTERS) up -d --build postgres redis sourcebot agent_node
 	@echo ""
-	@echo "Ensure AGENT_NODE_URL targets the published port (default http://127.0.0.1:$(AGENT_NODE_PORT))."
+	@echo "Ensure AGENT_NODE_URL matches the publish (default http://127.0.0.1:$(AGENT_NODE_PORT));"
+	@echo "SOURCEBOT_URL_FOR_AGENT_NODE defaults to http://host.docker.internal:$(SOURCEBOT_HOST_PORT) for Docker agent-node if unset."
 	@echo "FastAPI on :$(API_PORT) + Vite on :$(UI_PORT). Ctrl-C stops API + UI (Docker stack keeps running)."
 	@echo "Open http://localhost:$(UI_PORT)"
 	@echo "agent-node http://localhost:$(AGENT_NODE_PORT)"
 	@trap 'kill 0' EXIT INT TERM; \
+	export SOURCEBOT_URL_FOR_AGENT_NODE="$${SOURCEBOT_URL_FOR_AGENT_NODE:-http://host.docker.internal:$(SOURCEBOT_HOST_PORT)}"; \
 	uv run uvicorn tech_decomposition.api:app --reload --port $(API_PORT) & \
 	(cd web && npm run dev -- --port $(UI_PORT)) & \
 	wait

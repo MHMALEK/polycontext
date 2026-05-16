@@ -1,13 +1,17 @@
 /**
- * OpenAI Agents SDK — plain {@link Agent}, or {@link SandboxAgent} + local sandbox
- * when `cwd` is set (see @openai/agents-js README / SandboxAgent + UnixLocalSandboxClient).
+ * OpenAI Agents SDK — plain {@link Agent} with optional read-only workspace tools.
  */
-import path from "node:path";
-import { Agent, Runner } from "@openai/agents";
+import { Agent, Runner, tool, type Tool } from "@openai/agents";
 import { OpenAIProvider } from "@openai/agents-openai";
-import { SandboxAgent, localDir } from "@openai/agents/sandbox";
-import { UnixLocalSandboxClient } from "@openai/agents/sandbox/local";
 import type { Usage } from "@openai/agents-core";
+import { z } from "zod";
+import {
+  workspaceReadFile,
+  workspaceListDir,
+  workspaceSearchFiles,
+  workspaceGrepSearch,
+  DEFAULT_MAX_BYTES,
+} from "./workspace_tools.js";
 
 export type OpenAIAgentsRunBody = {
   systemPrompt?: string;
@@ -16,7 +20,7 @@ export type OpenAIAgentsRunBody = {
   modelId?: string;
   timeoutSec?: number;
   maxTurns?: number;
-  /** Mounts this directory as `workspace` in a local Unix sandbox (filesystem tools). */
+  /** Workspace root on the agent-node host (for read-only filesystem tools). */
   cwd?: string;
 };
 
@@ -49,6 +53,61 @@ function sumUsage(rawResponses: { usage: Usage }[]): {
   return { tokensIn, tokensOut };
 }
 
+function createWorkspaceTools(cwd: string): Tool[] {
+  return [
+    tool({
+      name: "read_file",
+      description:
+        "Read a UTF-8 text file under the workspace. Path is relative to the workspace root (e.g. traceability/src/foo.ts).",
+      parameters: z.object({
+        path: z.string().describe("File path relative to the workspace root"),
+        maxBytes: z
+          .number()
+          .int()
+          .positive()
+          .max(500_000)
+          .optional()
+          .describe(`Optional max bytes to return (default ${DEFAULT_MAX_BYTES})`),
+      }),
+      execute: async ({ path, maxBytes }) =>
+        JSON.stringify(await workspaceReadFile(cwd, path, maxBytes)),
+    }),
+    tool({
+      name: "list_directory",
+      description:
+        "List non-hidden files and folders in a directory under the workspace. Path is relative to the workspace root; use . for the root.",
+      parameters: z.object({
+        path: z.string().describe("Directory path relative to the workspace root"),
+      }),
+      execute: async ({ path }) =>
+        JSON.stringify(await workspaceListDir(cwd, path)),
+    }),
+    tool({
+      name: "search_files",
+      description: "Search for files by name pattern in the workspace.",
+      parameters: z.object({
+        pattern: z
+          .string()
+          .describe("The file name pattern to search for (e.g. 'user' or '.ts')"),
+      }),
+      execute: async ({ pattern }) =>
+        JSON.stringify(await workspaceSearchFiles(cwd, pattern)),
+    }),
+    tool({
+      name: "grep_search",
+      description:
+        "Search inside file contents for a specific string or regex pattern in the workspace.",
+      parameters: z.object({
+        query: z
+          .string()
+          .describe("The string or regex pattern to search for inside files"),
+      }),
+      execute: async ({ query }) =>
+        JSON.stringify(await workspaceGrepSearch(cwd, query)),
+    }),
+  ];
+}
+
 export async function runOpenAIAgents(body: OpenAIAgentsRunBody): Promise<{
   ok: boolean;
   answer?: string;
@@ -79,37 +138,21 @@ export async function runOpenAIAgents(body: OpenAIAgentsRunBody): Promise<{
   const baseInstructions =
     body.systemPrompt?.trim() || "You are a helpful assistant.";
   const instructions = cwd
-    ? `${baseInstructions}\n\nInspect the mounted workspace (manifest entry "workspace") to read code before answering. Cite paths relative to the workspace.`
+    ? `${baseInstructions}\n\nUse the read_file, list_directory, search_files, and grep_search tools to inspect the workspace before answering. Paths are relative to the workspace root (${cwd}). Cite paths relative to that root.`
     : baseInstructions;
 
   try {
-    const agent = cwd
-      ? new SandboxAgent({
-          name: "tech-decomposition",
-          instructions,
-          model: modelId,
-          defaultManifest: {
-            entries: {
-              workspace: localDir({ src: path.resolve(cwd) }),
-            },
-          },
-        })
-      : new Agent({
-          name: "tech-decomposition",
-          instructions,
-          model: modelId,
-        });
+    const agent = new Agent({
+      name: "tech-decomposition",
+      instructions,
+      model: modelId,
+      modelSettings: cwd ? { toolChoice: "required", parallelToolCalls: true } : {},
+      tools: cwd ? createWorkspaceTools(cwd) : [],
+    });
 
     const result = await withTimeout(
       runner.run(agent, body.prompt, {
         maxTurns,
-        ...(cwd
-          ? {
-              sandbox: {
-                client: new UnixLocalSandboxClient(),
-              },
-            }
-          : {}),
       }),
       timeoutMs
     );

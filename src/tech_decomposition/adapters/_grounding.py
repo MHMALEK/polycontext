@@ -28,6 +28,9 @@ import httpx
 from ..config import Settings
 from ..models import EnrichedQuery, Snippet
 from ..retrievers.sourcebot import SourcebotRetriever
+from ..enrichers._cheap_impl import enrich_query
+from ._repo_map import generate_repo_map
+from ._local_index import LocalSemanticIndex
 
 log = logging.getLogger(__name__)
 _RERANKER_CACHE: dict[str, object] = {}
@@ -214,6 +217,48 @@ async def retrieve_context_snippets(
         return []
 
     query = build_keyword_query(text, settings)
+    focus_terms = _focus_terms(text)
+    
+    search_query_text = text
+    if getattr(settings, "grounding_use_llm_enricher", True) and settings.gemini_api_key:
+        try:
+            res = await enrich_query(text, active_repos, settings)
+            query = res.output
+            focus_terms = query.code_keywords
+            search_query_text = " ".join(query.search_queries)
+        except Exception as e:
+            log.warning("LLM enrichment failed, falling back to heuristic: %s", e)
+
+    dedup: dict[tuple[str, str, int], Snippet] = {}
+
+    # 1. Local Semantic Search (ChromaDB + AST)
+    try:
+        local_idx = LocalSemanticIndex()
+        if local_idx.collection.count() == 0:
+            local_idx.index_repositories(settings.repos_root, active_repos)
+        
+        local_results = local_idx.search(search_query_text, n_results=max_files)
+        for r in local_results:
+            meta = r['metadata']
+            parts = meta['file'].split('/')
+            repo_name = parts[0]
+            file_path = "/".join(parts[1:]) if len(parts) > 1 else meta['file']
+            
+            s = Snippet(
+                repo=repo_name,
+                path=file_path,
+                line_start=meta['start_line'] + 1,
+                line_end=meta['end_line'] + 1,
+                content=r['content'],
+                score=0.9, # Base high score for semantic match
+                source="local_chromadb"
+            )
+            key = (s.repo, s.path, s.line_start)
+            dedup[key] = s
+    except Exception as e:
+        log.warning("Local semantic index search failed: %s", e)
+
+    # 2. Sourcebot Search (if available)
     sourcebot = SourcebotRetriever(settings)
     require_sourcebot = bool(getattr(settings, "grounding_require_sourcebot", False))
     if require_sourcebot:
@@ -222,39 +267,57 @@ async def retrieve_context_snippets(
                 "grounding_require_sourcebot=true but SOURCEBOT_URL/API_KEY is not configured"
             )
         await _assert_sourcebot_available(settings, active_repos)
-    if not sourcebot.enabled:
-        return []
+    
+    if sourcebot.enabled:
+        async def _try(repo: str):
+            try:
+                return await sourcebot.retrieve(repo, query)
+            except Exception as e:  # noqa: BLE001 — best-effort
+                log.warning("sourcebot failed on %s: %s", repo, e)
+                return None
 
-    async def _try(repo: str):
-        try:
-            return await sourcebot.retrieve(repo, query)
-        except Exception as e:  # noqa: BLE001 — best-effort
-            log.warning("sourcebot failed on %s: %s", repo, e)
-            return None
+        results = await asyncio.gather(*[_try(repo) for repo in active_repos])
 
-    results = await asyncio.gather(*[_try(repo) for repo in active_repos])
-
-    dedup: dict[tuple[str, str, int], Snippet] = {}
-    for ctx in results:
-        if not ctx or not ctx.snippets:
-            continue
-        for s in ctx.snippets:
-            abs_path = (settings.repo_path(s.repo) / s.path).resolve()
-            if not abs_path.exists():
+        for ctx in results:
+            if not ctx or not ctx.snippets:
                 continue
-            if _is_noise_path(s.path):
-                continue
-            score = s.score + _path_quality_bonus(s.path)
-            key = (s.repo, s.path, s.line_start)
-            cand = s.model_copy(update={"score": score, "source": "sourcebot"})
-            if key not in dedup or cand.score > dedup[key].score:
-                dedup[key] = cand
+            for s in ctx.snippets:
+                abs_path = (settings.repo_path(s.repo) / s.path).resolve()
+                if not abs_path.exists():
+                    continue
+                if _is_noise_path(s.path):
+                    continue
+                score = s.score + _path_quality_bonus(s.path) + _focus_match_bonus(s, focus_terms)
+                key = (s.repo, s.path, s.line_start)
+                cand = s.model_copy(update={"score": score, "source": "sourcebot"})
+                
+                # Expand context directly from the local disk if available
+                try:
+                    disk_lines = abs_path.read_text(encoding="utf-8").splitlines()
+                    # Expand by 5 lines in both directions for better context
+                    exp_start = max(0, cand.line_start - 6)
+                    exp_end = min(len(disk_lines), cand.line_end + 5)
+                    cand = cand.model_copy(update={
+                        "content": "\n".join(disk_lines[exp_start:exp_end]),
+                        "line_start": exp_start + 1,
+                        "line_end": exp_end,
+                    })
+                except Exception:
+                    pass # fallback to raw sourcebot chunk if disk read fails
+
+                if key not in dedup or cand.score > dedup[key].score:
+                    dedup[key] = cand
 
     if not dedup:
         return []
 
     ranked = sorted(dedup.values(), key=lambda s: (-s.score, s.repo, s.path, s.line_start))
-    return ranked[:max_files]
+    
+    # Rerank a slightly wider pool of candidates using the cross-encoder (if configured)
+    candidates_for_reranking = ranked[:max_files * 2]
+    reranked = _rerank_snippets(text, candidates_for_reranking, settings)
+    
+    return reranked[:max_files]
 
 
 async def _assert_sourcebot_available(settings: Settings, repos: list[str]) -> None:
@@ -346,6 +409,8 @@ def _rerank_snippets(text: str, snippets: list[Snippet], settings: Settings) -> 
     return reranked
 
 
+
+
 def format_grounding_block(paths: Iterable[Path] | Iterable[Snippet], repos_root: Path) -> str:
     """Render a compact "look here first" preamble to inject into prompts.
 
@@ -359,15 +424,19 @@ def format_grounding_block(paths: Iterable[Path] | Iterable[Snippet], repos_root
     # Support both legacy input (Path list) and richer input (Snippet list).
     if isinstance(items[0], Snippet):
         snippets: list[Snippet] = items  # type: ignore[assignment]
+        active_repos = list(set(s.repo for s in snippets))
+        repo_map = generate_repo_map(repos_root, active_repos)
+        
         lines = [
+            f"{repo_map}\n",
             "Grounded context retrieved across configured repos (use this evidence first):",
         ]
         for s in snippets:
             loc = f"{s.repo}/{s.path}:L{s.line_start}-L{s.line_end}"
-            excerpt = " ".join(s.content.strip().split())
-            if len(excerpt) > 180:
-                excerpt = excerpt[:177] + "..."
-            lines.append(f"- {loc} [{s.source}] {excerpt}")
+            excerpt = s.content.strip()
+            if len(excerpt) > 2000:
+                excerpt = excerpt[:1997] + "..."
+            lines.append(f"- {loc} [{s.source}]\n```\n{excerpt}\n```")
         lines.append(
             "If evidence is insufficient, say what is missing instead of speculating."
         )

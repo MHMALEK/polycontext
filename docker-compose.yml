@@ -121,6 +121,11 @@ services:
       - CURSOR_SDK_MODEL=${CURSOR_SDK_MODEL:-composer-2}
       # Talk to the Sourcebot container by service name on the docker network.
       - SOURCEBOT_URL=http://sourcebot:3000
+      # Optional: base URL for Sourcebot as seen by agent-node when it calls /api/chat/blocking.
+      # Leave unset so the API falls back to SOURCEBOT_URL (correct when agent-node is also on
+      # the docker network — see compose.adapters.yaml). If agent-node runs on the host only,
+      # set in .env: SOURCEBOT_URL_FOR_AGENT_NODE=http://127.0.0.1:${SOURCEBOT_HOST_PORT}
+      - SOURCEBOT_URL_FOR_AGENT_NODE=${SOURCEBOT_URL_FOR_AGENT_NODE:-}
       - SOURCEBOT_API_KEY=${SOURCEBOT_API_KEY:-}
       - SOURCEBOT_TIMEOUT_SECONDS=${SOURCEBOT_TIMEOUT_SECONDS:-300}
       # Optional: scope ask flows to specific GitLab project paths.
@@ -134,7 +139,7 @@ services:
       - CUSTOM_LLM_BASE_URL=${CUSTOM_LLM_BASE_URL:-}
       - CUSTOM_LLM_API_KEY=${CUSTOM_LLM_API_KEY:-}
       # Per-stage model selection (see core/models.py for spec syntax).
-      - ENRICH_MODEL=${ENRICH_MODEL:-gemini:gemini-2.5-flash}
+      - ENRICH_MODEL=${ENRICH_MODEL:-gemini:gemini-2.5-pro}
       - DECOMPOSE_MODEL=${DECOMPOSE_MODEL:-gemini:gemini-2.5-pro}
       # Jira posting (optional — only needed for --post-to-jira).
       - JIRA_BASE_URL=${JIRA_BASE_URL:-}

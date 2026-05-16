@@ -39,6 +39,11 @@ class Settings(BaseSettings):
 
     sourcebot_url: str = ""
     sourcebot_api_key: str = ""
+    # Base URL for Sourcebot as seen by agent-node when it proxies ``/api/chat/blocking``.
+    # Empty ⇒ use ``sourcebot_url``. Set ``http://127.0.0.1:<port>`` only when FastAPI runs in
+    # Docker and agent-node runs on the host. When both services use compose.adapters.yaml,
+    # Compose sets ``http://sourcebot:3000``.
+    sourcebot_url_for_agent_node: str = ""
     # Used for Sourcebot HTTP (search + agent-node `/adapters/sourcebot/ask` → blocking chat).
     # Low values produce fast 502 timeouts from agent-node during long reasoning turns.
     sourcebot_timeout_seconds: float = 300.0
@@ -53,7 +58,7 @@ class Settings(BaseSettings):
     serena_timeout_seconds: float = 20.0
     serena_max_results_per_query: int = 10
 
-    enrich_model: str = "gemini-2.5-flash"
+    enrich_model: str = "gemini-2.5-pro"
     decompose_model: str = "gemini-2.5-pro"
 
     retrieval_max_hits: int = 40
@@ -88,7 +93,7 @@ class Settings(BaseSettings):
     claude_code_model: str = "claude-sonnet-4-5"
 
     # Gemini via agent-node (`@google/genai` — https://googleapis.github.io/js-genai/).
-    gemini_sdk_model: str = "gemini-2.5-flash"
+    gemini_sdk_model: str = "gemini-2.5-pro"
     # If empty, decompose uses ``decompose_model``.
     gemini_sdk_decompose_model: str = ""
     gemini_sdk_timeout_seconds: float = 600.0

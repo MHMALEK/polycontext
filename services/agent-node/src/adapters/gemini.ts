@@ -17,6 +17,8 @@ import {
 import {
   workspaceReadFile,
   workspaceListDir,
+  workspaceSearchFiles,
+  workspaceGrepSearch,
   DEFAULT_MAX_BYTES,
 } from "./workspace_tools.js";
 
@@ -31,21 +33,6 @@ export type GeminiRunBody = {
   maxToolRounds?: number;
 };
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
-    promise.then(
-      (v) => {
-        clearTimeout(t);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(t);
-        reject(e);
-      }
-    );
-  });
-}
 
 const FILE_TOOLS: Tool = {
   functionDeclarations: [
@@ -83,6 +70,34 @@ const FILE_TOOLS: Tool = {
         required: ["path"],
       },
     },
+    {
+      name: "search_files",
+      description: "Search for files by name pattern in the workspace.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          pattern: {
+            type: Type.STRING,
+            description: "The name pattern to search for (e.g. 'user' or '.ts')",
+          },
+        },
+        required: ["pattern"],
+      },
+    },
+    {
+      name: "grep_search",
+      description: "Search inside file contents for a specific string or regex pattern in the workspace.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          query: {
+            type: Type.STRING,
+            description: "The string or regex pattern to search for inside files",
+          },
+        },
+        required: ["query"],
+      },
+    },
   ],
 };
 
@@ -101,6 +116,12 @@ async function executeToolCall(
   }
   if (name === "list_directory") {
     return workspaceListDir(cwd, String(args.path ?? "."));
+  }
+  if (name === "search_files") {
+    return workspaceSearchFiles(cwd, String(args.pattern ?? ""));
+  }
+  if (name === "grep_search") {
+    return workspaceGrepSearch(cwd, String(args.query ?? ""));
   }
   return { error: `unknown tool: ${name}` };
 }
@@ -156,46 +177,67 @@ export async function runGemini(body: GeminiRunBody): Promise<{
     return { ok: false, error: "apiKey required" };
   }
   const modelId =
-    body.modelId || process.env.GEMINI_SDK_MODEL || "gemini-2.5-flash";
+    body.modelId || process.env.GEMINI_SDK_MODEL || "gemini-2.5-pro";
   const timeoutMs = (body.timeoutSec ?? 600) * 1000;
   const cwd = (body.cwd || "").trim();
 
   if (!cwd) {
-    return runGeminiPlain({
-      apiKey,
-      modelId,
-      timeoutMs,
-      started,
-      prompt: body.prompt,
-      systemPrompt: body.systemPrompt,
-    });
+    const ai = new GoogleGenAI({ apiKey });
+    try {
+      const response = await ai.models.generateContent({
+        model: modelId,
+        contents: body.prompt,
+        config: {
+          ...(body.systemPrompt?.trim()
+            ? { systemInstruction: body.systemPrompt }
+            : {}),
+          httpOptions: { timeout: timeoutMs },
+        },
+      });
+      const usage = response.usageMetadata;
+      return {
+        ok: true,
+        answer: response.text ?? "",
+        model: modelId,
+        durationMs: Date.now() - started,
+        tokensIn: usage?.promptTokenCount,
+        tokensOut: usage?.candidatesTokenCount,
+        toolCalls: 0,
+      };
+    } catch (err) {
+      const e = err as Error;
+      return {
+        ok: false,
+        error: `${e?.name || "Error"}: ${e?.message || String(e)}`,
+        model: modelId,
+        durationMs: Date.now() - started,
+      };
+    }
   }
 
   const maxRemoteCalls = Math.min(32, Math.max(1, body.maxToolRounds ?? 24));
   const ai = new GoogleGenAI({ apiKey });
   const callable = new WorkspaceFsCallableTool(cwd);
 
-  const promptText = `${body.prompt}\n\n[Workspace root on server: ${cwd}. Use read_file and list_directory to inspect code.]`;
+  const promptText = `${body.prompt}\n\n[Workspace root on server: ${cwd}. Use read_file, list_directory, search_files, and grep_search to inspect code.]`;
 
   try {
-    const response = await withTimeout(
-      ai.models.generateContent({
-        model: modelId,
-        contents: promptText,
-        config: {
-          systemInstruction: body.systemPrompt?.trim(),
-          tools: [callable],
-          toolConfig: {
-            functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
-          },
-          automaticFunctionCalling: {
-            disable: false,
-            maximumRemoteCalls: maxRemoteCalls,
-          },
+    const response = await ai.models.generateContent({
+      model: modelId,
+      contents: promptText,
+      config: {
+        systemInstruction: body.systemPrompt?.trim(),
+        tools: [callable],
+        toolConfig: {
+          functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
         },
-      }),
-      timeoutMs
-    );
+        automaticFunctionCalling: {
+          disable: false,
+          maximumRemoteCalls: maxRemoteCalls,
+        },
+        httpOptions: { timeout: timeoutMs },
+      },
+    });
 
     const um = response.usageMetadata;
     const toolCalls = countFunctionResponsesInHistory(
@@ -218,58 +260,6 @@ export async function runGemini(body: GeminiRunBody): Promise<{
       error: `${e?.name || "Error"}: ${e?.message || String(e)}`,
       model: modelId,
       durationMs: Date.now() - started,
-    };
-  }
-}
-
-async function runGeminiPlain(args: {
-  apiKey: string;
-  prompt: string;
-  systemPrompt?: string;
-  modelId: string;
-  timeoutMs: number;
-  started: number;
-}): Promise<{
-  ok: boolean;
-  answer?: string;
-  error?: string;
-  model?: string;
-  durationMs?: number;
-  tokensIn?: number;
-  tokensOut?: number;
-  toolCalls?: number;
-}> {
-  const ai = new GoogleGenAI({ apiKey: args.apiKey });
-  try {
-    const response = await withTimeout(
-      ai.models.generateContent({
-        model: args.modelId,
-        contents: args.prompt,
-        config: {
-          ...(args.systemPrompt?.trim()
-            ? { systemInstruction: args.systemPrompt }
-            : {}),
-        },
-      }),
-      args.timeoutMs
-    );
-    const usage = response.usageMetadata;
-    return {
-      ok: true,
-      answer: response.text ?? "",
-      model: args.modelId,
-      durationMs: Date.now() - args.started,
-      tokensIn: usage?.promptTokenCount,
-      tokensOut: usage?.candidatesTokenCount,
-      toolCalls: 0,
-    };
-  } catch (err) {
-    const e = err as Error;
-    return {
-      ok: false,
-      error: `${e?.name || "Error"}: ${e?.message || String(e)}`,
-      model: args.modelId,
-      durationMs: Date.now() - args.started,
     };
   }
 }

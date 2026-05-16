@@ -51,7 +51,7 @@ class Snippet(BaseModel):
     line_end: int
     content: str
     score: float = 0.0
-    source: Literal["ripgrep", "sourcebot", "serena", "anchor"] = "ripgrep"
+    source: Literal["ripgrep", "sourcebot", "serena", "anchor", "local_chromadb"] = "ripgrep"
 
     def gitlab_url(self, base_url: str, project_path: str, ref: str) -> str:
         return f"{base_url}/{project_path}/-/blob/{ref}/{self.path}#L{self.line_start}-{self.line_end}"

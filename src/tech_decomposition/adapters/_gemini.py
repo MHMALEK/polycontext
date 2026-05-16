@@ -29,7 +29,7 @@ from .base import (
 
 _ASK_SYSTEM = (
     "You are a code Q&A assistant with read-only access to local repositories. "
-    "Use the read_file and list_directory tools to inspect real files before making "
+    "Use the search_files, grep_search, read_file, and list_directory tools to inspect real files before making "
     "claims. Paths are relative to the workspace root (often REPOS_ROOT with one folder "
     "per repo). Cite paths with line ranges. Return only the final answer; no progress narration."
 )
@@ -84,7 +84,7 @@ class GeminiAdapter(Adapter):
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         pipeline = AskPipeline(
             self.settings,
-            grounded=False,
+            grounded=True,
             preamble=ASK_PREAMBLE,
             policy=self._ask_policy(),
         )

@@ -1,5 +1,7 @@
 /** Sourcebot Q&A — POST /api/chat/blocking only (no MCP fallback in agent-node). */
 
+import fs from "node:fs";
+
 export type SourcebotAskBody = {
   sourcebotUrl: string;
   sourcebotApiKey: string;
@@ -13,6 +15,45 @@ function xKey(apiKey: string): string {
   return apiKey.startsWith("sourcebot-") ? apiKey : `sourcebot-${apiKey}`;
 }
 
+/**
+ * Python often sends SOURCEBOT_URL like http://localhost:13000.
+ * Inside Docker, localhost is THIS container — use the host gateway so the published Sourcebot port is reachable.
+ * Host-only agent-node (no /.dockerenv) passes URLs through unchanged.
+ * Opt out with SOURCEBOT_SKIP_LOCALHOST_BRIDGE=1.
+ */
+export function coerceSourcebotBaseForFetch(raw: string): string {
+  const base = raw.trim().replace(/\/+$/, "");
+  if (
+    process.env.SOURCEBOT_SKIP_LOCALHOST_BRIDGE === "1" ||
+    process.env.SOURCEBOT_SKIP_LOCALHOST_BRIDGE === "true"
+  ) {
+    return base;
+  }
+  try {
+    if (!fs.existsSync("/.dockerenv")) return base;
+  } catch {
+    return base;
+  }
+  try {
+    const withProto = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(base)
+      ? base
+      : `http://${base}`;
+    const u = new URL(withProto);
+    const h = u.hostname.toLowerCase();
+    if (h !== "localhost" && h !== "127.0.0.1") return base;
+    const gw = (
+      process.env.HOST_GATEWAY_HOST ||
+      process.env.SOURCEBOT_HOST_GATEWAY ||
+      "host.docker.internal"
+    ).trim();
+    if (!gw) return base;
+    u.hostname = gw;
+    return u.toString().replace(/\/+$/, "");
+  } catch {
+    return base;
+  }
+}
+
 export async function askSourcebotBlocking(body: SourcebotAskBody): Promise<{
   ok: boolean;
   answer?: string;
@@ -22,7 +63,7 @@ export async function askSourcebotBlocking(body: SourcebotAskBody): Promise<{
   chatUrl?: string;
   wallSeconds?: number;
 }> {
-  const base = body.sourcebotUrl.replace(/\/+$/, "");
+  const base = coerceSourcebotBaseForFetch(body.sourcebotUrl);
   const url = `${base}/api/chat/blocking`;
   const headers: Record<string, string> = {
     "X-Sourcebot-Api-Key": xKey(body.sourcebotApiKey),
@@ -74,10 +115,15 @@ export async function askSourcebotBlocking(body: SourcebotAskBody): Promise<{
     };
   } catch (e) {
     clearTimeout(timer);
-    const err = e as Error;
+    const err = e as Error & { cause?: Error };
     if (err.name === "AbortError") {
       return { ok: false, error: `Sourcebot request timed out after ${body.timeoutSec ?? 300}s` };
     }
-    return { ok: false, error: err?.message || String(e) };
+    const cause = err.cause;
+    const tail =
+      cause && typeof cause === "object" && "message" in cause
+        ? ` (${String((cause as Error).message)})`
+        : "";
+    return { ok: false, error: `${err?.message || String(e)}${tail}` };
   }
 }

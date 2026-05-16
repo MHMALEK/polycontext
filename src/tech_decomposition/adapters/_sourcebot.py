@@ -43,8 +43,9 @@ class SourcebotAdapter(Adapter):
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         t0 = time.monotonic()
         repos = effective_sourcebot_repos_for_ask(self.settings, inp.repos)
+        sb_base = (self.settings.sourcebot_url_for_agent_node or "").strip() or self.settings.sourcebot_url
         body: dict = {
-            "sourcebotUrl": self.settings.sourcebot_url,
+            "sourcebotUrl": sb_base,
             "sourcebotApiKey": self.settings.sourcebot_api_key,
             "question": inp.query,
             "timeoutSec": int(self.settings.sourcebot_timeout_seconds),

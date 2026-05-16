@@ -29,7 +29,7 @@ from .base import (
 
 _ASK_SYSTEM = (
     "You are a code Q&A assistant with read-only access to local repositories via "
-    "read_file and list_directory tools. Inspect real files before making claims. "
+    "read_file, list_directory, search_files, and grep_search tools. Inspect real files before making claims. "
     "Paths are relative to the workspace root (often REPOS_ROOT with one folder per repo). "
     "Cite paths with line ranges. Return only the final answer; no progress narration."
 )
@@ -47,7 +47,7 @@ class OpenAIAgentsAdapter(Adapter):
     name = "openai_agents"
     capabilities: set[Capability] = {"ask", "decompose", "implement"}
     description = (
-        "OpenAI Agents SDK via agent-node: SandboxAgent + UnixLocalSandboxClient when cwd is set; "
+        "OpenAI Agents SDK via agent-node: Agent + read-only workspace tools when cwd is set; "
         "plain Agent otherwise."
     )
 
@@ -84,7 +84,7 @@ class OpenAIAgentsAdapter(Adapter):
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         pipeline = AskPipeline(
             self.settings,
-            grounded=False,
+            grounded=True,
             preamble=ASK_PREAMBLE,
             policy=self._ask_policy(),
         )

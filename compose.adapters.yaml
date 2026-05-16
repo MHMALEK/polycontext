@@ -13,6 +13,8 @@ services:
     environment:
       # Reach in-stack agent-node; 127.0.0.1 and host.docker.local would miss it.
       AGENT_NODE_URL: http://agent_node:13100
+      # agent-node container must not use 127.0.0.1:hostPort — use docker DNS to Sourcebot.
+      SOURCEBOT_URL_FOR_AGENT_NODE: http://sourcebot:3000
 
   agent_node:
     build:
@@ -28,10 +30,11 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       CLAUDE_CODE_MODEL: ${CLAUDE_CODE_MODEL:-claude-sonnet-4-5}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_SDK_MODEL: ${GEMINI_SDK_MODEL:-gemini-2.5-flash}
+      GEMINI_SDK_MODEL: ${GEMINI_SDK_MODEL:-gemini-2.5-pro}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_AGENTS_SDK_MODEL: ${OPENAI_AGENTS_SDK_MODEL:-gpt-4.1}
-      SOURCEBOT_URL: ${BRIDGE_SOURCEBOT_URL:-http://host.docker.internal:${SOURCEBOT_HOST_PORT:-13000}}
+      # Same docker network as ``sourcebot`` — avoid localhost (wrong inside the container).
+      SOURCEBOT_URL: ${BRIDGE_SOURCEBOT_URL:-http://sourcebot:3000}
       SOURCEBOT_API_KEY: ${SOURCEBOT_API_KEY}
     volumes:
       - "${REPOS_ROOT}:${REPOS_ROOT}"

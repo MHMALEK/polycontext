@@ -29,3 +29,5 @@ services/agent-node/node_modules/
 .DS_Store
 .idea/
 .vscode/
+.chroma_db/
+.chroma_db_test/

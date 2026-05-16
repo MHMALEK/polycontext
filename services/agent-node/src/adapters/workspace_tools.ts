@@ -3,7 +3,10 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
+const execFileAsync = promisify(execFile);
 const DEFAULT_MAX_BYTES = 120_000;
 
 export async function safeResolveUnderRoot(
@@ -101,6 +104,52 @@ export async function workspaceListDir(
     text += `\n... (${names.length} total entries, listing truncated)`;
   }
   return { entries: text };
+}
+
+export async function workspaceSearchFiles(
+  root: string,
+  pattern: string
+): Promise<Record<string, unknown>> {
+  const r = await safeResolveUnderRoot(root, ".");
+  if ("error" in r) return { error: r.error };
+  try {
+    const { stdout } = await execFileAsync(
+      "find",
+      [".", "-type", "f", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/.*", "-name", `*${pattern}*`],
+      { cwd: r.abs, maxBuffer: 1024 * 1024 * 5 }
+    );
+    const lines = stdout.trim().split("\n").filter(Boolean);
+    if (lines.length > 200) {
+      return { files: lines.slice(0, 200).join("\n") + `\n\n... (truncated from ${lines.length} results)` };
+    }
+    return { files: stdout.trim() || "No matches" };
+  } catch (err: any) {
+    if (err.code === 1 && !err.stdout) return { files: "No matches" };
+    return { error: String(err) };
+  }
+}
+
+export async function workspaceGrepSearch(
+  root: string,
+  query: string
+): Promise<Record<string, unknown>> {
+  const r = await safeResolveUnderRoot(root, ".");
+  if ("error" in r) return { error: r.error };
+  try {
+    const { stdout } = await execFileAsync(
+      "grep",
+      ["-rnI", "--exclude-dir=node_modules", "--exclude-dir=.git", query, "."],
+      { cwd: r.abs, maxBuffer: 1024 * 1024 * 5 }
+    );
+    const lines = stdout.trim().split("\n").filter(Boolean);
+    if (lines.length > 200) {
+      return { matches: lines.slice(0, 200).join("\n") + `\n\n... (truncated from ${lines.length} results)` };
+    }
+    return { matches: stdout.trim() || "No matches" };
+  } catch (err: any) {
+    if (err.code === 1) return { matches: "No matches" }; // grep exit code 1 means no match
+    return { error: String(err) };
+  }
 }
 
 export { DEFAULT_MAX_BYTES };
