@@ -62,8 +62,10 @@ services:
       - SOURCEBOT_ENCRYPTION_KEY=${SOURCEBOT_ENCRYPTION_KEY}
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-changeme}@postgres:5432/postgres
       - REDIS_URL=redis://redis:6379
-      # Sourcebot's AI Q&A (/api/chat) uses an LLM. Pass the same Gemini key
-      # the app uses; Sourcebot will pick up at least one of these env names.
+      # Sourcebot's AI Q&A (/api/chat) uses one of the models configured in
+      # config/sourcebot/config.json. Pass through the keys for each provider
+      # listed there; Sourcebot reads them via the "token.env" reference.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_GENERATIVE_AI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GEMINI_API_KEY:-}
