@@ -1,9 +1,8 @@
 """tech-decomposition CLI — subcommand-based.
 
 Subcommands:
-    ask        - ask a code question via Sourcebot (or local agent, experimental)
+    ask        - ask a code question via Sourcebot
     decompose  - decompose a query into subtasks
-    compare    - run a TOML batch of questions through engines side-by-side
     serve      - run the FastAPI server
     analyze    - print a summary of outputs/metrics/runs.jsonl
 
@@ -20,7 +19,6 @@ from pathlib import Path
 
 from rich.console import Console
 
-from .compare import run_compare
 from .config import get_settings
 from .core.context import RunContext
 from .core.factory import (
@@ -41,7 +39,6 @@ console = Console()
 def _cmd_ask(args, settings) -> int:
     pipeline = build_ask_pipeline(
         settings,
-        engine=args.engine,
         max_steps=args.max_steps,
         output_format=args.format,
         include_cli_sink=False,  # we print our own status line; the rendered body is in the file
@@ -137,20 +134,6 @@ def _cmd_decompose(args, settings) -> int:
     if args.print_json:
         decomp = er.payload.get("decomposition") or {}
         print(json.dumps(decomp, indent=2, default=str))
-    return 0
-
-
-def _cmd_compare(args, settings) -> int:
-    path = Path(args.questions)
-    if not path.is_file():
-        console.print(f"[red]questions file not found:[/] {path}")
-        return 1
-    out_dir = asyncio.run(run_compare(
-        path, settings,
-        only_ids=args.only,
-        skip_engine=args.skip,
-    ))
-    console.print(f"\n[green]✓[/] compare run dir: [bold]{out_dir}[/]")
     return 0
 
 
@@ -301,19 +284,12 @@ def _build_parser(settings) -> argparse.ArgumentParser:
 
     # ask --------------------------------------------------------------------
     p_ask = sub.add_parser(
-        "ask", help="Ask a code question via Sourcebot (or experimental local agent)"
+        "ask", help="Ask a code question via Sourcebot"
     )
     p_ask.add_argument("question", help="The question to ask")
     p_ask.add_argument(
-        "--engine",
-        choices=["sourcebot", "local"],
-        default="sourcebot",
-        help="sourcebot (default) = remote /api/chat/blocking + MCP fallback. "
-             "local (EXPERIMENTAL) = in-process pydantic-ai agent against local checkouts.",
-    )
-    p_ask.add_argument(
         "--max-steps", type=int, default=None,
-        help="Sourcebot maxSteps (1-50). Ignored for local engine.",
+        help="Sourcebot maxSteps (1-50).",
     )
     p_ask.add_argument("--repos", default=None, help="Comma-separated repo dir names")
     p_ask.add_argument(
@@ -349,15 +325,6 @@ def _build_parser(settings) -> argparse.ArgumentParser:
     )
     p_dec.set_defaults(func=_cmd_decompose)
 
-    # compare ----------------------------------------------------------------
-    p_cmp = sub.add_parser("compare", help="Batch-run questions.toml side-by-side across engines")
-    p_cmp.add_argument("questions", help="Path to questions.toml")
-    p_cmp.add_argument("--only", action="append", default=None,
-                       help="Run only the question with this id (repeatable)")
-    p_cmp.add_argument("--skip", choices=["sourcebot", "local"], default=None,
-                       help="Skip this engine for this run")
-    p_cmp.set_defaults(func=_cmd_compare)
-
     # serve ------------------------------------------------------------------
     p_srv = sub.add_parser("serve", help="Run the FastAPI server")
     p_srv.add_argument("--host", default="127.0.0.1")
@@ -392,7 +359,7 @@ def _build_parser(settings) -> argparse.ArgumentParser:
     p_ana.add_argument("--by-engine", default=None,
                        help="Substring match on engine name (e.g. 'sourcebot').")
     p_ana.add_argument("--mode-filter", default=None,
-                       help="Filter by mode: ask | decompose | compare.")
+                       help="Filter by mode: ask | decompose.")
     p_ana.set_defaults(func=_cmd_analyze)
 
     return p

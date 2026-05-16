@@ -76,7 +76,6 @@ function prettyStage(label: string | null | undefined): string {
     case "engine": {
       const s = strategy?.toLowerCase() ?? "";
       if (s.includes("sourcebot")) return "Searching code & reasoning";
-      if (s.includes("local")) return "Running local agent";
       if (s.includes("structured")) return "Calling LLM";
       if (s.includes("decompose")) return "Decomposing ticket";
       return strategy ? `Calling engine (${strategy})` : "Calling engine";

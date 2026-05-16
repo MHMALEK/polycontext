@@ -11,7 +11,6 @@ from ..config import Settings
 from ..engines._wrappers import StructuredEngine
 from ..engines.decompose import DecomposeEngine
 from ..engines.deep_decompose import DeepDecomposeEngine
-from ..engines.local_agent import LocalAgentEngine
 from ..engines.sourcebot import SourcebotEngine
 from ..enrichers.cheap import CheapEnricher
 from ..inputs.raw import RawQuestionSource
@@ -27,7 +26,7 @@ from .pipeline import Pipeline
 from .protocols import Engine, InputSource
 from .structurer import PydanticAIStructurer
 
-AskEngineName = Literal["sourcebot", "local"]
+AskEngineName = Literal["sourcebot"]
 DecomposeMode = Literal["cheap", "deep", "auto"]
 TicketSourceName = Literal["text_file"]
 OutputFormat = Literal["markdown", "html", "text"]
@@ -46,8 +45,6 @@ def _build_renderer(output_format: OutputFormat):
 def build_ask_engine(name: AskEngineName, *, max_steps: int | None = None) -> Engine:
     if name == "sourcebot":
         return SourcebotEngine(max_steps=max_steps)
-    if name == "local":
-        return LocalAgentEngine()
     raise ValueError(f"unknown ask engine: {name!r}")
 
 
@@ -71,14 +68,13 @@ def build_ask_pipeline(
 
     ``structure_responses=True`` (default) wraps the engine in a
     ``StructuredEngine`` that runs a Flash-tier pydantic-ai pass to strip
-    narration and lift citations into typed objects. The local agent already
-    emits structured output, so the wrapper is skipped for it.
+    narration and lift citations into typed objects.
 
     ``output_format`` picks the renderer (markdown / html / text). The
     file sink writes with the matching extension.
     """
     inner = build_ask_engine(engine, max_steps=max_steps)
-    if structure_responses and engine == "sourcebot":
+    if structure_responses:
         structurer = PydanticAIStructurer(settings)
         active_engine: Engine = StructuredEngine(inner, structurer)
     else:
