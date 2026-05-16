@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ..core.context import RunContext
-from ..core.models import estimate_cost_usd
+from ..core.llm_registry import estimate_cost_usd
 from ..core.protocols import EngineResult, EnrichedQuestion
 from ._local_agent_impl import local_ask
 from ..core.usage import usage_from_result

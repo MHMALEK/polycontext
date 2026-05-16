@@ -17,7 +17,7 @@ from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
 from ..config import Settings
-from .models import estimate_cost_usd, get_model
+from .llm_registry import estimate_cost_usd, get_model
 
 
 class StructuredCitation(BaseModel):

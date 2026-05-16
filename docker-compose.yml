@@ -138,7 +138,7 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - CUSTOM_LLM_BASE_URL=${CUSTOM_LLM_BASE_URL:-}
       - CUSTOM_LLM_API_KEY=${CUSTOM_LLM_API_KEY:-}
-      # Per-stage model selection (see core/models.py for spec syntax).
+      # Per-stage model selection (see core/llm_registry.py for spec syntax).
       - ENRICH_MODEL=${ENRICH_MODEL:-gemini:gemini-2.5-pro}
       - DECOMPOSE_MODEL=${DECOMPOSE_MODEL:-gemini:gemini-2.5-pro}
       # Outputs live in a named volume so they persist across restarts.

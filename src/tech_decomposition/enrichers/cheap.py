@@ -10,7 +10,7 @@ from __future__ import annotations
 from ..core.context import RunContext
 from ..core.protocols import EnrichedQuestion, LoadedInput
 from ._cheap_impl import enrich_query
-from ..core.models import estimate_cost_usd
+from ..core.llm_registry import estimate_cost_usd
 from ..core.usage import usage_from_result
 
 

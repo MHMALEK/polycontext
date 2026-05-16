@@ -9,7 +9,7 @@ from ._contradiction import check_contradictions
 from ..core.context import RunContext
 from ..core.protocols import EngineResult, EnrichedQuestion
 from ._deep_decompose_impl import deep_decompose
-from ..core.models import estimate_cost_usd
+from ..core.llm_registry import estimate_cost_usd
 from ..core.usage import usage_from_result
 from ..models import EnrichedQuery, RepoContext, RetrievedContext
 from ._decompose_render import attach_gitlab_links, render_markdown

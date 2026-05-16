@@ -28,7 +28,7 @@ from rich.console import Console
 from .clients.sourcebot import AskResult, SourcebotAskError, ask_sourcebot
 from .config import Settings
 from .engines._local_agent_impl import Answer, local_ask
-from .core.models import estimate_cost_usd
+from .core.llm_registry import estimate_cost_usd
 from .core.usage import usage_from_result
 
 console = Console()

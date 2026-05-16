@@ -2,7 +2,7 @@
 
 Pydantic AI's ``RunResult.usage()`` exposes token counts under names that
 have shifted across versions; this helper papers over both. Pair with
-``core.models.estimate_cost_usd`` for cost.
+``core.llm_registry.estimate_cost_usd`` for cost.
 """
 from __future__ import annotations
 

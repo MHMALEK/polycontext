@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     gemini_api_key: str = ""
-    # Optional credentials for the model registry (core/models.py). Each provider
+    # Optional credentials for the model registry (core/llm_registry.py). Each provider
     # is opt-in: only required if a stage's model spec names that provider.
     anthropic_api_key: str = ""
     openai_api_key: str = ""

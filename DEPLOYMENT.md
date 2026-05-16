@@ -123,7 +123,7 @@ DECOMPOSE_MODEL=openrouter:anthropic/claude-opus-4-5
 ```
 
 Switching providers requires no code changes; the model registry in
-[core/models.py](src/tech_decomposition/core/models.py) resolves `provider:name`
+[core/llm_registry.py](src/tech_decomposition/core/llm_registry.py) resolves `provider:name`
 strings at runtime.
 
 ## Repo management — two paths
