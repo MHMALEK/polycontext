@@ -48,10 +48,6 @@ class Settings(BaseSettings):
     # not fall back to MCP ``ask_codebase`` if the primary endpoint 404s.
     sourcebot_disable_mcp_fallback: bool = False
 
-    serena_url: str = ""
-    serena_timeout_seconds: float = 20.0
-    serena_max_results_per_query: int = 10
-
     enrich_model: str = "gemini-2.5-pro"
     decompose_model: str = "gemini-2.5-pro"
 
@@ -64,7 +60,7 @@ class Settings(BaseSettings):
 
     output_dir: Path = Path("./outputs")
 
-    # Default for ``tech-decomposition --ask``:
+    # Default when routing ``ask`` inside the Python stack (see clients/sourcebot):
     #   auto       = try Sourcebot /api/chat/blocking, MCP on 404, else local agent.
     #   sourcebot  = require Sourcebot (no local agent fallback).
     #   local      = local Pydantic AI agent only.
@@ -103,6 +99,7 @@ class Settings(BaseSettings):
     # When set (or OPENCODE_BASE_URL on agent-node), use client-only mode against that server URL.
     opencode_sdk_base_url: str = ""
     opencode_sdk_structured_retry_count: int = 2
+
     @field_validator("enabled_adapters", mode="before")
     @classmethod
     def _split_enabled(cls, v):

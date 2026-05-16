@@ -9,7 +9,6 @@ from typing import Literal
 
 from ..config import Settings
 from ..engines.decompose import DecomposeEngine
-from ..engines.deep_decompose import DeepDecomposeEngine
 from ..engines.sourcebot import SourcebotEngine
 from ..enrichers.cheap import CheapEnricher
 from ..inputs.raw import RawQuestionSource
@@ -23,8 +22,7 @@ from .pipeline import Pipeline
 from .protocols import Engine, InputSource
 
 AskEngineName = Literal["sourcebot"]
-DecomposeMode = Literal["cheap", "deep", "auto"]
-TicketSourceName = Literal["text_file"]
+TicketSourceName = Literal["text_file", "raw"]
 
 
 def build_ask_engine(name: AskEngineName, *, max_steps: int | None = None) -> Engine:
@@ -36,6 +34,8 @@ def build_ask_engine(name: AskEngineName, *, max_steps: int | None = None) -> En
 def build_ticket_source(name: TicketSourceName) -> InputSource:
     if name == "text_file":
         return TextFileSource()
+    if name == "raw":
+        return RawQuestionSource()
     raise ValueError(f"unknown ticket source: {name!r}")
 
 
@@ -68,27 +68,16 @@ def build_decompose_pipeline(
     settings: Settings,
     *,
     source: TicketSourceName = "text_file",
-    mode: DecomposeMode = "cheap",
     repos: list[str] | None = None,
     include_file_sink: bool = True,
     include_cli_sink: bool = True,
 ) -> Pipeline:
     """Decompose pipeline: ticket source → enrich → decompose engine → render → sinks.
 
-    `mode="auto"` is resolved here using the same heuristics the old pipeline
-    used: low-confidence enrichment, migration-flavored language, or three+
-    suspected repos escalates to deep. Decision is made at *engine* selection
-    time, after enrichment has run — implemented via a small wrapper engine.
+    Decomposition uses Sourcebot (same path as ``ask``) for grounded exploration,
+    then a local structured post-process into ``Decomposition``.
     """
-    if mode == "deep":
-        engine: Engine = DeepDecomposeEngine(repos=repos)
-    elif mode == "auto":
-        engine = AutoEscalatingDecomposeEngine(repos=repos)
-    else:
-        engine = DecomposeEngine(repos=repos)
-
-    # Decompose engines already produce richly-laid-out markdown; use the
-    # passthrough renderer so we don't double-up headers.
+    engine: Engine = DecomposeEngine(repos=repos)
     sinks = []
     if include_cli_sink:
         sinks.append(CLISink())
@@ -102,44 +91,6 @@ def build_decompose_pipeline(
         renderers=[PassthroughMarkdownRenderer()],
         sinks=sinks,
     )
-
-
-class AutoEscalatingDecomposeEngine:
-    """Decides cheap vs deep using the enriched query's signal.
-
-    Kept here (not in engines/) because the logic is tied to pipeline
-    composition rather than to either engine on its own.
-    """
-
-    name = "decompose_auto"
-
-    def __init__(self, *, repos: list[str] | None = None):
-        self.repos = repos
-
-    async def run(self, q, ctx):
-        if _should_escalate(q):
-            chosen = DeepDecomposeEngine(repos=self.repos)
-        else:
-            chosen = DecomposeEngine(repos=self.repos)
-        result = await chosen.run(q, ctx)
-        # Bubble up which engine actually ran so observability is honest.
-        result.extra["auto_escalated"] = (chosen.name == "decompose_deep")
-        result.engine = f"auto({chosen.name})"
-        return result
-
-
-_MIGRATION_KEYWORDS = ("migrate", "migration", "port to", "move to ", "refactor across")
-
-
-def _should_escalate(q) -> bool:
-    if q.confidence == "low":
-        return True
-    text = (q.extra.get("summary") or q.question or "").lower()
-    if any(kw in text for kw in _MIGRATION_KEYWORDS):
-        return True
-    if len(q.suspected_repos) >= 3:
-        return True
-    return False
 
 
 def build_metrics_observer(settings: Settings, *, mode: str) -> JsonlMetricsObserver:

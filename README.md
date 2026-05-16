@@ -54,7 +54,7 @@ End-to-end capabilities you get out of the box (configure via `.env` and `config
 | **Grounded context** | Query enrichment (cheap LLM), semantic + lexical retrieval, **reranking**, **snippet inflation** from disk, typed **citations** (repo, path, lines). |
 | **Agents & SDKs** | **Gemini**, **OpenAI Agents**, **Claude Code**, **Cursor**, **Cline** (via `agent-node`); **Sourcebot**-native Q&A from Python. Same HTTP shape for every adapter. |
 | **Modes** | **`ask`** (Q&A), **`decompose`** (query → structured subtasks + markdown), **`implement`** (where the adapter supports it). |
-| **Surfaces** | **REST** (FastAPI), **CLI** (`tech-decomposition` / `td`), **React UI** (Vite), **eval bake-offs** (`make eval-run`). |
+| **Surfaces** | **REST** (FastAPI), **React UI** (Vite), **eval bake-offs** (`make eval-run`), optional **metrics digest** (`tech-decomposition-analyze`). |
 | **Integrations** | No ticket/chat code in-repo—your **Jira / Slack / portal** calls the same JSON API; grounding and models stay centralized. |
 
 ---
@@ -66,7 +66,7 @@ End-to-end capabilities you get out of the box (configure via `.env` and `config
 | **Multi-repo** | Configure `REPOS_ROOT` + `REPOS`; Python + Tree-sitter + Chroma understand Python, JS, TS, TSX across all of them. |
 | **Grounded by default** | Adapter `ask` paths use the grounding pipeline (enrichment, local index, Sourcebot, inflation, citations)—not a single vendor lock-in. |
 | **Pluggable agents** | Swap `gemini` ↔ `openai_agents` ↔ `claude_code` ↔ `cursor` ↔ `cline_sdk` via HTTP; `ENABLED_ADAPTERS` to narrow the surface. |
-| **Ship how you want** | FastAPI + bundled React UI, raw CLI, or curl from your own backend. |
+| **Ship how you want** | FastAPI + bundled React UI, or call the JSON API from your own backend. |
 
 ---
 
@@ -150,16 +150,15 @@ Sandboxed operations against the configured **repos root** (used by Gemini and f
 | **Local semantic index** | Chroma + embeddings over Tree-sitter chunks |
 | **Repo map** | Structural map per repo |
 | **Anchors / import follow** | Ticket/query-derived file focus (where enabled) |
-| **Serena MCP** (optional Docker profile) | LSP-backed exploration for deep / experimental flows |
 
 ### Product surfaces
 
 | Surface | Tech |
 |---------|------|
 | **REST API** | FastAPI — `/v1/adapters/{name}/ask\|decompose\|implement` |
-| **CLI** | `tech-decomposition` / `td` — `ask`, `decompose`, `serve`, `history`, … |
 | **Web UI** | React 18, Vite, Tailwind 4, DaisyUI — Q&A + history + adapter bake-off |
 | **Eval** | `make eval-run` — TOML + YAML cases, JSON + `report.md` |
+| **Metrics** | `tech-decomposition-analyze` — summarize `outputs/metrics/runs.jsonl` |
 
 ---
 
@@ -168,7 +167,7 @@ Sandboxed operations against the configured **repos root** (used by Gemini and f
 ```mermaid
 sequenceDiagram
     actor U as User
-    participant API as FastAPI / CLI
+    participant API as FastAPI
     participant G as Grounding
     participant AST as Tree-sitter
     participant Chroma as ChromaDB
@@ -212,7 +211,7 @@ sequenceDiagram
 
 **UI:** [React](https://react.dev/) 18, [Vite](https://vitejs.dev/), [Tailwind CSS](https://tailwindcss.com/) 4, [DaisyUI](https://daisyui.com/), [react-markdown](https://github.com/remarkjs/react-markdown).
 
-**Infra (Compose):** [Sourcebot](https://github.com/sourcebot-dev/sourcebot), PostgreSQL 16, Redis 8; optional [Serena](https://github.com/oraios/serena) (LSP MCP).
+**Infra (Compose):** [Sourcebot](https://github.com/sourcebot-dev/sourcebot), PostgreSQL 16, Redis 8.
 
 **Packaging:** [uv](https://github.com/astral-sh/uv), [Hatchling](https://github.com/pypa/hatch).
 
@@ -239,17 +238,17 @@ Built UI: `/ui` when `web/dist` exists or `UI_DIST_DIR` points at a build.
 
 ---
 
-## CLI
+## Run the API
 
 ```bash
-tech-decomposition ask "How does auth flow from UI to API?"
-tech-decomposition decompose --query "Unicode-safe farm name validation" --mode auto
-tech-decomposition serve --host 127.0.0.1 --port 8000
+uv run uvicorn tech_decomposition.api:app --host 127.0.0.1 --port 8000
 ```
 
-Short alias: **`td`**.
+Optional — summarize recent run metrics:
 
----
+```bash
+uv run tech-decomposition-analyze --since 24h
+```
 
 ## Evaluation
 
@@ -301,9 +300,9 @@ curl -sS "http://localhost:${API_PORT:-18000}/v1/adapters/${ADAPTER:-gemini}/ask
 ```text
 src/tech_decomposition/
 ├── api.py                    # FastAPI
-├── cli.py
+├── analyze.py                # metrics digest (console entry: tech-decomposition-analyze)
 ├── adapters/                 # registry, grounding, local index, repo map, SDK bridges
-├── engines/                  # ask, decompose, deep paths
+├── engines/                  # ask, decompose
 ├── retrievers/               # sourcebot, ripgrep, anchors, …
 └── enrichers/
 

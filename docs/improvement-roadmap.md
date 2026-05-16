@@ -5,7 +5,7 @@ materially improve the accuracy, cost, and reliability of `tech-decomposition`'s
 output. Ordered by impact-per-effort, with honest tradeoffs.
 
 The premise: **retrieval and grounding are now solid** (anchors + 3-hop
-import follow + Sourcebot + Serena + tree-sitter). The remaining gap is
+import follow + Sourcebot + tree-sitter). The remaining gap is
 **reliability** — the model still mis-cites lines, sometimes invents files,
 and under-uses its own tools. The work below addresses that gap.
 
@@ -100,8 +100,7 @@ classes, functions, calls) and query it with graph-aware retrieval.
   built specifically for code understanding.
 
 For our case, a lighter version is probably enough — extend `import_index.py`
-to also track symbol-level relationships (calls, inheritance) via Serena's
-LSP tools.
+to also track symbol-level relationships (calls, inheritance) via LSP-style tools.
 
 ### Tree-sitter symbol extraction (extend what we have)
 We use tree-sitter for TS imports. Extend to extract **symbols** (functions,
@@ -154,7 +153,7 @@ work in our `decompose.py`.
 Use Flash to classify ticket complexity, then route:
 - Simple (single-file change): Flash decomposes too. ~$0.005/ticket.
 - Medium (multi-file): Pro single-shot (current cheap mode). ~$0.07.
-- Complex (multi-repo, ambiguous): Pro agentic loop (current deep mode). ~$0.30.
+- Complex (multi-repo, ambiguous): longer Sourcebot maxSteps or a second pass. ~$0.30+.
 - Critical (production migrations): Opus / Sonnet 4.6 agentic. ~$1-2.
 
 The routing decision itself costs $0.001. Average cost per ticket drops.
@@ -361,7 +360,7 @@ incrementally (harden one adapter first, then roll out).
   training data. Spend that time on prompts and retrieval instead.
 - **Don't add LangGraph for orchestration.** The pipeline is 4 stages.
   LangGraph adds nodes/state for branching that you don't need.
-- **Don't add another retriever.** You have ripgrep + Sourcebot + Serena
+- **Don't add another retriever.** You have ripgrep + Sourcebot
   + anchors + import-follow. The bottleneck is no longer retrieval breadth,
   it's reranking + verification.
 - **Don't add multi-model ensembling.** 3x cost for 5% quality. Self-consistency

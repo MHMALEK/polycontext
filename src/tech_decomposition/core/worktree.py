@@ -1,7 +1,7 @@
 """Isolated git worktrees for ``implement`` runs.
 
 Each implement call gets its own worktree on a fresh branch so:
-  * the main clone Sourcebot/Serena are reading from stays clean
+  * the main clone Sourcebot reads from stays clean
   * concurrent implement runs don't fight over the index
   * a failed run is trivially cleaned up
 

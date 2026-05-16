@@ -93,8 +93,7 @@ class AdapterAskResult(BaseModel):
 class AdapterDecomposeInput(BaseModel):
     query: str | None = None
     repos: list[str] | None = None
-    # Each adapter interprets this as it wishes; adapters that don't
-    # distinguish modes simply ignore the field.
+    # Ignored by the in-repo pipeline (Sourcebot + structure). Remote adapters may interpret it.
     mode: Literal["cheap", "deep", "auto"] = "auto"
 
 

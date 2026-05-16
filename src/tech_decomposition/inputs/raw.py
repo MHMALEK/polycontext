@@ -12,7 +12,9 @@ class RawQuestionSource:
 
     async def load(self, ref: str | dict[str, Any], ctx: RunContext) -> LoadedInput:
         if isinstance(ref, dict):
-            question = str(ref.get("question") or ref.get("body") or "").strip()
+            question = str(
+                ref.get("question") or ref.get("body") or ref.get("query") or ""
+            ).strip()
         else:
             question = str(ref).strip()
         if not question:

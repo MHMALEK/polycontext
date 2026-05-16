@@ -49,7 +49,7 @@ class Snippet(BaseModel):
     line_end: int
     content: str
     score: float = 0.0
-    source: Literal["ripgrep", "sourcebot", "serena", "anchor", "local_chromadb"] = "ripgrep"
+    source: Literal["ripgrep", "sourcebot", "anchor", "local_chromadb"] = "ripgrep"
 
     def gitlab_url(self, base_url: str, project_path: str, ref: str) -> str:
         return f"{base_url}/{project_path}/-/blob/{ref}/{self.path}#L{self.line_start}-{self.line_end}"
@@ -67,6 +67,7 @@ class RetrievedContext(BaseModel):
     repos: list[RepoContext] = Field(default_factory=list)
     total_snippets: int = 0
     total_chars: int = 0
+    grounding: Literal["local_snippets", "sourcebot_chat"] = "local_snippets"
 
 
 class Subtask(BaseModel):
@@ -107,11 +108,7 @@ class DecomposeRequest(BaseModel):
     )
     mode: Literal["cheap", "deep", "auto"] = Field(
         default="auto",
-        description=(
-            "cheap = single-pass static retrieval (default, ~$0.06, ~50s). "
-            "deep = agentic loop with Pro using read_file/search_code/find_symbol tools (~$0.30+, ~3-5min). "
-            "auto = run cheap first, escalate to deep if confidence is low."
-        ),
+        description="Legacy field ignored by the main pipeline (Sourcebot + structure pass).",
     )
 
 

@@ -81,21 +81,18 @@ curl -sS http://localhost:18000/v1/adapters/cursor/ask \
   | jq '{adapter: .result.adapter, run_id, model: .result.metrics.model}'
 ```
 
-CLI alternative (one-shot, in the running container):
+Optional — metrics digest inside the container:
 
 ```bash
-docker exec -it tech-decomposition-app tech-decomposition ask "..."
-docker exec -it tech-decomposition-app tech-decomposition decompose --ticket-key DEV-7543
-docker exec -it tech-decomposition-app tech-decomposition analyze --since 24h
+docker exec -it tech-decomposition-app tech-decomposition-analyze --since 24h
 ```
 
 ## Services
 
 | Service | Port (host) | Role |
 |---|---|---|
-| `app` (tech-decomposition) | 8000 | FastAPI + CLI |
+| `app` (tech-decomposition) | 8000 | FastAPI |
 | `sourcebot` | 3000 | Code index + AI Q&A backend |
-| `serena` | 9121 | LSP-backed MCP server (experimental local agent) |
 | `postgres` | — | Sourcebot persistence (docker network only) |
 | `redis` | — | Sourcebot queue (docker network only) |
 
@@ -169,7 +166,7 @@ you only need one, comment out the other.
 ## Observability
 
 - **Per-run metrics**: `outputs/metrics/runs.jsonl` (one stage row + one run row per invocation, JSONL).
-- **Quick view**: `tech-decomposition analyze`, with `--since 24h`, `--by-engine sourcebot`, `--mode-filter ask` filters.
+- **Quick view**: `uv run tech-decomposition-analyze` (or the installed `tech-decomposition-analyze` on `$PATH`), with `--since 24h`, `--by-engine sourcebot`, `--mode-filter ask` filters.
 - **Healthcheck**: `GET /health` returns `{"status":"ok"}`. Docker's healthcheck hits this every 10 s.
 
 ## Web UI
@@ -185,7 +182,7 @@ npm install        # first time only
 npm run dev        # → http://localhost:${UI_PORT}, proxies /v1 + /runs to :${API_PORT}
 ```
 
-Run the FastAPI server in another shell (`tech-decomposition serve` or
+Run the FastAPI server in another shell (`uv run uvicorn tech_decomposition.api:app --port …` or
 `docker compose up app`); the Vite dev proxy forwards API calls to it.
 Both ports come from `.env` (`UI_PORT` / `API_PORT`).
 

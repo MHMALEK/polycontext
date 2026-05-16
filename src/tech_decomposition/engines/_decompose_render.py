@@ -101,7 +101,13 @@ def render_markdown(
     lines.append(f"- search queries: {', '.join(f'`{q}`' for q in enriched.search_queries) or '_(none)_'}")
     lines.append(f"- entities: {', '.join(f'`{e}`' for e in enriched.entities) or '_(none)_'}")
     lines.append(f"- code keywords: {', '.join(f'`{k}`' for k in enriched.code_keywords) or '_(none)_'}")
-    lines.append(f"- snippets returned: {ctx.total_snippets} ({ctx.total_chars:,} chars)")
+    if ctx.grounding == "sourcebot_chat":
+        lines.append(
+            "- snippets: _none bundled locally_ — grounding was Sourcebot chat; "
+            "evidence lives in the exploration answer that fed the structurer."
+        )
+    else:
+        lines.append(f"- snippets returned: {ctx.total_snippets} ({ctx.total_chars:,} chars)")
     for rc in ctx.repos:
         from collections import Counter
         by_src = Counter(s.source for s in rc.snippets)

@@ -24,8 +24,6 @@ dependencies = [
 ]
 
 [project.scripts]
-tech-decomposition = "tech_decomposition.cli:main"
-td = "tech_decomposition.cli:main"
 tech-decomposition-analyze = "tech_decomposition.analyze:main"
 
 [project.optional-dependencies]

@@ -8,9 +8,10 @@ Endpoints:
     GET  /runs, /runs/{id}, POST /runs/{id}/replay
 
 There is no ``/ask`` or ``/decompose`` HTTP surface — those existed when
-this app shipped its own Sourcebot+Gemini pipeline. The pipeline still
-exists for the CLI (``cli.py``), but the HTTP API is adapter-only so the
-UI and external callers have a single, uniform shape to target.
+this app shipped its own Sourcebot+Gemini pipeline. The **in-process**
+decompose pipeline (``core.factory.build_decompose_pipeline``) remains for
+tests and programmatic use; the HTTP API is adapter-only so the UI and
+external callers have a single, uniform shape to target.
 """
 from __future__ import annotations
 

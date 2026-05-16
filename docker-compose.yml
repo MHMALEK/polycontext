@@ -73,26 +73,7 @@ services:
       # config.json is enabled). Leave empty for local-mount-only setups.
       - GITLAB_TOKEN=${GITLAB_TOKEN:-}
 
-  serena:
-    # Serena is only used by the experimental local agent (--engine local)
-    # and the deep_decompose path. The default Sourcebot-backed flows don't
-    # need it. Opt in with `docker compose --profile experimental up`.
-    profiles: ["experimental"]
-    image: ghcr.io/oraios/serena:latest
-    container_name: tech-decomposition-serena
-    restart: unless-stopped
-    ports:
-      - "9121:9121"
-    volumes:
-      - ${REPOS_ROOT:-./repos}:/workspaces/projects
-    command: >
-      serena start-mcp-server
-      --transport sse
-      --host 0.0.0.0
-      --port 9121
-      --project /workspaces/projects
-
-  # The tech-decomposition FastAPI + CLI. Builds from the local Dockerfile so
+  # The tech-decomposition FastAPI app. Builds from the local Dockerfile so
   # iterating on the Python code only rebuilds this service. Talks to the
   # in-stack Sourcebot at http://sourcebot:3000 (the docker network host).
   app:

@@ -7,7 +7,6 @@ from ..models import EnrichedQuery, RepoContext, RetrievedContext, Snippet
 from .anchors import gather_anchor_snippets
 from .base import Retriever
 from .ripgrep import RipgrepRetriever
-from .serena import SerenaRetriever
 from .sourcebot import SourcebotRetriever
 
 
@@ -38,7 +37,6 @@ def build_retrievers(settings: Settings) -> list[Retriever]:
     return [
         RipgrepRetriever(settings),
         SourcebotRetriever(settings),
-        SerenaRetriever(settings),
     ]
 
 
@@ -87,7 +85,6 @@ async def gather_context(
 __all__ = [
     "Retriever",
     "RipgrepRetriever",
-    "SerenaRetriever",
     "SourcebotRetriever",
     "build_retrievers",
     "gather_context",

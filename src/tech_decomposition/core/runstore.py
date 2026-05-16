@@ -2,8 +2,7 @@
 
 Each completed (or failed) Pipeline.run is recorded as one row with the full
 answer markdown, structured payload, citations, tokens, cost, and the original
-input ref (so replays can rebuild the same call). Backs the `tech-decomposition
-history` CLI and the `/runs` API endpoints.
+input ref (so replays can rebuild the same call). Backs the `/runs` API endpoints.
 
 Schema is forward-compatible: new columns can be added with a CREATE-IF and an
 ALTER-IF-MISSING dance — but for now the schema is small and stable.

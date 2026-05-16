@@ -2,7 +2,7 @@
 ticket text and read them whole. These anchors get a high score so they
 survive context trimming and ground the LLM's decomposition.
 
-This runs before the keyword retrievers — Sourcebot/Serena/ripgrep may miss
+This runs before the keyword retrievers — Sourcebot/ripgrep may miss
 the file even when it's named verbatim in the ticket (we saw this on SCRUM-18:
 the DAG file was in the title but didn't appear in any retrieved snippet)."""
 from __future__ import annotations

@@ -133,7 +133,7 @@ input:
   ticket_text: |
     Title: ...
     Body...
-  mode: auto             # cheap | deep | auto
+  mode: auto             # optional; ignored by in-repo pipeline (Sourcebot + structure)
   repos: [frontend]      # optional — limit to a subset
 
 expected:
