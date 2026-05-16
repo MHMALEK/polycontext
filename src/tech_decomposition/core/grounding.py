@@ -1,9 +1,17 @@
 """Grounded retrieval — opt-in pre-fetch of code snippets via Sourcebot search.
 
-Single source for v1: Sourcebot's ``/api/search``. Returns typed snippets, a
-ready-to-prepend grounding block, and its own metrics so the caller can see
-what grounding cost in latency / snippet count / chars separately from the
-adapter's own LLM call.
+Single source for v1: Sourcebot's ``/api/search`` (a zoekt-style code search
+engine). Returns typed snippets, a ready-to-prepend grounding block, and its
+own metrics so the caller can see what grounding cost in latency / snippet
+count / chars separately from the adapter's own LLM call.
+
+Sourcebot's search is literal/regex — it does NOT do semantic search. Passing
+it an English sentence finds nothing. So we extract code-relevant keywords
+from the user's natural-language query first (CamelCase, UPPER_SNAKE,
+snake_case, dotted paths, quoted strings, distinctive lowercase tokens) and
+OR them in a zoekt query. The list of extracted terms is reported in
+``metrics.extracted_terms`` so the caller can see what we actually searched
+for.
 
 Callers:
 - ``POST /v1/grounding/retrieve`` — see grounding output alone (and its cost).
@@ -12,6 +20,7 @@ Callers:
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -43,6 +52,14 @@ class GroundingMetrics(BaseModel):
     sources: list[str] = Field(default_factory=list)
     sourcebot_files_seen: int = 0
     error: str | None = None
+    extracted_terms: list[str] = Field(
+        default_factory=list,
+        description="Code-relevant tokens pulled from the NL query and sent to search.",
+    )
+    search_query: str = Field(
+        default="",
+        description="The literal query string sent to Sourcebot — useful for debugging.",
+    )
 
 
 class GroundedContext(BaseModel):
@@ -51,6 +68,110 @@ class GroundedContext(BaseModel):
     snippets: list[GroundingSnippet] = Field(default_factory=list)
     grounding_block: str = ""
     metrics: GroundingMetrics = Field(default_factory=GroundingMetrics)
+
+
+# ---------------------------------------------------------------------------
+# Keyword extraction — turn an English question into Sourcebot search terms
+# ---------------------------------------------------------------------------
+
+_RX_CAMEL = re.compile(r"\b[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]+)+\b")
+_RX_UPPER_SNAKE = re.compile(r"\b[A-Z][A-Z0-9_]{2,}[A-Z0-9]\b")
+_RX_SNAKE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}\b")
+_RX_DOTTED = re.compile(r"\b[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z][a-zA-Z0-9_.]+\b")
+_RX_QUOTED = re.compile(r'["\']([^"\']{2,40})["\']')
+_RX_LOWER_WORD = re.compile(r"\b[a-z][a-z0-9]{3,}\b")
+
+# Tokens that look like words but never help a code search.
+_STOPWORDS = {
+    "about", "across", "after", "again", "all", "also", "and", "any",
+    "are", "around", "based", "between", "both", "but", "can", "come",
+    "comes", "could", "current", "currently", "describe", "describes",
+    "different", "does", "doing", "each", "every", "exactly", "explain",
+    "explains", "for", "from", "give", "gives", "going", "good", "has",
+    "have", "help", "here", "how", "into", "just", "know", "knows",
+    "like", "list", "lists", "look", "make", "many", "more", "most",
+    "much", "must", "name", "names", "need", "new", "now", "off", "one",
+    "only", "our", "out", "over", "platform", "please", "really", "same",
+    "see", "should", "show", "shows", "some", "such", "tell", "tells",
+    "than", "that", "the", "their", "them", "then", "there", "these",
+    "they", "this", "those", "through", "use", "used", "uses", "using",
+    "very", "want", "wants", "was", "way", "ways", "were", "what",
+    "when", "where", "whether", "which", "while", "will", "with",
+    "work", "works", "would", "you", "your",
+    # Vague filler nouns
+    "thing", "things", "time", "times", "stuff",
+}
+
+
+def _extract_search_terms(query: str, *, max_terms: int = 8) -> list[str]:
+    """Pull code-relevant tokens from a natural-language question.
+
+    Priority order (high → low):
+      1. Quoted strings — user is signaling exact text.
+      2. UPPER_SNAKE constants, CamelCase classes, snake_case identifiers,
+         dotted paths (``user_model.py``, ``a.b.c``).
+      3. Distinctive lowercase words (≥4 chars, not stopwords).
+
+    Returns up to ``max_terms`` terms with duplicates collapsed
+    case-insensitively. Empty list when nothing useful can be extracted.
+    """
+    seen: set[str] = set()
+    terms: list[str] = []
+
+    def add(token: str) -> None:
+        t = token.strip()
+        if not t:
+            return
+        low = t.lower()
+        if low in _STOPWORDS or low in seen:
+            return
+        seen.add(low)
+        terms.append(t)
+
+    for m in _RX_QUOTED.finditer(query):
+        add(m.group(1))
+    for rx in (_RX_UPPER_SNAKE, _RX_CAMEL, _RX_DOTTED, _RX_SNAKE):
+        for m in rx.finditer(query):
+            add(m.group(0))
+        if len(terms) >= max_terms:
+            return terms[:max_terms]
+    # Lowercase fallback only if we don't have many symbol-like terms yet.
+    if len(terms) < 3:
+        for m in _RX_LOWER_WORD.finditer(query):
+            if len(terms) >= max_terms:
+                break
+            add(m.group(0))
+    return terms[:max_terms]
+
+
+def _quote_if_needed(t: str) -> str:
+    return f'"{t}"' if (" " in t or any(c in t for c in '()')) else t
+
+
+def _build_sourcebot_query(terms: list[str], *, mode: str = "and") -> str:
+    """Compose a zoekt-style query.
+
+    ``mode='and'`` joins terms with spaces (implicit AND — strictest match,
+    surfaces the most relevant file when terms co-occur).
+    ``mode='or'``  joins with ``OR`` — broader recall, used as a fallback
+    when the AND form returned zero files.
+
+    Repo scoping is intentionally omitted: in practice multiple ``repo:``
+    filters are AND-ed together (no file is in two repos) so the search
+    returns 0. The user's Sourcebot instance only indexes their repos
+    anyway, so scoping rarely earns its keep.
+    """
+    if not terms:
+        return ""
+    parts = [_quote_if_needed(t) for t in terms]
+    if mode == "or":
+        return " OR ".join(parts)
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 
 async def retrieve_grounded_context(
@@ -72,51 +193,84 @@ async def retrieve_grounded_context(
             error="SOURCEBOT_URL or SOURCEBOT_API_KEY not set",
         ))
 
-    # Scope the search to specific repos by embedding `repo:` filters in the query.
-    sb_repos = effective_sourcebot_repos_for_ask(settings, repos)
-    q = query.strip()
-    if sb_repos:
-        scope = " or ".join(f"repo:{r}" for r in sb_repos)
-        q = f"{q} ({scope})"
+    terms = _extract_search_terms(query)
+    if not terms:
+        return GroundedContext(metrics=GroundingMetrics(
+            sources=["sourcebot"],
+            error="no code-like keywords extracted from query",
+            extracted_terms=[],
+        ))
 
     url = settings.sourcebot_url.rstrip("/") + "/api/search"
     headers = {
         "X-Sourcebot-Api-Key": _x_sourcebot_api_key_value(settings.sourcebot_api_key),
         "Content-Type": "application/json",
     }
-    payload = {"query": q, "matches": top_k, "contextLines": context_lines}
+    # effective_sourcebot_repos_for_ask is called for side-effect-free reference
+    # in the metrics; we do NOT pass repo: filters into the query because
+    # Sourcebot AND-joins multiple repo: clauses (returning 0).
+    _ = effective_sourcebot_repos_for_ask(settings, repos)
 
-    t0 = time.monotonic()
-    try:
+    async def _search(q: str) -> tuple[int, list[dict[str, Any]], int]:
+        t0 = time.monotonic()
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-            r = await client.post(url, json=payload, headers=headers)
+            r = await client.post(
+                url,
+                json={"query": q, "matches": top_k, "contextLines": context_lines},
+                headers=headers,
+            )
+        ms = int((time.monotonic() - t0) * 1000)
+        if r.status_code != 200:
+            return r.status_code, [], ms
+        body = r.json() if r.content else {}
+        return r.status_code, (body.get("files") or []), ms
+
+    # 1st try: strict implicit-AND search — surfaces the most relevant file.
+    and_query = _build_sourcebot_query(terms, mode="and")
+    try:
+        status, files, dur_and = await _search(and_query)
     except httpx.HTTPError as e:
         return GroundedContext(metrics=GroundingMetrics(
-            duration_ms=int((time.monotonic() - t0) * 1000),
             sources=["sourcebot"],
             error=f"network: {type(e).__name__}: {e}",
+            extracted_terms=terms,
+            search_query=and_query,
         ))
-
-    duration_ms = int((time.monotonic() - t0) * 1000)
-    if r.status_code != 200:
+    if status != 200:
         return GroundedContext(metrics=GroundingMetrics(
-            duration_ms=duration_ms,
+            duration_ms=dur_and,
             sources=["sourcebot"],
-            error=f"HTTP {r.status_code}: {r.text[:200]}",
+            error=f"HTTP {status}",
+            extracted_terms=terms,
+            search_query=and_query,
         ))
 
-    body = r.json() if r.content else {}
-    files = body.get("files") or []
+    final_query = and_query
+    total_ms = dur_and
+
+    # Fallback: if AND found nothing, try OR alternation for broader recall.
+    if not files and len(terms) > 1:
+        or_query = _build_sourcebot_query(terms, mode="or")
+        try:
+            status, files, dur_or = await _search(or_query)
+        except httpx.HTTPError:
+            files, dur_or = [], 0
+        if status == 200:
+            final_query = or_query
+            total_ms += dur_or
+
     snippets = _snippets_from_sourcebot_files(files)
     return GroundedContext(
         snippets=snippets,
         grounding_block=format_grounding_block(snippets),
         metrics=GroundingMetrics(
-            duration_ms=duration_ms,
+            duration_ms=total_ms,
             snippet_count=len(snippets),
             total_chars=sum(len(s.content) for s in snippets),
             sources=["sourcebot"],
             sourcebot_files_seen=len(files),
+            extracted_terms=terms,
+            search_query=final_query,
         ),
     )
 

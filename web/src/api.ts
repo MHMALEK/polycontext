@@ -148,6 +148,8 @@ export interface GroundingMetrics {
   sources: string[];
   sourcebot_files_seen: number;
   error: string | null;
+  extracted_terms: string[];
+  search_query: string;
 }
 
 export interface GroundedContext {
