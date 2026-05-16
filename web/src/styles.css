@@ -17,6 +17,18 @@
   .font-mono-ui {
     font-family: "JetBrains Mono", ui-monospace, monospace;
   }
+
+  /**
+   * DaisyUI "light" gray ramps are extremely pale (base-300 ≈ 95% L), so borders
+   * and muted text (--color-base-content at low Tailwind opacity) wash out.
+   * Nudge neutrals darker and content slightly deeper for WCAG-friendly UI chrome.
+   */
+  [data-theme="light"] {
+    --color-base-100: oklch(99.2% 0.004 285.885);
+    --color-base-200: oklch(94% 0.012 285.885);
+    --color-base-300: oklch(86% 0.022 285.885);
+    --color-base-content: oklch(17% 0.024 285.885);
+  }
 }
 
 /* Atmospheric shell (works with DaisyUI semantic colors) */
@@ -54,9 +66,9 @@
 /* Message transcript */
 .conversation-prose {
   @apply prose prose-sm sm:prose-base max-w-none;
-  @apply prose-p:leading-relaxed prose-pre:bg-base-300/45 prose-pre:text-base-content;
+  @apply prose-p:leading-relaxed prose-pre:bg-base-300/55 prose-pre:text-base-content;
   @apply prose-code:before:content-none prose-code:after:content-none;
-  @apply prose-code:bg-base-300/35 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:text-[0.88em];
+  @apply prose-code:bg-base-300/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:text-[0.88em];
 }
 
 .conversation-prose :where(h1, h2, h3, h4) {

@@ -4,6 +4,26 @@ import remarkGfm from "remark-gfm";
 import { api } from "./api";
 import type { AdapterInfo, RunDetail, RunListItem } from "./api";
 
+/** Prefix for a synthetic sidebar row shown until /runs lists the real thread. */
+const PENDING_SIDEBAR_PREFIX = "__pending__:";
+
+function phantomHistoryRow(p: {
+  id: string;
+  preview: string;
+  adapter: string;
+}): RunListItem {
+  const now = new Date().toISOString();
+  return {
+    id: p.id,
+    thread_id: p.id,
+    mode: "ask",
+    status: "running",
+    engine: `${p.adapter}:ask`,
+    input_preview: p.preview.slice(0, 160),
+    created_at: now,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Types & utilities
 // ---------------------------------------------------------------------------
@@ -144,7 +164,7 @@ function statusDotClass(status: string): string {
     case "running":
       return "bg-warning animate-pulse";
     default:
-      return "bg-base-content/30";
+      return "bg-base-content/45";
   }
 }
 
@@ -184,7 +204,7 @@ function threadKey(run: RunListItem | RunDetail): string {
 function RoleLabel({ role, align }: { role: string; align: "left" | "right" }) {
   return (
     <p
-      className={`text-[10px] font-semibold uppercase tracking-[0.16em] text-base-content/40 mb-1 ${
+      className={`text-[10px] font-semibold uppercase tracking-[0.16em] text-base-content/65 mb-1 ${
         align === "right" ? "text-right pr-1" : "text-left pl-1"
       }`}
     >
@@ -205,6 +225,7 @@ function HistoryItem({
   onReplay: (id: string) => void;
 }) {
   const adapter = engineAdapterLabel(run.engine);
+  const isPendingSidebar = run.id.startsWith(PENDING_SIDEBAR_PREFIX);
   return (
     <button
       type="button"
@@ -212,7 +233,7 @@ function HistoryItem({
       className={`group relative w-full text-left rounded-2xl px-3 py-3 transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-primary/35 focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 ${
         selected
           ? "bg-base-100 shadow-md ring-1 ring-primary/25 border-l-[3px] border-l-primary"
-          : "bg-base-100/50 hover:bg-base-100 hover:shadow-sm border border-base-300/50 border-l-[3px] border-l-transparent"
+          : "bg-base-100/75 hover:bg-base-100 hover:shadow-sm border border-base-300/75 border-l-[3px] border-l-transparent"
       }`}
     >
       <div className="flex items-start gap-2.5">
@@ -226,29 +247,30 @@ function HistoryItem({
           <p className="text-[13px] leading-snug line-clamp-2 text-base-content font-medium tracking-tight">
             {historyTitle(run)}
           </p>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-base-content/45">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-base-content/70">
             <span className="tabular-nums">{formatTimeAgo(run.created_at)}</span>
             {adapter && (
               <>
-                <span aria-hidden className="text-base-content/30">
+                <span aria-hidden className="text-base-content/55">
                   ·
                 </span>
-                <span className="font-mono-ui text-[10px] uppercase tracking-wider text-base-content/40">
+                <span className="font-mono-ui text-[10px] uppercase tracking-wider text-base-content/65">
                   {adapter}
                 </span>
               </>
             )}
           </div>
           {(run.total_seconds != null || run.total_cost_usd != null) && (
-            <div className="mt-1 text-[10px] text-base-content/45 tabular-nums">
+            <div className="mt-1 text-[10px] text-base-content/70 tabular-nums">
               {run.total_seconds != null && <span>{formatWall(run.total_seconds)}</span>}
               {run.total_seconds != null && run.total_cost_usd != null && (
-                <span className="mx-1 text-base-content/30">·</span>
+                <span className="mx-1 text-base-content/55">·</span>
               )}
               {run.total_cost_usd != null && <span>{formatCost(run.total_cost_usd)}</span>}
             </div>
           )}
         </div>
+        {!isPendingSidebar && (
         <button
           type="button"
           onClick={(e) => {
@@ -261,6 +283,7 @@ function HistoryItem({
         >
           ↻
         </button>
+        )}
       </div>
     </button>
   );
@@ -268,11 +291,11 @@ function HistoryItem({
 
 function ProgressTimeline({ progress }: { progress: LiveProgress }) {
   return (
-    <div className="rounded-2xl border border-base-300/80 bg-gradient-to-br from-base-100 to-base-200/40 p-5 shadow-inner ring-1 ring-base-content/[0.04] animate-msg-enter">
+    <div className="rounded-2xl border border-base-300/80 bg-gradient-to-br from-base-100 to-base-200/40 p-5 shadow-inner ring-1 ring-base-content/[0.1] animate-msg-enter">
       <div className="flex items-center gap-3 mb-5">
         <span className="loading loading-spinner loading-sm text-primary" />
         <span className="text-sm font-medium tracking-tight">{prettyStage(progress.currentStage)}…</span>
-        <span className="ml-auto font-mono-ui text-xs text-base-content/50 tabular-nums">
+        <span className="ml-auto font-mono-ui text-xs text-base-content/75 tabular-nums">
           {progress.elapsed.toFixed(1)}s
         </span>
       </div>
@@ -287,7 +310,7 @@ function ProgressTimeline({ progress }: { progress: LiveProgress }) {
                     ? "bg-success/20 text-success"
                     : st === "active"
                       ? "bg-primary/20 text-primary shadow-sm"
-                      : "bg-base-300/50 text-base-content/25"
+                      : "bg-base-300/65 text-base-content/68"
                 }`}
               >
                 {st === "done" ? "✓" : st === "active" ? "●" : ""}
@@ -295,10 +318,10 @@ function ProgressTimeline({ progress }: { progress: LiveProgress }) {
               <span
                 className={
                   st === "pending"
-                    ? "text-base-content/38"
+                    ? "text-base-content/66"
                     : st === "active"
                       ? "text-base-content font-medium"
-                      : "text-base-content/65"
+                      : "text-base-content/78"
                 }
               >
                 {s.label}
@@ -307,7 +330,7 @@ function ProgressTimeline({ progress }: { progress: LiveProgress }) {
           );
         })}
       </ol>
-      <p className="mt-5 text-[11px] leading-relaxed text-base-content/45 border-t border-base-300/50 pt-4">
+      <p className="mt-5 text-[11px] leading-relaxed text-base-content/70 border-t border-base-300/70 pt-4">
         Adapter calls often take 10–60s while the model searches and drafts an answer.
       </p>
     </div>
@@ -337,20 +360,20 @@ function AnswerBody({ text }: { text: string }) {
 function Citations({ citations }: { citations: Array<Record<string, unknown>> }) {
   if (!citations.length) return null;
   return (
-    <details className="mt-6 rounded-xl border border-base-300/80 bg-base-200/25 shadow-inner ring-1 ring-base-content/[0.03] group open:bg-base-200/35">
-      <summary className="cursor-pointer select-none list-none px-4 py-3 text-sm font-medium text-base-content/85 flex items-center gap-3 hover:bg-base-200/40 rounded-xl transition-colors [&::-webkit-details-marker]:hidden">
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-base-100/80 text-[11px] font-semibold tabular-nums text-base-content/55 ring-1 ring-base-300/60">
+    <details className="mt-6 rounded-xl border border-base-300/80 bg-base-200/45 shadow-inner ring-1 ring-base-content/[0.08] group open:bg-base-200/55">
+      <summary className="cursor-pointer select-none list-none px-4 py-3 text-sm font-medium text-base-content/92 flex items-center gap-3 hover:bg-base-200/40 rounded-xl transition-colors [&::-webkit-details-marker]:hidden">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-base-100/80 text-[11px] font-semibold tabular-nums text-base-content/78 ring-1 ring-base-300/60">
           {citations.length}
         </span>
         <span className="flex-1 min-w-0">
           <span className="block tracking-tight">Sources</span>
-          <span className="block text-[11px] font-normal text-base-content/45 mt-0.5">
+          <span className="block text-[11px] font-normal text-base-content/70 mt-0.5">
             Citations from the indexed codebase
           </span>
         </span>
-        <span className="text-base-content/35 text-xs transition-transform group-open:rotate-90">›</span>
+        <span className="text-base-content/60 text-xs transition-transform group-open:rotate-90">›</span>
       </summary>
-      <ul className="px-3 pb-3 pt-0 flex flex-col gap-2.5 text-sm border-t border-base-300/50">
+      <ul className="px-3 pb-3 pt-0 flex flex-col gap-2.5 text-sm border-t border-base-300/70">
         {citations.map((c, i) => {
           const repo = (c.repo as string) || "";
           const path = (c.path as string) || "";
@@ -361,15 +384,15 @@ function Citations({ citations }: { citations: Array<Record<string, unknown>> })
           return (
             <li
               key={i}
-              className="mt-3 first:mt-3 rounded-lg border border-base-300/55 bg-base-100/70 pl-3 pr-3 py-2.5"
+              className="mt-3 first:mt-3 rounded-lg border border-base-300/75 bg-base-100/85 pl-3 pr-3 py-2.5"
             >
-              <code className="font-mono-ui text-[11px] leading-relaxed text-base-content/80 block break-all">
+              <code className="font-mono-ui text-[11px] leading-relaxed text-base-content/88 block break-all">
                 {repo ? `${repo} / ` : ""}
                 {path}
                 {range}
               </code>
               {snippet && (
-                <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-base-content/72 font-mono-ui bg-base-300/35 rounded-md px-2.5 py-2 overflow-x-auto border border-base-300/40">
+                <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-base-content/83 font-mono-ui bg-base-300/50 rounded-md px-2.5 py-2 overflow-x-auto border border-base-300/65">
                   {snippet}
                 </pre>
               )}
@@ -400,9 +423,9 @@ function MetaStrip({ run }: { run: DisplayedRun }) {
       {items.map((it) => (
         <span
           key={it.label}
-          className="inline-flex items-center gap-1.5 rounded-full bg-base-200/90 px-3 py-1 text-[11px] text-base-content/80 border border-base-300/60 shadow-sm"
+          className="inline-flex items-center gap-1.5 rounded-full bg-base-200/90 px-3 py-1 text-[11px] text-base-content/88 border border-base-300/60 shadow-sm"
         >
-          <span className="text-base-content/40 font-semibold uppercase tracking-wide text-[10px]">
+          <span className="text-base-content/65 font-semibold uppercase tracking-wide text-[10px]">
             {it.label}
           </span>
           <span className="font-mono-ui tabular-nums text-[11px] text-base-content/90">{it.value}</span>
@@ -429,7 +452,7 @@ function CopyButton({ text }: { text: string }) {
       className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
         copied
           ? "border-success/35 bg-success/10 text-success"
-          : "border-base-300/70 bg-base-100/80 text-base-content/70 hover:bg-base-100 hover:border-primary/25 hover:text-base-content"
+          : "border-base-300/70 bg-base-100/80 text-base-content/85 hover:bg-base-100 hover:border-primary/25 hover:text-base-content"
       }`}
       title="Copy answer"
     >
@@ -469,7 +492,7 @@ function ChatTurn({
       {turn.status === "running" && !suppressRunningAssistant && (
         <div className="flex flex-col animate-msg-enter">
           <RoleLabel role="Assistant" align="left" />
-          <p className="text-sm text-base-content/60 pl-1 flex items-center gap-2">
+          <p className="text-sm text-base-content/80 pl-1 flex items-center gap-2">
             <span className="loading loading-dots loading-sm text-primary" />
             Thinking…
           </p>
@@ -480,14 +503,14 @@ function ChatTurn({
           {turn.error ? (
             <pre className="text-xs text-error font-mono-ui whitespace-pre-wrap">{turn.error}</pre>
           ) : (
-            <p className="text-base-content/70">This turn failed.</p>
+            <p className="text-base-content/85">This turn failed.</p>
           )}
         </div>
       )}
       {turn.status === "completed" && (turn.answer?.length ?? 0) > 0 && (
         <div className="flex flex-col animate-msg-enter">
           <RoleLabel role="Assistant" align="left" />
-          <article className="rounded-2xl border border-base-300/70 bg-gradient-to-b from-base-100 to-base-100/95 shadow-lg shadow-base-300/15 overflow-hidden ring-1 ring-base-content/[0.04]">
+          <article className="rounded-2xl border border-base-300/70 bg-gradient-to-b from-base-100 to-base-100/95 shadow-lg shadow-base-300/15 overflow-hidden ring-1 ring-base-content/[0.1]">
             <div className="h-1 bg-gradient-to-r from-primary/50 via-secondary/40 to-primary/30" aria-hidden />
             <div className="px-4 sm:px-5 pt-3.5 pb-3 flex flex-col sm:flex-row sm:items-start gap-3 sm:justify-between border-b border-base-200/80 bg-base-200/20">
               <MetaStrip run={disp} />
@@ -501,7 +524,7 @@ function ChatTurn({
         </div>
       )}
       {turn.status === "completed" && !(turn.answer?.length ?? 0) && (
-        <p className="text-sm text-base-content/50 pl-1">No answer text for this turn.</p>
+        <p className="text-sm text-base-content/75 pl-1">No answer text for this turn.</p>
       )}
     </div>
   );
@@ -516,12 +539,12 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
       <h2 className="font-display text-2xl sm:text-[1.7rem] font-semibold tracking-tight mb-2 text-base-content">
         Ask the codebase
       </h2>
-      <p className="text-sm text-base-content/55 mb-8 max-w-md leading-relaxed">
+      <p className="text-sm text-base-content/78 mb-8 max-w-md leading-relaxed">
         Each sidebar chat is its own session: follow-ups keep prior turns in context. Open a chat to
         continue, or start fresh below.
       </p>
-      <div className="flex flex-col gap-2.5 w-full max-w-lg text-left rounded-2xl border border-base-300/70 bg-base-100/70 p-4 shadow-md ring-1 ring-base-content/[0.03] backdrop-blur-sm">
-        <p className="text-[10px] uppercase tracking-wider text-base-content/40 font-semibold px-0.5">
+      <div className="flex flex-col gap-2.5 w-full max-w-lg text-left rounded-2xl border border-base-300/70 bg-base-100/70 p-4 shadow-md ring-1 ring-base-content/[0.08] backdrop-blur-sm">
+        <p className="text-[10px] uppercase tracking-wider text-base-content/65 font-semibold px-0.5">
           Try
         </p>
         {SUGGESTED_PROMPTS.map((p) => (
@@ -548,6 +571,12 @@ export function App() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<RunListItem[]>([]);
+  /** Shown at top of sidebar until the server lists the new thread (POST /ask is still in flight). */
+  const [sidebarPlaceholder, setSidebarPlaceholder] = useState<{
+    id: string;
+    preview: string;
+    adapter: string;
+  } | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadMessages, setThreadMessages] = useState<RunDetail[]>([]);
   const [threadListLoading, setThreadListLoading] = useState(false);
@@ -563,9 +592,6 @@ export function App() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   /** Skip wiping transcript when re-opening the same thread from the sidebar. */
   const displayedThreadRef = useRef<string | null>(null);
-  /** Count progress polls during an in-flight ask; refresh sidebar every N ticks. */
-  const historyPollDuringProgressRef = useRef(0);
-
   const loadHistory = useCallback(async () => {
     try {
       const rows = await api.listRuns({ mode: "ask", limit: 50, per_thread: true });
@@ -627,6 +653,7 @@ export function App() {
     setProgress(null);
     setOptimisticUser(null);
     displayedThreadRef.current = null;
+    setSidebarPlaceholder(null);
     setForm((f) => ({ ...f, question: "" }));
     window.requestAnimationFrame(() => {
       composerRef.current?.focus();
@@ -635,6 +662,7 @@ export function App() {
   }, []);
 
   const openThread = useCallback(async (tid: string) => {
+    if (tid.startsWith(PENDING_SIDEBAR_PREFIX)) return;
     const gen = ++detailFetchGen.current;
     const prev = displayedThreadRef.current;
     const switching = prev !== null && prev !== tid;
@@ -688,6 +716,13 @@ export function App() {
       setThreadListLoading(false);
       setOptimisticUser(question);
       setForm((f) => ({ ...f, question: "" }));
+      if (!activeThreadId) {
+        setSidebarPlaceholder({
+          id: `${PENDING_SIDEBAR_PREFIX}${submitGen}`,
+          preview: question,
+          adapter: form.adapter,
+        });
+      }
 
       const startedAt = Date.now();
       const sinceIso = new Date(startedAt - 1000).toISOString();
@@ -697,12 +732,8 @@ export function App() {
         currentStage: "engine:structured",
         stagesDone: ["input:blocking", "enrich:(none)"],
       });
-      historyPollDuringProgressRef.current = 0;
       const tick = async () => {
-        historyPollDuringProgressRef.current += 1;
-        if (historyPollDuringProgressRef.current % 6 === 0) {
-          void loadHistory();
-        }
+        void loadHistory();
         try {
           const rows = await api.listRuns({
             mode: "ask",
@@ -735,10 +766,15 @@ export function App() {
         if (!form.adapter) {
           throw new Error("pick an adapter from the dropdown before submitting");
         }
-        const r = await api.adapterAsk(form.adapter, {
+        const askPromise = api.adapterAsk(form.adapter, {
           query: question,
           ...(activeThreadId ? { thread_id: activeThreadId } : {}),
         });
+        void loadHistory();
+        queueMicrotask(() => void loadHistory());
+        window.setTimeout(() => void loadHistory(), 280);
+        window.setTimeout(() => void loadHistory(), 750);
+        const r = await askPromise;
         askCompleted = true;
         if (submitGen !== detailFetchGen.current) return;
         setActiveThreadId(r.thread_id);
@@ -762,6 +798,7 @@ export function App() {
         setProgress(null);
         setOptimisticUser(null);
         setSubmitting(false);
+        setSidebarPlaceholder(null);
       }
     },
     [form, submitting, loadHistory, adapters, adapterListHydrated, activeThreadId],
@@ -789,7 +826,21 @@ export function App() {
     [loadHistory],
   );
 
-  const historyGroups = useMemo(() => groupHistoryByDay(history), [history]);
+  const historyWithPlaceholder = useMemo(() => {
+    if (!sidebarPlaceholder) return history;
+    const preview = sidebarPlaceholder.preview.trim();
+    const serverCaughtUp = history.some(
+      (h) =>
+        h.status === "running" && (h.input_preview ?? "").trim() === preview,
+    );
+    if (serverCaughtUp) return history;
+    return [phantomHistoryRow(sidebarPlaceholder), ...history];
+  }, [history, sidebarPlaceholder]);
+
+  const historyGroups = useMemo(
+    () => groupHistoryByDay(historyWithPlaceholder),
+    [historyWithPlaceholder],
+  );
 
   useEffect(() => {
     const el = threadRef.current;
@@ -801,7 +852,7 @@ export function App() {
     <div className="app-surface min-h-screen text-base-content">
       <div className="app-grain" aria-hidden />
       <div className="app-shell-content grid grid-cols-1 md:grid-cols-[minmax(17rem,20rem)_1fr] h-screen min-h-0">
-        <aside className="min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-base-300/90 bg-base-100/80 backdrop-blur-md">
+        <aside className="min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-base-300 bg-base-100/92 backdrop-blur-md">
           <div className="px-4 pt-4 pb-3 border-b border-base-300/80 bg-base-200/15">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary/25 to-secondary/10 text-base font-display font-semibold text-primary shadow-sm ring-1 ring-primary/20">
@@ -809,7 +860,7 @@ export function App() {
               </div>
               <div className="min-w-0 pt-0.5">
                 <p className="font-display text-lg font-semibold tracking-tight leading-tight">decomp</p>
-                <p className="text-[11px] text-base-content/50 mt-0.5">Multi-repo Q&amp;A</p>
+                <p className="text-[11px] text-base-content/75 mt-0.5">Multi-repo Q&amp;A</p>
               </div>
             </div>
           </div>
@@ -825,13 +876,13 @@ export function App() {
           </div>
 
           <div className="px-3 pt-3 pb-1 flex items-center justify-between">
-            <h2 className="text-[10px] font-bold uppercase tracking-widest text-base-content/45">
+            <h2 className="text-[10px] font-bold uppercase tracking-widest text-base-content/70">
               History
             </h2>
             <button
               type="button"
               onClick={loadHistory}
-              className="btn btn-ghost btn-xs btn-square text-base-content/50"
+              className="btn btn-ghost btn-xs btn-square text-base-content/75"
               aria-label="Refresh history"
               title="Refresh now (also updates every 15s while this tab is visible)"
             >
@@ -840,15 +891,15 @@ export function App() {
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-4">
-            {history.length === 0 ? (
-              <p className="text-xs text-base-content/50 px-2 py-6 leading-relaxed">
+            {historyWithPlaceholder.length === 0 ? (
+              <p className="text-xs text-base-content/75 px-2 py-6 leading-relaxed">
                 No runs yet. Ask a question in the composer — it will show up here.
               </p>
             ) : (
               <div className="flex flex-col gap-4">
                 {historyGroups.map((g) => (
                   <div key={g.label}>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-base-content/40 px-1.5 mb-1.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-base-content/65 px-1.5 mb-1.5">
                       {g.label}
                     </p>
                     <ul className="flex flex-col gap-1.5">
@@ -856,7 +907,12 @@ export function App() {
                         <li key={r.id}>
                           <HistoryItem
                             run={r}
-                            selected={threadKey(r) === activeThreadId}
+                            selected={
+                              threadKey(r) === activeThreadId ||
+                              (sidebarPlaceholder != null &&
+                                activeThreadId == null &&
+                                threadKey(r) === sidebarPlaceholder.id)
+                            }
                             onSelect={openThread}
                             onReplay={handleReplay}
                           />
@@ -870,15 +926,15 @@ export function App() {
           </div>
         </aside>
 
-        <main className="min-h-0 flex flex-col h-full min-w-0 bg-base-200/25">
-          <header className="shrink-0 border-b border-base-300/70 bg-base-100/45 backdrop-blur-md shadow-sm shadow-base-300/10 px-4 sm:px-6 py-3 sm:py-4">
+        <main className="min-h-0 flex flex-col h-full min-w-0 bg-base-200/40">
+          <header className="shrink-0 border-b border-base-300/80 bg-base-100/70 backdrop-blur-md shadow-sm shadow-base-300/10 px-4 sm:px-6 py-3 sm:py-4">
             <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight">
               Workspace
             </h1>
-            <p className="text-xs text-base-content/50 mt-1 leading-relaxed max-w-2xl">
+            <p className="text-xs text-base-content/75 mt-1 leading-relaxed max-w-2xl">
               Ask with follow-ups in one thread. History on the left keeps prior sessions.
             </p>
-            <p className="text-[11px] text-base-content/45 mt-2 border-t border-base-300/50 pt-2">
+            <p className="text-[11px] text-base-content/70 mt-2 border-t border-base-300/70 pt-2">
               {activeThreadId
                 ? "Follow-ups use this thread — prior turns are sent as context."
                 : pickedAdapter
@@ -928,7 +984,7 @@ export function App() {
 
               <section className="flex flex-col gap-6">
                 {threadListLoading && threadMessages.length === 0 && !submitting && (
-                  <div className="rounded-2xl border border-base-300 bg-base-100/90 p-6 flex items-center gap-3 text-sm text-base-content/70 shadow-sm">
+                  <div className="rounded-2xl border border-base-300 bg-base-100/90 p-6 flex items-center gap-3 text-sm text-base-content/85 shadow-sm">
                     <span className="loading loading-spinner loading-sm text-primary" />
                     Loading chat…
                   </div>
@@ -985,11 +1041,11 @@ export function App() {
                   }
                 }}
                 rows={3}
-                className="w-full p-4 bg-transparent text-sm resize-y min-h-18 focus:outline-none placeholder:text-base-content/35"
+                className="w-full p-4 bg-transparent text-sm resize-y min-h-18 focus:outline-none placeholder:text-base-content/52"
               />
               <div className="flex items-center gap-3 flex-wrap px-3 py-2.5 border-t border-base-200/90 bg-base-200/20 rounded-b-2xl">
                 {adapters.length > 1 && (
-                  <label className="flex items-center gap-2 text-[11px] text-base-content/55 font-medium">
+                  <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
                     <span>Adapter</span>
                     <select
                       className="select select-bordered select-xs rounded-lg"
@@ -1010,7 +1066,7 @@ export function App() {
                     </select>
                   </label>
                 )}
-                <span className="text-[10px] text-base-content/40 hidden sm:inline ml-auto sm:ml-0">
+                <span className="text-[10px] text-base-content/65 hidden sm:inline ml-auto sm:ml-0">
                   ⌘↵ send
                 </span>
                 <button
