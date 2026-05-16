@@ -9,18 +9,15 @@ import httpx
 
 from ..models import Decomposition
 from ._extract_json import extract_json
-from ._prompts import DECOMPOSE_PREAMBLE, IMPLEMENT_PREAMBLE, subtask_prompt, query_blob
+from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
     AdapterDecomposeInput,
     AdapterDecomposeResult,
-    AdapterImplementInput,
-    AdapterImplementResult,
     AdapterMetrics,
     Capability,
-    ImplementContext,
 )
 
 
@@ -39,17 +36,10 @@ _DECOMPOSE_SYSTEM = (
     "markdown fences."
 )
 
-_IMPLEMENT_SYSTEM = (
-    "You are implementing a single subtask inside a clean git worktree at the "
-    "working directory. Edit only files inside this directory. Do not commit, "
-    "push, or open MRs — that's handled by the surrounding system after you "
-    "finish."
-)
-
 
 class ClineSDKAdapter(Adapter):
     name = "cline_sdk"
-    capabilities: set[Capability] = {"ask", "decompose", "implement"}
+    capabilities: set[Capability] = {"ask", "decompose"}
     description = (
         "Cline via @cline/sdk in agent-node. Token/cost from the SDK. Local "
         "read_workspace_file and grep_workspace use cwd on agent-node; optional "
@@ -111,28 +101,6 @@ class ClineSDKAdapter(Adapter):
             adapter=self.name,
             decomposition=decomp,
             markdown=answer,
-            metrics=_metrics_from(out, t),
-        )
-
-    async def implement(
-        self, inp: AdapterImplementInput, ctx: ImplementContext,
-    ) -> AdapterImplementResult:
-        t = time.monotonic()
-        out = await self._run(
-            system=_IMPLEMENT_SYSTEM,
-            prompt=IMPLEMENT_PREAMBLE + subtask_prompt(inp),
-            cwd=ctx.worktree_path,
-            timeout_seconds=self.settings.agent_node_timeout_seconds,
-            enable_find_code=False,
-        )
-        answer = out.get("answer") or ""
-        return AdapterImplementResult(
-            adapter=self.name,
-            mr_url=None,
-            branch=ctx.branch,
-            commits=[],
-            diff_summary=answer[-1000:].strip(),
-            files_changed=[],
             metrics=_metrics_from(out, t),
         )
 

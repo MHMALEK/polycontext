@@ -71,7 +71,7 @@ async function jsonReq<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ---- Adapter bake-off shapes (mirror src/tech_decomposition/adapters/base.py)
 
-export type Capability = "ask" | "decompose" | "implement";
+export type Capability = "ask" | "decompose";
 
 export interface AdapterInfo {
   name: string;
@@ -101,16 +101,12 @@ export interface BakeoffItem {
     answer?: string;
     markdown?: string;
     decomposition?: Record<string, unknown>;
-    mr_url?: string | null;
-    branch?: string;
-    diff_summary?: string;
     citations?: Array<Record<string, unknown>>;
-    files_changed?: string[];
     metrics: AdapterMetrics;
   };
 }
 
-// Shape returned by POST /v1/adapters/{name}/{ask,decompose,implement}.
+// Shape returned by POST /v1/adapters/{name}/{ask,decompose}.
 export interface AdapterCallResponse {
   run_id: string;
   thread_id: string;
@@ -119,11 +115,7 @@ export interface AdapterCallResponse {
     answer?: string;
     markdown?: string;
     decomposition?: Record<string, unknown>;
-    mr_url?: string | null;
-    branch?: string;
-    diff_summary?: string;
     citations?: Array<Record<string, unknown>>;
-    files_changed?: string[];
     metrics: AdapterMetrics;
   };
 }
@@ -189,7 +181,7 @@ export const api = {
   listAdapters: () => jsonReq<{ adapters: AdapterInfo[] }>("/v1/adapters"),
 
   bakeoff: (
-    job: "ask" | "decompose" | "implement",
+    job: "ask" | "decompose",
     body: {
       adapters: string[];
       ask?: { query: string; repos?: string[]; top_k?: number };
@@ -197,14 +189,6 @@ export const api = {
         query?: string;
         repos?: string[];
         mode?: "cheap" | "deep" | "auto";
-      };
-      implement?: {
-        repo: string;
-        free_text?: string;
-        subtask?: Record<string, unknown>;
-        base_branch?: string;
-        ticket_key?: string;
-        draft?: boolean;
       };
     },
   ) =>

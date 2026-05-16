@@ -12,18 +12,15 @@ import httpx
 
 from ..models import Decomposition
 from ._extract_json import extract_json
-from ._prompts import DECOMPOSE_PREAMBLE, IMPLEMENT_PREAMBLE, subtask_prompt, query_blob
+from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
     AdapterDecomposeInput,
     AdapterDecomposeResult,
-    AdapterImplementInput,
-    AdapterImplementResult,
     AdapterMetrics,
     Capability,
-    ImplementContext,
 )
 
 _ASK_SYSTEM = (
@@ -36,15 +33,11 @@ _DECOMPOSE_SYSTEM = (
     "You decompose tasks into structured tech work. Output exactly one "
     "JSON object matching the schema in the user message — no prose, no fences."
 )
-_IMPLEMENT_SYSTEM = (
-    "You are guiding implementation in a git worktree. Do not commit, push, "
-    "or open pull requests."
-)
 
 
 class GeminiAdapter(Adapter):
     name = "gemini"
-    capabilities: set[Capability] = {"ask", "decompose", "implement"}
+    capabilities: set[Capability] = {"ask", "decompose"}
     description = (
         "Google Gemini via agent-node (`@google/genai`): CallableTool + automatic function "
         "calling for workspace reads when cwd is set."
@@ -105,29 +98,6 @@ class GeminiAdapter(Adapter):
             decomposition=decomp,
             markdown=answer,
             metrics=_metrics_from(out, t),
-        )
-
-    async def implement(self, inp: AdapterImplementInput, ctx: ImplementContext) -> AdapterImplementResult:
-        t0 = time.monotonic()
-        worktree_note = (
-            f"\n\nWorktree directory (read-only context for paths): {ctx.worktree_path}\n"
-        )
-        out = await self._run(
-            system=_IMPLEMENT_SYSTEM,
-            prompt=IMPLEMENT_PREAMBLE + worktree_note + subtask_prompt(inp),
-            model_id=self.settings.gemini_sdk_model,
-            timeout_seconds=float(self.settings.gemini_sdk_timeout_seconds),
-            cwd=ctx.worktree_path,
-        )
-        answer = out.get("answer") or ""
-        return AdapterImplementResult(
-            adapter=self.name,
-            mr_url=None,
-            branch=ctx.branch,
-            commits=[],
-            diff_summary=answer[-1000:].strip(),
-            files_changed=[],
-            metrics=_metrics_from(out, t0),
         )
 
     def _cwd_for_repos(self, repos: list[str] | None) -> Path:

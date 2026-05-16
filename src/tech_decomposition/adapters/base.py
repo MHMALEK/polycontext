@@ -1,11 +1,10 @@
 """Adapter contract: a uniform surface over heterogeneous code agents.
 
 Every registered adapter (e.g. Cursor SDK, Cline SDK, Sourcebot) implements some subset
-of three methods:
+of two methods:
 
     ask        — code Q&A
     decompose  — ticket → structured subtasks
-    implement  — task → GitLab MR
 
 Capabilities are declared at the class level so the registry and router can
 report what's supported without instantiating every backend. Methods that an
@@ -19,15 +18,14 @@ interface — most will just ``return`` synchronously from an ``async def``.
 from __future__ import annotations
 
 from abc import ABC
-from pathlib import Path
 from typing import ClassVar, Literal
 
 from pydantic import BaseModel, Field
 
-from ..models import Decomposition, Snippet, Subtask
+from ..models import Decomposition, Snippet
 
 
-Capability = Literal["ask", "decompose", "implement"]
+Capability = Literal["ask", "decompose"]
 
 
 class NotSupported(Exception):
@@ -105,57 +103,6 @@ class AdapterDecomposeResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# implement
-# ---------------------------------------------------------------------------
-
-
-class AdapterImplementInput(BaseModel):
-    """A single piece of work the adapter should turn into a branch + MR.
-
-    Exactly one of (subtask, free_text) must be set. ``repo`` names a key in
-    ``settings.gitlab_projects``; the wrapper resolves it to a worktree path
-    before calling the adapter.
-    """
-
-    repo: str = Field(min_length=1)
-    subtask: Subtask | None = None
-    free_text: str | None = Field(
-        default=None,
-        description="Plain-English task description, used when no Subtask is available.",
-    )
-    base_branch: str = "main"
-    ticket_key: str | None = None
-    draft: bool = True
-
-
-class AdapterImplementResult(BaseModel):
-    adapter: str
-    mr_url: str | None = None
-    branch: str
-    commits: list[str] = Field(default_factory=list)
-    diff_summary: str = ""
-    files_changed: list[str] = Field(default_factory=list)
-    metrics: AdapterMetrics = Field(default_factory=AdapterMetrics)
-
-
-class ImplementContext(BaseModel):
-    """Resolved state passed from the wrapper to the adapter.
-
-    The wrapper provisions a worktree at ``worktree_path`` (a fresh branch off
-    ``base_branch``) before invoking the adapter. The adapter's job is purely
-    to edit files inside that directory; commit, push, and MR creation are
-    handled by the shared wrapper (``core.implement.run_implement``).
-    """
-
-    worktree_path: Path
-    branch: str
-    repo: str
-    base_branch: str
-
-    model_config = {"arbitrary_types_allowed": True}
-
-
-# ---------------------------------------------------------------------------
 # Adapter base class
 # ---------------------------------------------------------------------------
 
@@ -187,27 +134,13 @@ class Adapter(ABC):
     def __init__(self, settings):
         self.settings = settings
 
-    # ----- the three operations --------------------------------------------
+    # ----- the two operations ----------------------------------------------
 
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         raise NotSupported(self.name, "ask")
 
     async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
         raise NotSupported(self.name, "decompose")
-
-    async def implement(
-        self,
-        inp: AdapterImplementInput,
-        ctx: ImplementContext,
-    ) -> AdapterImplementResult:
-        """Edit files inside ``ctx.worktree_path`` to satisfy ``inp``.
-
-        The adapter MUST NOT commit, push, or open an MR — the wrapper does
-        all that. The adapter SHOULD only touch files under
-        ``ctx.worktree_path``. The returned ``files_changed`` list is
-        advisory; the wrapper checks git status to compute the real diff.
-        """
-        raise NotSupported(self.name, "implement")
 
     # ----- introspection ----------------------------------------------------
 

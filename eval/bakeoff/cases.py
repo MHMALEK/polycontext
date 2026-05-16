@@ -5,7 +5,6 @@ to whatever was easiest to author by hand:
 
   * **ask**       — ``eval/questions.toml`` (already existed; we just read it)
   * **decompose** — one YAML per case in ``eval/cases/decompose/``
-  * **implement** — one YAML per case in ``eval/cases/implement/``
 
 Each loaded case has a stable ``Case`` shape regardless of source format, so
 the runner and scorer don't care where it came from.
@@ -20,7 +19,7 @@ from typing import Any, Literal
 import yaml
 
 
-Job = Literal["ask", "decompose", "implement"]
+Job = Literal["ask", "decompose"]
 
 
 @dataclass
@@ -71,7 +70,7 @@ def load_ask_cases(toml_path: Path) -> list[Case]:
 
 
 # ---------------------------------------------------------------------------
-# decompose / implement — YAML, one file per case
+# decompose — YAML, one file per case
 # ---------------------------------------------------------------------------
 
 
@@ -105,12 +104,10 @@ def discover_cases(eval_dir: Path) -> list[Case]:
     Layout:
         eval/questions.toml          → ask cases
         eval/cases/decompose/*.yaml  → decompose cases
-        eval/cases/implement/*.yaml  → implement cases
     """
     cases: list[Case] = []
     cases.extend(load_ask_cases(eval_dir / "questions.toml"))
     cases.extend(load_yaml_cases(eval_dir / "cases" / "decompose", "decompose"))
-    cases.extend(load_yaml_cases(eval_dir / "cases" / "implement", "implement"))
     return cases
 
 

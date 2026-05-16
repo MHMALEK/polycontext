@@ -133,8 +133,6 @@ def _response_preview(rec: dict[str, Any]) -> str:
         d = r.get("decomposition") or {}
         st = d.get("subtasks") or []
         return f"{len(st)} subtasks, repos: {', '.join((d.get('affected_repos') or [])[:3])}"
-    if job == "implement":
-        return f"branch=`{r.get('branch', '?')}` files={len(r.get('files_changed') or [])} mr={r.get('mr_url') or '—'}"
     return ""
 
 

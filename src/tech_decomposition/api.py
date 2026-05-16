@@ -3,7 +3,7 @@
 Endpoints:
     GET  /health
     GET  /v1/adapters
-    POST /v1/adapters/{name}/{ask|decompose|implement}
+    POST /v1/adapters/{name}/{ask|decompose}
     POST /v1/bakeoff/{job}
     GET  /runs, /runs/{id}, POST /runs/{id}/replay
 
@@ -28,14 +28,12 @@ from pydantic import BaseModel, Field
 from .adapters import (
     AdapterAskInput,
     AdapterDecomposeInput,
-    AdapterImplementInput,
     NotSupported,
     get_adapter,
     list_adapters,
 )
 from .config import get_settings
 from .core.context import RunContext
-from .core.implement_runner import run_implement
 from .core.runstore import RunStore, open_default_store
 
 
@@ -420,59 +418,6 @@ async def adapter_decompose(name: str, inp: AdapterDecomposeInput) -> dict[str, 
     return {"run_id": ctx.run_id, "result": result.model_dump()}
 
 
-@app.post("/v1/adapters/{name}/implement")
-async def adapter_implement(name: str, inp: AdapterImplementInput) -> dict[str, Any]:
-    adapter = _resolve_adapter(name)
-    if not adapter.supports("implement"):
-        raise HTTPException(status_code=501, detail=f"adapter {name!r} does not support implement")
-    store = open_default_store(get_settings())
-    ctx = RunContext(settings=get_settings(), mode="implement")
-    try:
-        try:
-            result = await run_implement(
-                adapter=adapter, inp=inp, settings=get_settings(), run_id=ctx.run_id,
-            )
-        except NotSupported as e:
-            raise HTTPException(status_code=501, detail=str(e)) from e
-        except Exception as e:
-            store.record(run_id=ctx.run_id, mode="implement", status="failed",
-                         input_ref=inp.model_dump(), engine=f"{name}:implement",
-                         error=f"{type(e).__name__}: {e}")
-            raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
-        imp_lines: list[str] = []
-        if result.mr_url:
-            imp_lines.append(f"**Merge request:** {result.mr_url}")
-        if result.branch:
-            imp_lines.append(f"**Branch:** `{result.branch}`")
-        if result.files_changed:
-            tail = ", ".join(f"`{f}`" for f in result.files_changed[:24])
-            imp_lines.append(f"**Files:** {tail}")
-        if result.diff_summary:
-            imp_lines.append(result.diff_summary.strip())
-        imp_body = "\n\n".join(imp_lines) if imp_lines else "_(implement completed)_"
-        im = result.metrics
-        store.record(
-            run_id=ctx.run_id, mode="implement", status="completed",
-            input_ref=inp.model_dump(), engine=f"{name}:implement",
-            answer=imp_body,
-            citations=[],
-            payload={
-                "mr_url": result.mr_url,
-                "branch": result.branch,
-                "commits": result.commits,
-                "files_changed": result.files_changed,
-            },
-            model=im.model,
-            total_seconds=(im.duration_ms / 1000.0) if im.duration_ms else None,
-            total_cost_usd=im.cost_usd,
-            input_tokens=im.tokens_in,
-            output_tokens=im.tokens_out,
-        )
-    finally:
-        store.close()
-    return {"run_id": ctx.run_id, "result": result.model_dump()}
-
-
 # ---------------------------------------------------------------------------
 # /v1/bakeoff — fan-out across N adapters
 # ---------------------------------------------------------------------------
@@ -482,11 +427,10 @@ class BakeoffBody(BaseModel):
     adapters: list[str] = Field(min_length=1)
     ask: AdapterAskInput | None = None
     decompose: AdapterDecomposeInput | None = None
-    implement: AdapterImplementInput | None = None
 
 
 @app.post("/v1/bakeoff/{job}")
-async def bakeoff(job: Literal["ask", "decompose", "implement"], body: BakeoffBody) -> dict[str, Any]:
+async def bakeoff(job: Literal["ask", "decompose"], body: BakeoffBody) -> dict[str, Any]:
     """Run the same input through every named adapter sequentially.
 
     Sequential rather than parallel because some backends share resources
@@ -499,7 +443,6 @@ async def bakeoff(job: Literal["ask", "decompose", "implement"], body: BakeoffBo
         raise HTTPException(status_code=400, detail=f"body.{job} is required for job={job!r}")
 
     results: list[dict[str, Any]] = []
-    settings = get_settings()
     for name in body.adapters:
         try:
             adapter = _resolve_adapter(name)
@@ -509,11 +452,8 @@ async def bakeoff(job: Literal["ask", "decompose", "implement"], body: BakeoffBo
         try:
             if job == "ask":
                 r = await adapter.ask(inp)
-            elif job == "decompose":
-                r = await adapter.decompose(inp)
             else:
-                r = await run_implement(adapter=adapter, inp=inp, settings=settings,
-                                         run_id=f"bo-{name}-{asyncio.get_event_loop().time():.0f}")
+                r = await adapter.decompose(inp)
             results.append({"adapter": name, "ok": True, "result": r.model_dump()})
         except NotSupported as e:
             results.append({"adapter": name, "ok": False, "error": str(e), "status": 501})

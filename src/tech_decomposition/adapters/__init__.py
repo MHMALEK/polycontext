@@ -1,8 +1,8 @@
 """Pluggable agent backends behind a uniform interface.
 
-Each adapter implements some subset of (ask, decompose, implement). The
-registry exposes them by name so the API can route requests to any installed
-backend. See ``base.Adapter`` for the contract and ``registry`` for discovery.
+Each adapter implements some subset of (ask, decompose). The registry exposes
+them by name so the API can route requests to any installed backend. See
+``base.Adapter`` for the contract and ``registry`` for discovery.
 """
 from .base import (
     Adapter,
@@ -10,8 +10,6 @@ from .base import (
     AdapterAskResult,
     AdapterDecomposeInput,
     AdapterDecomposeResult,
-    AdapterImplementInput,
-    AdapterImplementResult,
     AdapterMetrics,
     Capability,
     NotSupported,
@@ -24,8 +22,6 @@ __all__ = [
     "AdapterAskResult",
     "AdapterDecomposeInput",
     "AdapterDecomposeResult",
-    "AdapterImplementInput",
-    "AdapterImplementResult",
     "AdapterMetrics",
     "Capability",
     "NotSupported",

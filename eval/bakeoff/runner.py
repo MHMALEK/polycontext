@@ -69,15 +69,6 @@ def _case_input_for_adapter(case: Case) -> dict[str, Any]:
             "repos": case.input.get("repos"),
             "mode": case.input.get("mode", "auto"),
         }
-    if case.job == "implement":
-        return {
-            "repo": case.input["repo"],
-            "free_text": case.input.get("free_text"),
-            "subtask": case.input.get("subtask"),
-            "base_branch": case.input.get("base_branch", "main"),
-            "ticket_key": case.input.get("ticket_key"),
-            "draft": case.input.get("draft", True),
-        }
     raise ValueError(f"unsupported job: {case.job!r}")
 
 

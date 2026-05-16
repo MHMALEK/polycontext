@@ -15,18 +15,15 @@ import httpx
 
 from ..models import Decomposition
 from ._extract_json import extract_json
-from ._prompts import DECOMPOSE_PREAMBLE, IMPLEMENT_PREAMBLE, subtask_prompt, query_blob
+from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
     AdapterDecomposeInput,
     AdapterDecomposeResult,
-    AdapterImplementInput,
-    AdapterImplementResult,
     AdapterMetrics,
     Capability,
-    ImplementContext,
 )
 
 _ASK_SYSTEM = (
@@ -38,15 +35,11 @@ _DECOMPOSE_SYSTEM = (
     "You produce tech work breakdowns grounded in workspace tools. Prefer structured "
     "output enforced by schema; paths must correspond to checked-out repositories."
 )
-_IMPLEMENT_SYSTEM = (
-    "Implement the subtask inside the isolated git worktree at the cwd. Edit only "
-    "files within that directory. Do not commit, push, or open MRs."
-)
 
 
 class OpencodeSDKAdapter(Adapter):
     name = "opencode"
-    capabilities: set[Capability] = {"ask", "decompose", "implement"}
+    capabilities: set[Capability] = {"ask", "decompose"}
     description = (
         "OpenCode via @opencode-ai/sdk v2 (agent-node). Structured JSON decomposition; "
         "set OPENCODE_SDK_BASE_URL to connect to an existing server (recommended)."
@@ -130,32 +123,6 @@ class OpencodeSDKAdapter(Adapter):
             adapter=self.name,
             decomposition=decomp,
             markdown=raw,
-            metrics=_metrics_from(out, t),
-        )
-
-    async def implement(
-        self, inp: AdapterImplementInput, ctx: ImplementContext,
-    ) -> AdapterImplementResult:
-        t = time.monotonic()
-        pid, ak = self._credentials_for_model()
-        out = await self._run(
-            system=_IMPLEMENT_SYSTEM,
-            prompt=IMPLEMENT_PREAMBLE + subtask_prompt(inp),
-            cwd=ctx.worktree_path,
-            timeout_seconds=self.settings.agent_node_timeout_seconds,
-            structured=False,
-            provider_id=pid,
-            api_key=ak,
-            structured_retry=self.settings.opencode_sdk_structured_retry_count,
-        )
-        raw = out.get("answer") or ""
-        return AdapterImplementResult(
-            adapter=self.name,
-            mr_url=None,
-            branch=ctx.branch,
-            commits=[],
-            diff_summary=raw[-1000:].strip(),
-            files_changed=[],
             metrics=_metrics_from(out, t),
         )
 

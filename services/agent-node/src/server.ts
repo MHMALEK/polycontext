@@ -22,12 +22,12 @@ fastify.get("/health", async () => ({
 
 fastify.get("/adapters", async () => ({
   adapters: [
-    { name: "cursor", capabilities: ["ask", "decompose", "implement"] },
-    { name: "cline_sdk", capabilities: ["ask", "decompose", "implement"] },
-    { name: "claude_code", capabilities: ["ask", "decompose", "implement"] },
-    { name: "gemini", capabilities: ["ask", "decompose", "implement"] },
-    { name: "openai_agents", capabilities: ["ask", "decompose", "implement"] },
-    { name: "opencode", capabilities: ["ask", "decompose", "implement"] },
+    { name: "cursor", capabilities: ["ask", "decompose"] },
+    { name: "cline_sdk", capabilities: ["ask", "decompose"] },
+    { name: "claude_code", capabilities: ["ask", "decompose"] },
+    { name: "gemini", capabilities: ["ask", "decompose"] },
+    { name: "openai_agents", capabilities: ["ask", "decompose"] },
+    { name: "opencode", capabilities: ["ask", "decompose"] },
     { name: "sourcebot", capabilities: ["ask"] },
   ],
 }));

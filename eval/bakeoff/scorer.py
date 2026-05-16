@@ -41,8 +41,6 @@ def score_response(*, case: Case, response: dict[str, Any]) -> Score:
         return _score_ask(case, response)
     if case.job == "decompose":
         return _score_decompose(case, response)
-    if case.job == "implement":
-        return _score_implement(case, response)
     return Score(notes=f"no scorer for job={case.job}")
 
 
@@ -170,64 +168,6 @@ def _score_decompose(case: Case, resp: dict[str, Any]) -> Score:
             ok=any(substr in f for f in files),
             detail=substr,
             weight=1.5,
-        ))
-
-    return _aggregate(checks)
-
-
-# ---------------------------------------------------------------------------
-# implement
-# ---------------------------------------------------------------------------
-
-
-def _score_implement(case: Case, resp: dict[str, Any]) -> Score:
-    """Rubric for code-change runs.
-
-    Expected fields in ``case.expected``:
-      * ``min_files_changed``    — int, default 1
-      * ``must_touch_paths``     — list[str], path substrings to require
-      * ``must_not_touch_paths`` — list[str], path substrings that should NOT change
-      * ``require_mr``           — bool, default False (set true when GITLAB_TOKEN is set)
-    """
-    expected = case.expected or {}
-    files = resp.get("files_changed") or []
-    branch = resp.get("branch") or ""
-    mr_url = resp.get("mr_url")
-    checks: list[Check] = []
-
-    checks.append(Check(
-        name="produced_branch",
-        ok=bool(branch),
-        detail=branch,
-        weight=1.0,
-    ))
-    checks.append(Check(
-        name="changed_files_min",
-        ok=len(files) >= int(expected.get("min_files_changed", 1)),
-        detail=f"{len(files)} files",
-        weight=1.5,
-    ))
-    if expected.get("require_mr"):
-        checks.append(Check(
-            name="opened_mr",
-            ok=bool(mr_url),
-            detail=mr_url or "(no MR URL)",
-            weight=2.0,
-        ))
-
-    for substr in expected.get("must_touch_paths", []) or []:
-        checks.append(Check(
-            name=f"touches[{substr}]",
-            ok=any(substr in f for f in files),
-            detail=substr,
-            weight=2.0,
-        ))
-    for substr in expected.get("must_not_touch_paths", []) or []:
-        checks.append(Check(
-            name=f"avoids[{substr}]",
-            ok=not any(substr in f for f in files),
-            detail=substr,
-            weight=1.0,
         ))
 
     return _aggregate(checks)

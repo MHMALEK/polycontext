@@ -169,7 +169,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def _common_run_filters(sp):
-        sp.add_argument("--job", choices=["ask", "decompose", "implement"], default=None)
+        sp.add_argument("--job", choices=["ask", "decompose"], default=None)
         sp.add_argument("--ids", nargs="+", default=None, help="case id allowlist")
         sp.add_argument("--tags", nargs="+", default=None, help="tag intersection filter")
 
