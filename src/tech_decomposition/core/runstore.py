@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .pipeline import PipelineRun
 
 
 _SCHEMA = """
@@ -158,7 +157,6 @@ class RunStore:
         status: str,
         input_ref: Any,
         output_format: str | None = None,
-        pipeline_run: PipelineRun | None = None,
         engine: str | None = None,
         error: str | None = None,
         created_at: str | None = None,
@@ -175,57 +173,31 @@ class RunStore:
     ) -> None:
         """Insert (or replace) a row for this run.
 
-        ``engine`` may be supplied directly when there's no PipelineRun — used
-        by the adapter bake-off routes which record a tag like ``cline_sdk:ask``
-        without running through the legacy Pipeline class.
-
-        When ``pipeline_run`` is omitted (HTTP adapter path), pass
-        ``answer`` / metrics fields explicitly so history and GET /runs/:id
-        can replay the saved response.
+        Caller passes the answer + metrics fields directly so history and
+        GET /runs/:id can replay the saved response.
         """
-        model_val: str | None = None
-        answer_val: str | None = None
+        model_val: str | None = model
+        answer_val: str | None = answer
         citations_json: str | None = None
         payload_json: str | None = None
-        total_seconds_val: float | None = None
-        total_cost_usd_val: float | None = None
-        input_tokens_val: int | None = None
-        output_tokens_val: int | None = None
+        total_seconds_val: float | None = total_seconds
+        total_cost_usd_val: float | None = total_cost_usd
+        input_tokens_val: int | None = input_tokens
+        output_tokens_val: int | None = output_tokens
         input_preview_val: str | None = input_preview
 
-        if pipeline_run is not None:
-            er = pipeline_run.engine_result
-            engine = engine or er.engine
-            model_val = er.model
-            answer_val = er.answer_markdown
-            citations_json = json.dumps(er.citations or [])
-            payload_json = json.dumps(er.payload or {})
-            total_seconds_val = pipeline_run.total_seconds
-            total_cost_usd_val = er.cost_usd
-            input_tokens_val = er.input_tokens
-            output_tokens_val = er.output_tokens
-            input_preview_val = (
-                pipeline_run.loaded.title or pipeline_run.loaded.body or ""
-            )[:160].strip()
-        else:
-            model_val = model
-            answer_val = answer
-            total_seconds_val = total_seconds
-            total_cost_usd_val = total_cost_usd
-            input_tokens_val = input_tokens
-            output_tokens_val = output_tokens
-            if citations is not None:
-                serialized: list[Any] = []
-                for c in citations:
-                    if hasattr(c, "model_dump"):
-                        serialized.append(c.model_dump(mode="json"))
-                    elif isinstance(c, dict):
-                        serialized.append(c)
-                    else:
-                        serialized.append(dict(c))
-                citations_json = json.dumps(serialized, default=str)
-            if payload is not None:
-                payload_json = json.dumps(payload, default=str)
+        if citations is not None:
+            serialized: list[Any] = []
+            for c in citations:
+                if hasattr(c, "model_dump"):
+                    serialized.append(c.model_dump(mode="json"))
+                elif isinstance(c, dict):
+                    serialized.append(c)
+                else:
+                    serialized.append(dict(c))
+            citations_json = json.dumps(serialized, default=str)
+        if payload is not None:
+            payload_json = json.dumps(payload, default=str)
         self._conn.execute(
             """
             INSERT OR REPLACE INTO runs
