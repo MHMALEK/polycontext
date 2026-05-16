@@ -14,10 +14,8 @@ from ..engines.sourcebot import SourcebotEngine
 from ..enrichers.cheap import CheapEnricher
 from ..inputs.raw import RawQuestionSource
 from ..inputs.text_file import TextFileSource
-from ..renderers.html import HtmlRenderer
 from ..renderers.markdown import MarkdownRenderer
 from ..renderers.passthrough import PassthroughMarkdownRenderer
-from ..renderers.text import TextRenderer
 from ..sinks.cli import CLISink
 from ..sinks.file import FileSink
 from .metrics import JsonlMetricsObserver
@@ -27,17 +25,6 @@ from .protocols import Engine, InputSource
 AskEngineName = Literal["sourcebot"]
 DecomposeMode = Literal["cheap", "deep", "auto"]
 TicketSourceName = Literal["text_file"]
-OutputFormat = Literal["markdown", "html", "text"]
-
-
-def _build_renderer(output_format: OutputFormat):
-    if output_format == "markdown":
-        return MarkdownRenderer()
-    if output_format == "html":
-        return HtmlRenderer()
-    if output_format == "text":
-        return TextRenderer()
-    raise ValueError(f"unknown output format: {output_format!r}")
 
 
 def build_ask_engine(name: AskEngineName, *, max_steps: int | None = None) -> Engine:
@@ -57,28 +44,22 @@ def build_ask_pipeline(
     *,
     engine: AskEngineName = "sourcebot",
     max_steps: int | None = None,
-    output_format: OutputFormat = "markdown",
     include_file_sink: bool = True,
     include_cli_sink: bool = True,
 ) -> Pipeline:
-    """Q&A pipeline: raw question → engine → renderer → sinks.
-
-    ``output_format`` picks the renderer (markdown / html / text). The
-    file sink writes with the matching extension.
-    """
+    """Q&A pipeline: raw question → engine → renderer → sinks."""
     active_engine = build_ask_engine(engine, max_steps=max_steps)
 
-    renderer = _build_renderer(output_format)
     sinks = []
     if include_cli_sink:
         sinks.append(CLISink())
     if include_file_sink:
-        sinks.append(FileSink(subdir="answers", format=output_format))
+        sinks.append(FileSink(subdir="answers"))
     return Pipeline(
         input_source=RawQuestionSource(),
         enricher=None,
         engine=active_engine,
-        renderers=[renderer],
+        renderers=[MarkdownRenderer()],
         sinks=sinks,
     )
 
@@ -89,7 +70,6 @@ def build_decompose_pipeline(
     source: TicketSourceName = "text_file",
     mode: DecomposeMode = "cheap",
     repos: list[str] | None = None,
-    output_format: OutputFormat = "markdown",
     include_file_sink: bool = True,
     include_cli_sink: bool = True,
 ) -> Pipeline:
@@ -107,25 +87,19 @@ def build_decompose_pipeline(
     else:
         engine = DecomposeEngine(repos=repos)
 
-    # Decompose engines already produce richly-laid-out markdown; for the
-    # markdown case use the passthrough renderer so we don't double-up
-    # headers. For html/text, transform the engine's markdown via the
-    # standard renderers (they accept any EngineResult).
-    if output_format == "markdown":
-        renderers = [PassthroughMarkdownRenderer()]
-    else:
-        renderers = [_build_renderer(output_format)]
+    # Decompose engines already produce richly-laid-out markdown; use the
+    # passthrough renderer so we don't double-up headers.
     sinks = []
     if include_cli_sink:
         sinks.append(CLISink())
     if include_file_sink:
-        sinks.append(FileSink(subdir="decompositions", format=output_format))
+        sinks.append(FileSink(subdir="decompositions"))
 
     return Pipeline(
         input_source=build_ticket_source(source),
         enricher=CheapEnricher(),
         engine=engine,
-        renderers=renderers,
+        renderers=[PassthroughMarkdownRenderer()],
         sinks=sinks,
     )
 

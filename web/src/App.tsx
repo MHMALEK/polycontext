@@ -5,7 +5,6 @@ import { api } from "./api";
 import type {
   AdapterInfo,
   AskResponse,
-  OutputFormat,
   RunDetail,
   RunListItem,
 } from "./api";
@@ -24,7 +23,6 @@ type LiveProgress = {
 
 type AskFormState = {
   question: string;
-  format: OutputFormat;
   // Name of the adapter the question is routed to via POST /v1/adapters/
   // {adapter}/ask. Defaulted to ``DEFAULT_ADAPTER`` and reconciled against
   // the live adapter list once it loads — see the useEffect below.
@@ -38,7 +36,6 @@ const DEFAULT_ADAPTER = "cursor";
 type DisplayedRun = {
   question: string;
   answer: string;
-  format: OutputFormat;
   engine?: string | null;
   model?: string | null;
   wall_seconds?: number | null;
@@ -52,7 +49,6 @@ type View = "ask" | "bakeoff";
 
 const INITIAL_FORM: AskFormState = {
   question: "",
-  format: "markdown",
   adapter: DEFAULT_ADAPTER,
 };
 
@@ -296,20 +292,7 @@ function QuestionBubble({ text }: { text: string }) {
   );
 }
 
-function AnswerBody({ text, format }: { text: string; format: OutputFormat }) {
-  if (format === "html") {
-    return (
-      <div
-        className="prose prose-sm sm:prose-base max-w-none"
-        dangerouslySetInnerHTML={{ __html: text }}
-      />
-    );
-  }
-  if (format === "text") {
-    return (
-      <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{text}</pre>
-    );
-  }
+function AnswerBody({ text }: { text: string }) {
   return (
     <div className="prose prose-sm sm:prose-base max-w-none prose-pre:bg-base-200 prose-pre:text-base-content prose-code:before:content-none prose-code:after:content-none prose-code:bg-base-200 prose-code:px-1 prose-code:py-0.5 prose-code:rounded">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
@@ -637,7 +620,6 @@ export function App() {
       return {
         question: answeredQuestion,
         answer: answer.answer,
-        format: form.format,
         engine: answer.engine,
         model: answer.model,
         wall_seconds: answer.wall_seconds,
@@ -648,11 +630,9 @@ export function App() {
       };
     }
     if (selectedDetail && selectedDetail.answer != null) {
-      const fmt = (selectedDetail.output_format as OutputFormat) || "markdown";
       return {
         question: extractQuestion(selectedDetail),
         answer: selectedDetail.answer,
-        format: fmt,
         engine: selectedDetail.engine,
         model: selectedDetail.model,
         wall_seconds: selectedDetail.total_seconds,
@@ -663,7 +643,7 @@ export function App() {
       };
     }
     return null;
-  }, [answer, answeredQuestion, form.format, selectedDetail]);
+  }, [answer, answeredQuestion, selectedDetail]);
 
   const historyGroups = useMemo(() => groupHistoryByDay(history), [history]);
 
@@ -885,7 +865,7 @@ export function App() {
                       <CopyButton text={displayed.answer} />
                     </div>
                     <div className="px-5 py-5">
-                      <AnswerBody text={displayed.answer} format={displayed.format} />
+                      <AnswerBody text={displayed.answer} />
                       <Citations citations={displayed.citations} />
                     </div>
                   </article>

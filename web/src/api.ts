@@ -6,8 +6,6 @@
 // than the raw AdapterAskResult) because the existing answer view binds to
 // these fields.
 
-export type OutputFormat = "markdown" | "html" | "text";
-
 export interface AskResponse {
   engine: string;
   answer: string;

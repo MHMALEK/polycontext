@@ -40,7 +40,6 @@ def _cmd_ask(args, settings) -> int:
     pipeline = build_ask_pipeline(
         settings,
         max_steps=args.max_steps,
-        output_format=args.format,
         include_cli_sink=False,  # we print our own status line; the rendered body is in the file
         include_file_sink=not args.no_file,
     )
@@ -51,13 +50,13 @@ def _cmd_ask(args, settings) -> int:
     except Exception as e:
         with open_store(settings) as store:
             store.record(run_id=ctx.run_id, mode="ask", status="failed",
-                         input_ref=args.question, output_format=args.format,
+                         input_ref=args.question, output_format="markdown",
                          error=f"{type(e).__name__}: {e}")
         console.print(f"[red]ask failed:[/] {type(e).__name__}: {e}")
         return 1
     with open_store(settings) as store:
         store.record(run_id=ctx.run_id, mode="ask", status="completed",
-                     input_ref=args.question, output_format=args.format,
+                     input_ref=args.question, output_format="markdown",
                      pipeline_run=run)
     er = run.engine_result
 
@@ -95,7 +94,6 @@ def _cmd_decompose(args, settings) -> int:
         source="text_file" if args.query_file else "raw",
         mode=args.mode,
         repos=repos,
-        output_format=args.format,
         include_cli_sink=False,  # we print our own summary
         include_file_sink=True,
     )
@@ -106,13 +104,13 @@ def _cmd_decompose(args, settings) -> int:
     except Exception as e:
         with open_store(settings) as store:
             store.record(run_id=ctx.run_id, mode="decompose", status="failed",
-                         input_ref=ref, output_format=args.format,
+                         input_ref=ref, output_format="markdown",
                          error=f"{type(e).__name__}: {e}")
         console.print(f"[red]decompose failed:[/] {type(e).__name__}: {e}")
         return 1
     with open_store(settings) as store:
         store.record(run_id=ctx.run_id, mode="decompose", status="completed",
-                     input_ref=ref, output_format=args.format, pipeline_run=run)
+                     input_ref=ref, output_format="markdown", pipeline_run=run)
     er = run.engine_result
 
     md_path = next(
@@ -292,12 +290,6 @@ def _build_parser(settings) -> argparse.ArgumentParser:
         help="Sourcebot maxSteps (1-50).",
     )
     p_ask.add_argument("--repos", default=None, help="Comma-separated repo dir names")
-    p_ask.add_argument(
-        "--format",
-        choices=["markdown", "html", "text"],
-        default="markdown",
-        help="Output format. Affects both the printed answer and the saved file extension.",
-    )
     p_ask.add_argument("--no-file", action="store_true", help="Skip writing the answer file")
     p_ask.set_defaults(func=_cmd_ask)
 
@@ -317,12 +309,6 @@ def _build_parser(settings) -> argparse.ArgumentParser:
     p_dec.add_argument("--repos", default=None, help="Comma-separated repo dir names")
     p_dec.add_argument("--print-json", action="store_true",
                        help="Print the structured Decomposition JSON to stdout too")
-    p_dec.add_argument(
-        "--format",
-        choices=["markdown", "html", "text"],
-        default="markdown",
-        help="Output format. Affects the saved file extension.",
-    )
     p_dec.set_defaults(func=_cmd_decompose)
 
     # serve ------------------------------------------------------------------
