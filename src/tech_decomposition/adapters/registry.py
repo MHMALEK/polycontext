@@ -6,7 +6,8 @@ first lookup so a missing optional dependency does not take down the whole API.
 
 Current set: ``cursor`` (Cursor SDK), ``cline_sdk`` (Cline SDK),
 ``claude_code`` (Claude Agent SDK / Claude Code), ``gemini`` (Google Gemini via
-``@google/genai``), ``sourcebot`` (blocking Sourcebot chat). All non-Python
+``@google/genai``), ``openai_agents``, ``opencode`` (OpenCode @opencode-ai/sdk),
+``sourcebot`` (blocking Sourcebot chat). All non-Python
 runtimes are served by ``services/agent-node``. The HTTP API
 routes through these adapters; the CLI may still call ``ask_sourcebot`` directly.
 """
@@ -23,6 +24,7 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "claude_code": ("tech_decomposition.adapters._claude_code_sdk", "ClaudeCodeSDKAdapter"),
     "gemini": ("tech_decomposition.adapters._gemini", "GeminiAdapter"),
     "openai_agents": ("tech_decomposition.adapters._openai_agents", "OpenAIAgentsAdapter"),
+    "opencode": ("tech_decomposition.adapters._opencode_sdk", "OpencodeSDKAdapter"),
     "sourcebot": ("tech_decomposition.adapters._sourcebot", "SourcebotAdapter"),
 }
 

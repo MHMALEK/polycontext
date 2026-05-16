@@ -17,6 +17,12 @@ def test_unknown_adapter_raises_key_error():
         get_adapter("does-not-exist", _settings())
 
 
+def test_opencode_is_loadable():
+    a = get_adapter("opencode", _settings())
+    assert a.name == "opencode"
+    assert {"ask", "decompose", "implement"}.issubset(a.capabilities)
+
+
 def test_cursor_is_loadable():
     a = get_adapter("cursor", _settings())
     assert a.name == "cursor"

@@ -34,7 +34,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
 ]
-# The adapter set talks to ``services/agent-node`` for cursor, cline_sdk, gemini;
+# The adapter set talks to ``services/agent-node`` for cursor, cline_sdk, gemini, opencode,
 # optional extras remain empty for ``.[adapters]``.
 adapters = []
 

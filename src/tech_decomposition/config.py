@@ -76,7 +76,8 @@ class Settings(BaseSettings):
     git_author_email: str = ""
     enabled_adapters: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
-    # Node service (services/agent-node) — Cursor, Cline, Claude Code, Gemini, OpenAI Agents, Sourcebot proxy.
+    # Node service (services/agent-node) — Cursor, Cline, Claude Code, Gemini, OpenAI Agents,
+    # OpenCode, Sourcebot proxy.
     agent_node_url: str = "http://127.0.0.1:13100"
     agent_node_timeout_seconds: float = 600.0
 
@@ -97,6 +98,11 @@ class Settings(BaseSettings):
     openai_agents_sdk_decompose_model: str = ""
     openai_agents_sdk_timeout_seconds: float = 600.0
 
+    # OpenCode via agent-node (`@opencode-ai/sdk` — https://opencode.ai/docs/sdk/).
+    opencode_sdk_model: str = "anthropic/claude-sonnet-4-20250514"
+    # When set (or OPENCODE_BASE_URL on agent-node), use client-only mode against that server URL.
+    opencode_sdk_base_url: str = ""
+    opencode_sdk_structured_retry_count: int = 2
     @field_validator("enabled_adapters", mode="before")
     @classmethod
     def _split_enabled(cls, v):

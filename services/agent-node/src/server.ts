@@ -1,6 +1,7 @@
 /**
  * Agent runtime service — Cursor SDK, Cline SDK, Claude Agent SDK (Claude Code),
- * Gemini (@google/genai), OpenAI Agents SDK (@openai/agents), Sourcebot.
+ * Gemini (@google/genai), OpenAI Agents SDK (@openai/agents),
+ * OpenCode (@opencode-ai/sdk), Sourcebot.
  * Python FastAPI adapters call this over HTTP.
  */
 import Fastify from "fastify";
@@ -9,6 +10,7 @@ import { runCline } from "./adapters/cline.js";
 import { runClaudeCode } from "./adapters/claude_code.js";
 import { runGemini } from "./adapters/gemini.js";
 import { runOpenAIAgents } from "./adapters/openai_agents.js";
+import { runOpencode } from "./adapters/opencode.js";
 import { askSourcebotBlocking } from "./adapters/sourcebot.js";
 
 const fastify = Fastify({ logger: { level: process.env.LOG_LEVEL || "info" } });
@@ -25,6 +27,7 @@ fastify.get("/adapters", async () => ({
     { name: "claude_code", capabilities: ["ask", "decompose", "implement"] },
     { name: "gemini", capabilities: ["ask", "decompose", "implement"] },
     { name: "openai_agents", capabilities: ["ask", "decompose", "implement"] },
+    { name: "opencode", capabilities: ["ask", "decompose", "implement"] },
     { name: "sourcebot", capabilities: ["ask"] },
   ],
 }));
@@ -161,6 +164,46 @@ fastify.post("/adapters/openai_agents/run", async (request, reply) => {
     timeoutSec: (b.timeoutSec as number) ?? 600,
     maxTurns: (b.maxTurns as number) ?? undefined,
     cwd: (b.cwd as string) || undefined,
+  });
+  if (!out.ok) {
+    return reply.code(502).send(out);
+  }
+  return out;
+});
+
+fastify.post("/adapters/opencode/run", async (request, reply) => {
+  const b = (request.body ?? {}) as Record<string, unknown>;
+  if (!b.prompt || typeof b.prompt !== "string") {
+    return reply.code(400).send({ ok: false, error: "prompt (string) required" });
+  }
+  const structured = Boolean(b.structured);
+  const pid = typeof b.providerID === "string" ? b.providerID.trim() : "";
+  const pk = typeof b.apiKey === "string" ? b.apiKey.trim() : "";
+  if ((pid || pk) && (!pid || !pk)) {
+    return reply.code(400).send({
+      ok: false,
+      error: "providerID and apiKey must both be set when passing credentials",
+    });
+  }
+
+  const out = await runOpencode({
+    systemPrompt: typeof b.systemPrompt === "string" ? b.systemPrompt : undefined,
+    prompt: b.prompt as string,
+    cwd: typeof b.cwd === "string" ? b.cwd : undefined,
+    model:
+      (typeof b.model === "string" && b.model.trim()
+        ? b.model
+        : process.env.OPENCODE_MODEL)?.trim(),
+    baseUrl:
+      typeof b.baseUrl === "string"
+        ? b.baseUrl.trim()
+        : ((process.env.OPENCODE_BASE_URL || "").trim() || undefined),
+    timeoutSec: (b.timeoutSec as number) ?? 600,
+    structured,
+    structuredRetryCount:
+      typeof b.structuredRetryCount === "number" ? (b.structuredRetryCount as number) : undefined,
+    providerID: pid || undefined,
+    apiKey: pk || undefined,
   });
   if (!out.ok) {
     return reply.code(502).send(out);
