@@ -193,7 +193,7 @@ sequenceDiagram
 
 | Area | Responsibility |
 |------|----------------|
-| `src/tech_decomposition/` | API, CLI, **adapters**, **`_grounding.py`**, **`_local_index.py`**, **`_repo_map.py`**, engines, retrievers, enrichers |
+| `src/tech_decomposition/` | API, CLI, **adapters**, engines, retrievers, enrichers |
 | `services/agent-node/` | Fastify, **Gemini / OpenAI / Claude / Cursor / Cline**, workspace tools |
 | `web/` | Vite + React UI |
 | `eval/` | Bake-off runner, cases, outputs |

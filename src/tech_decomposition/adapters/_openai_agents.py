@@ -11,9 +11,8 @@ from typing import Any
 import httpx
 
 from ..models import Decomposition
-from ._ask_pipeline import AskInvocation, AskPipeline, AskPipelinePolicy
 from ._extract_json import extract_json
-from ._prompts import ASK_PREAMBLE, DECOMPOSE_PREAMBLE, IMPLEMENT_PREAMBLE, subtask_prompt, query_blob
+from ._prompts import DECOMPOSE_PREAMBLE, IMPLEMENT_PREAMBLE, subtask_prompt, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
@@ -66,69 +65,20 @@ class OpenAIAgentsAdapter(Adapter):
             return {"ok": False, "reason": f"agent-node unreachable ({base}/health): {e}"}
         return {"ok": True}
 
-    def _ask_policy(self) -> AskPipelinePolicy:
-        return AskPipelinePolicy(
-            max_attempts=2,
-            min_answer_chars=180,
-            enforce_contract=True,
-            required_sections=(
-                "end-to-end flow",
-                "repo-by-repo responsibilities",
-                "validation, persistence, and async/background processing",
-                "user-visible statuses/errors",
-            ),
-            require_inline_citations_when_grounded=False,
-            retry_without_grounding_on_failure=True,
-        )
-
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
-        pipeline = AskPipeline(
-            self.settings,
-            grounded=True,
-            preamble=ASK_PREAMBLE,
-            policy=self._ask_policy(),
-        )
         t = time.monotonic()
-        cwd = self._cwd_for_repos(inp.repos)
-
-        async def _invoke_step(prompt_text: str) -> AskInvocation:
-            started = time.monotonic()
-            out = await self._run(
-                system=_ASK_SYSTEM,
-                prompt=prompt_text,
-                model_id=self.settings.openai_agents_sdk_model,
-                timeout_seconds=float(self.settings.openai_agents_sdk_timeout_seconds),
-                cwd=cwd,
-            )
-            return AskInvocation(
-                answer=(out.get("answer") or "").strip(),
-                payload=out,
-                stage_ms=int((time.monotonic() - started) * 1000),
-            )
-
-        run = await pipeline.run(inp, _invoke_step)
-        payload = run.invocation.payload or {}
-        metrics = _metrics_from(payload, t)
-        metrics.extra.setdefault(
-            "ask_pipeline",
-            {
-                "prepare_input_ms": run.prepared_input.stage_ms,
-                "retrieve_context_ms": run.retrieved_context.stage_ms,
-                "prepare_prompt_ms": run.prompt.stage_ms,
-                "invoke_model_ms": run.invocation.stage_ms,
-                "format_response_ms": run.response.stage_ms,
-                "prompt_chars": len(run.prompt.text),
-                "retrieved_snippets": len(run.retrieved_context.snippets),
-                "attempts": run.response.attempts,
-                "contract_issues": run.response.contract_issues,
-                "cwd": str(cwd),
-            },
+        out = await self._run(
+            system=_ASK_SYSTEM,
+            prompt=inp.query,
+            model_id=self.settings.openai_agents_sdk_model,
+            timeout_seconds=float(self.settings.openai_agents_sdk_timeout_seconds),
+            cwd=self._cwd_for_repos(inp.repos),
         )
         return AdapterAskResult(
             adapter=self.name,
-            answer=run.response.answer,
-            citations=run.response.citations,
-            metrics=metrics,
+            answer=(out.get("answer") or "").strip(),
+            citations=[],
+            metrics=_metrics_from(out, t),
         )
 
     def _decompose_model_id(self) -> str:

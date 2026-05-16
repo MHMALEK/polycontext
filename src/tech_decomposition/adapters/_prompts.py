@@ -3,24 +3,6 @@ from __future__ import annotations
 
 from .base import AdapterDecomposeInput, AdapterImplementInput
 
-ASK_PREAMBLE = """Answer the following question about the codebase under this working
-directory. Ground every claim in real code; do not speculate.
-
-Output format (Markdown):
-1) End-to-end flow
-2) Repo-by-repo responsibilities
-3) Validation, persistence, and async/background processing
-4) User-visible statuses/errors and where they come from
-5) Gaps/unknowns (if any)
-
-Citation format: `repo/path:Lstart-Lend` inline with each claim.
-Return only the final answer. Do not include progress narration
-(for example: "Searching...", "I am now...", "Next I will...").
-
-Question:
-"""
-
-
 DECOMPOSE_PREAMBLE = """Decompose this query into a tech decomposition. Use
 file-reading tools to ground every reference; never invent paths.
 
