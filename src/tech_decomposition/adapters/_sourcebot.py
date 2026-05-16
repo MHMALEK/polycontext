@@ -49,6 +49,7 @@ class SourcebotAdapter(Adapter):
             "sourcebotApiKey": self.settings.sourcebot_api_key,
             "question": inp.query,
             "timeoutSec": int(self.settings.sourcebot_timeout_seconds),
+            "maxSteps": 50,
         }
         if repos:
             body["repos"] = repos

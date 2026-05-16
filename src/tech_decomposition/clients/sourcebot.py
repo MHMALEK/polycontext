@@ -126,10 +126,11 @@ async def _ask_via_chat_blocking(
     payload: dict = {"query": question.strip()}
     if repos:
         payload["repos"] = repos
-    if max_steps is not None:
-        if not (1 <= max_steps <= 50):
-            raise SourcebotAskError("maxSteps must be between 1 and 50", status_code=400)
-        payload["maxSteps"] = max_steps
+    if max_steps is None:
+        max_steps = 50
+    if not (1 <= max_steps <= 50):
+        raise SourcebotAskError("maxSteps must be between 1 and 50", status_code=400)
+    payload["maxSteps"] = max_steps
 
     t0 = time.monotonic()
     timeout = httpx.Timeout(timeout_seconds, connect=15.0)
