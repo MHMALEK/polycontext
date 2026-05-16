@@ -59,14 +59,23 @@ class SourcebotAskError(Exception):
         self.status_code = status_code
 
 
-_MCP_ANSWER_STYLE_SUFFIX = (
+ANSWER_STYLE_SUFFIX = (
     "\n\n"
-    "Answer requirements:\n"
-    "- Return only the final answer, no internal process narration.\n"
-    "- Be concise and direct.\n"
-    "- Include concrete file citations with paths and line ranges when available.\n"
-    "- Prefer implementation files under src/; avoid specs/docs unless directly needed.\n"
+    "Answer requirements (read carefully — these are HARD rules):\n"
+    "- Your response must BE the final answer to the question. It is shown\n"
+    "  directly to the user. It is NOT a thinking step.\n"
+    "- Do NOT begin your response with phrases like \"Okay, I understand\",\n"
+    "  \"I now know\", \"Time to write the final answer\", \"I'm ready to answer\",\n"
+    "  \"Based on my exploration\", \"I can now detail\", \"Let me explain\".\n"
+    "  Those are reasoning artifacts. Skip them and write the answer directly.\n"
+    "- When the question asks to list items (roles, statuses, types, fields),\n"
+    "  produce ONE bullet per item with sub-bullets for the details. Do not\n"
+    "  skip items. Do not summarize \"and a few others\".\n"
+    "- Be concise and direct. Cite concrete files with paths and line ranges\n"
+    "  when relevant. Prefer implementation files under src/; avoid\n"
+    "  specs/docs unless directly needed.\n"
 )
+_MCP_ANSWER_STYLE_SUFFIX = ANSWER_STYLE_SUFFIX  # alias for backward compat
 
 
 def _x_sourcebot_api_key_value(api_key: str) -> str:
@@ -123,7 +132,7 @@ async def _ask_via_chat_blocking(
         "X-Sourcebot-Api-Key": _x_sourcebot_api_key_value(settings.sourcebot_api_key),
         "Content-Type": "application/json",
     }
-    payload: dict = {"query": question.strip()}
+    payload: dict = {"query": question.strip() + ANSWER_STYLE_SUFFIX}
     if repos:
         payload["repos"] = repos
     if max_steps is None:

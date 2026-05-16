@@ -5,7 +5,7 @@ import time
 
 import httpx
 
-from ..clients.sourcebot import effective_sourcebot_repos_for_ask
+from ..clients.sourcebot import ANSWER_STYLE_SUFFIX, effective_sourcebot_repos_for_ask
 from .base import (
     Adapter,
     AdapterAskInput,
@@ -47,7 +47,7 @@ class SourcebotAdapter(Adapter):
         body: dict = {
             "sourcebotUrl": sb_base,
             "sourcebotApiKey": self.settings.sourcebot_api_key,
-            "question": inp.query,
+            "question": inp.query + ANSWER_STYLE_SUFFIX,
             "timeoutSec": int(self.settings.sourcebot_timeout_seconds),
             "maxSteps": 50,
         }
