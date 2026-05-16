@@ -34,6 +34,11 @@ from .adapters import (
 )
 from .config import get_settings
 from .core.context import RunContext
+from .core.grounding import (
+    GroundedContext,
+    build_grounded_prompt,
+    retrieve_grounded_context,
+)
 from .core.runstore import RunStore, open_default_store
 
 
@@ -300,6 +305,31 @@ def list_adapters_endpoint() -> dict[str, Any]:
     return {"adapters": items}
 
 
+class GroundingRequest(BaseModel):
+    """Standalone grounded-retrieval request — bypasses any adapter."""
+
+    query: str = Field(min_length=1)
+    repos: list[str] | None = None
+    top_k: int = Field(default=8, ge=1, le=50)
+    context_lines: int = Field(default=3, ge=0, le=20)
+
+
+@app.post("/v1/grounding/retrieve")
+async def grounding_retrieve(body: GroundingRequest) -> dict[str, Any]:
+    """Run grounded retrieval alone — see the snippets, latency, and char count
+    without involving an adapter. Useful for debugging or A/B comparing whether
+    grounding is worth injecting on a given question.
+    """
+    ctx = await retrieve_grounded_context(
+        query=body.query,
+        settings=get_settings(),
+        repos=body.repos,
+        top_k=body.top_k,
+        context_lines=body.context_lines,
+    )
+    return ctx.model_dump(mode="json")
+
+
 @app.post("/v1/adapters/{name}/ask")
 async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
     adapter = _resolve_adapter(name)
@@ -313,10 +343,28 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
 
         ref_for_store = _storage_ask_ref(inp, thread_key)
         q_preview = inp.query[:160].strip()
-        aug_query = _augmented_ask_query_for_thread(
+
+        # 1) Optional grounded pre-fetch — runs alone, has its own metrics.
+        grounding: GroundedContext | None = None
+        if inp.grounded:
+            grounding = await retrieve_grounded_context(
+                query=inp.query, settings=settings, repos=inp.repos, top_k=inp.top_k,
+            )
+
+        # 2) Thread context — fold prior turns in for follow-ups.
+        threaded_query = _augmented_ask_query_for_thread(
             store, thread_key, ctx.run_id, inp.query,
         )
-        adapter_inp = inp.model_copy(update={"query": aug_query})
+
+        # 3) Prepend the grounding block (if any) to the threaded query.
+        final_query = (
+            build_grounded_prompt(
+                grounding_block=grounding.grounding_block, query=threaded_query,
+            )
+            if grounding and grounding.grounding_block
+            else threaded_query
+        )
+        adapter_inp = inp.model_copy(update={"query": final_query})
 
         # Pre-seed a ``running`` row so the UI can find this run and poll
         # progress while the adapter is still executing.
@@ -348,11 +396,14 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
         _adapter_progress_finishing(store, ctx.run_id, decompose=False)
         m = result.metrics
+        # Stash grounding in the payload so /runs/{id} can replay it.
+        payload = {"grounding": grounding.model_dump(mode="json")} if grounding else None
         store.record(
             run_id=ctx.run_id, mode="ask", status="completed",
             input_ref=ref_for_store, engine=f"{name}:ask",
             answer=result.answer,
             citations=list(result.citations),
+            payload=payload,
             model=m.model,
             total_seconds=(m.duration_ms / 1000.0) if m.duration_ms else None,
             total_cost_usd=m.cost_usd,
@@ -363,7 +414,10 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
         )
     finally:
         store.close()
-    return {"run_id": ctx.run_id, "thread_id": thread_key, "result": result.model_dump()}
+    result_body = result.model_dump()
+    if grounding is not None:
+        result_body["grounding"] = grounding.model_dump(mode="json")
+    return {"run_id": ctx.run_id, "thread_id": thread_key, "result": result_body}
 
 
 @app.post("/v1/adapters/{name}/decompose")

@@ -117,6 +117,8 @@ export interface AdapterCallResponse {
     decomposition?: Record<string, unknown>;
     citations?: Array<Record<string, unknown>>;
     metrics: AdapterMetrics;
+    /** Populated only when the ask request set ``grounded: true``. */
+    grounding?: GroundedContext;
   };
 }
 
@@ -125,6 +127,33 @@ export interface AdapterAskBody {
   thread_id?: string;
   repos?: string[];
   top_k?: number;
+  grounded?: boolean;
+}
+
+// Grounding — mirrors core/grounding.py types
+export interface GroundingSnippet {
+  repo: string;
+  path: string;
+  start_line: number | null;
+  end_line: number | null;
+  content: string;
+  url: string | null;
+  language: string | null;
+}
+
+export interface GroundingMetrics {
+  duration_ms: number;
+  snippet_count: number;
+  total_chars: number;
+  sources: string[];
+  sourcebot_files_seen: number;
+  error: string | null;
+}
+
+export interface GroundedContext {
+  snippets: GroundingSnippet[];
+  grounding_block: string;
+  metrics: GroundingMetrics;
 }
 
 // Subtask + Decomposition mirror src/tech_decomposition/models.py Subtask + Decomposition.
@@ -170,6 +199,17 @@ export const api = {
 
   adapterAsk: (name: string, body: AdapterAskBody) =>
     jsonReq<AdapterCallResponse>(`/v1/adapters/${encodeURIComponent(name)}/ask`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  groundingRetrieve: (body: {
+    query: string;
+    repos?: string[];
+    top_k?: number;
+    context_lines?: number;
+  }) =>
+    jsonReq<GroundedContext>(`/v1/grounding/retrieve`, {
       method: "POST",
       body: JSON.stringify(body),
     }),

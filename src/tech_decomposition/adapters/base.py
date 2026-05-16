@@ -74,6 +74,14 @@ class AdapterAskInput(BaseModel):
     top_k: int = Field(default=8, ge=1, le=50)
     branch: str | None = None
     starting_ref: str | None = None
+    grounded: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: prepend a grounding block (Sourcebot search snippets for ``query``) "
+            "to the user prompt before the adapter sees it. The API endpoint handles this "
+            "wrapping; adapters themselves are oblivious."
+        ),
+    )
 
 
 class AdapterAskResult(BaseModel):

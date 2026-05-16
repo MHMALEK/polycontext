@@ -44,6 +44,8 @@ type AskFormState = {
   // {adapter}/ask. Defaulted to ``DEFAULT_ADAPTER`` and reconciled against
   // the live adapter list once it loads — see the useEffect below.
   adapter: string;
+  // Opt-in: prepend a Sourcebot-retrieval block to the prompt.
+  grounded: boolean;
 };
 
 // Initial dropdown selection. Overridden at mount if this adapter isn't
@@ -65,6 +67,7 @@ type DisplayedRun = {
 const INITIAL_FORM: AskFormState = {
   question: "",
   adapter: DEFAULT_ADAPTER,
+  grounded: false,
 };
 
 const SUGGESTED_PROMPTS = [
@@ -479,6 +482,108 @@ function turnToDisplayed(turn: RunDetail): DisplayedRun {
   };
 }
 
+type RawGrounding = {
+  snippets?: Array<{
+    repo?: string;
+    path?: string;
+    start_line?: number | null;
+    end_line?: number | null;
+    content?: string;
+    url?: string | null;
+    language?: string | null;
+  }>;
+  metrics?: {
+    duration_ms?: number;
+    snippet_count?: number;
+    total_chars?: number;
+    sources?: string[];
+    sourcebot_files_seen?: number;
+    error?: string | null;
+  };
+};
+
+function extractGrounding(payload: Record<string, unknown> | undefined | null): RawGrounding | null {
+  if (!payload) return null;
+  const g = (payload as { grounding?: unknown }).grounding;
+  if (!g || typeof g !== "object") return null;
+  return g as RawGrounding;
+}
+
+function GroundingPanel({ grounding }: { grounding: RawGrounding }) {
+  const m = grounding.metrics ?? {};
+  const snippets = grounding.snippets ?? [];
+  const ms = m.duration_ms ?? 0;
+  const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+  if (m.error) {
+    return (
+      <details className="mt-4 rounded-lg border border-warning/40 bg-warning/5">
+        <summary className="cursor-pointer select-none px-4 py-2 text-xs font-medium text-warning flex items-center gap-2">
+          Grounding failed: <code className="font-mono">{m.error}</code>
+        </summary>
+      </details>
+    );
+  }
+  return (
+    <details className="mt-4 rounded-lg border border-base-300 bg-base-100/70">
+      <summary className="cursor-pointer select-none px-4 py-2 text-xs font-medium flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="badge badge-sm badge-outline">grounded</span>
+        <span className="text-base-content/70">
+          {snippets.length} snippet{snippets.length === 1 ? "" : "s"}
+        </span>
+        <span className="text-base-content/50">·</span>
+        <span className="text-base-content/70">{(m.total_chars ?? 0).toLocaleString()} chars</span>
+        <span className="text-base-content/50">·</span>
+        <span className="text-base-content/70">+{dur}</span>
+        {m.sources && m.sources.length > 0 && (
+          <>
+            <span className="text-base-content/50">·</span>
+            <span className="font-mono text-base-content/65">{m.sources.join(", ")}</span>
+          </>
+        )}
+      </summary>
+      <div className="px-4 pb-4 pt-1 flex flex-col gap-3">
+        {snippets.length === 0 ? (
+          <p className="text-xs text-base-content/55 italic">No snippets returned.</p>
+        ) : (
+          snippets.map((s, i) => {
+            const label = s.repo ? `${s.repo}/${s.path ?? ""}` : s.path ?? "";
+            const lineSuffix =
+              s.start_line && s.end_line && s.end_line !== s.start_line
+                ? `:L${s.start_line}-L${s.end_line}`
+                : s.start_line
+                  ? `:L${s.start_line}`
+                  : "";
+            return (
+              <div key={i} className="rounded border border-base-300/70 bg-base-200/30">
+                <div className="px-3 py-2 flex items-center justify-between gap-2 text-[11px]">
+                  {s.url ? (
+                    <a
+                      href={s.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="link link-hover font-mono truncate"
+                    >
+                      {label}{lineSuffix}
+                    </a>
+                  ) : (
+                    <code className="font-mono truncate text-base-content/85">{label}{lineSuffix}</code>
+                  )}
+                  {s.language && (
+                    <span className="badge badge-xs badge-ghost">{s.language}</span>
+                  )}
+                </div>
+                <pre className="px-3 pb-3 pt-0 text-[11px] font-mono whitespace-pre overflow-x-auto leading-snug">
+                  {s.content ?? ""}
+                </pre>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </details>
+  );
+}
+
 function ChatTurn({
   turn,
   suppressRunningAssistant,
@@ -489,6 +594,7 @@ function ChatTurn({
 }) {
   const q = extractQuestion(turn);
   const disp = turnToDisplayed(turn);
+  const grounding = extractGrounding(turn.payload);
   return (
     <div className="flex flex-col gap-3">
       {q ? <QuestionBubble text={q} /> : null}
@@ -522,6 +628,7 @@ function ChatTurn({
             <div className="px-4 sm:px-5 py-5">
               <AnswerBody text={disp.answer} />
               <Citations citations={disp.citations} />
+              {grounding && <GroundingPanel grounding={grounding} />}
             </div>
           </article>
         </div>
@@ -772,6 +879,7 @@ export function App() {
         }
         const askPromise = api.adapterAsk(form.adapter, {
           query: question,
+          grounded: form.grounded,
           ...(activeThreadId ? { thread_id: activeThreadId } : {}),
         });
         void loadHistory();
@@ -1100,6 +1208,18 @@ export function App() {
                     </select>
                   </label>
                 )}
+                <label
+                  className="flex items-center gap-1.5 text-[11px] text-base-content/78 font-medium cursor-pointer select-none"
+                  title="Prepend Sourcebot search snippets to the prompt before the adapter runs. Costs extra latency, may help cross-repo questions."
+                >
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-xs"
+                    checked={form.grounded}
+                    onChange={(e) => setForm((f) => ({ ...f, grounded: e.target.checked }))}
+                  />
+                  <span>Grounded</span>
+                </label>
                 <span className="text-[10px] text-base-content/65 hidden sm:inline ml-auto sm:ml-0">
                   ⌘↵ send
                 </span>
