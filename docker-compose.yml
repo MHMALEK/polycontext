@@ -109,11 +109,20 @@ services:
       - "${API_PORT:-18000}:8000"
     volumes:
       - tech_decomposition_outputs:/app/outputs
+    # Allow reaching agent-node published on host at :13100 (Linux Compose).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
+      # Resolved by agent-node reachable from this container — not localhost.
+      # Use compose.adapters.yaml to switch to http://agent_node:13100 instead.
+      - AGENT_NODE_URL=http://host.docker.internal:13100
+      # Cursor (optional — pass through .env).
+      - CURSOR_API_KEY=${CURSOR_API_KEY:-}
+      - CURSOR_SDK_MODEL=${CURSOR_SDK_MODEL:-composer-2}
       # Talk to the Sourcebot container by service name on the docker network.
       - SOURCEBOT_URL=http://sourcebot:3000
       - SOURCEBOT_API_KEY=${SOURCEBOT_API_KEY:-}
-      - SOURCEBOT_TIMEOUT_SECONDS=${SOURCEBOT_TIMEOUT_SECONDS:-30}
+      - SOURCEBOT_TIMEOUT_SECONDS=${SOURCEBOT_TIMEOUT_SECONDS:-300}
       # Optional: scope ask flows to specific GitLab project paths.
       - GITLAB_PROJECTS=${GITLAB_PROJECTS:-}
       # Provider credentials — only the ones for the models you actually use

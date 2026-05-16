@@ -5,7 +5,7 @@ adapters head-to-head. Lives outside ``src/tech_decomposition/`` on purpose —
 this is evaluation infrastructure, not part of the runtime app.
 
 Run via:
-    uv run python -m eval.bakeoff.cli run --job ask --adapters cline_sdk,opencode
+    uv run python -m eval.bakeoff.cli run --job ask --adapters cursor,cline_sdk
     uv run python -m eval.bakeoff.cli report runs/eval-<timestamp>
 
 See ``eval/README.md`` for the full usage guide.

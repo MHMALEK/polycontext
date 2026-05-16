@@ -33,7 +33,7 @@ type AskFormState = {
 
 // Initial dropdown selection. Overridden at mount if this adapter isn't
 // installed or isn't healthy — see the adapter list useEffect.
-const DEFAULT_ADAPTER = "opencode";
+const DEFAULT_ADAPTER = "cursor";
 
 type DisplayedRun = {
   question: string;
@@ -445,6 +445,8 @@ export function App() {
   const [selectedLoading, setSelectedLoading] = useState(false);
   const [progress, setProgress] = useState<LiveProgress | null>(null);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
+  const [adapterListHydrated, setAdapterListHydrated] = useState(false);
+  const [adapterListError, setAdapterListError] = useState<string | null>(null);
   const progressTimer = useRef<number | null>(null);
 
   const loadHistory = useCallback(async () => {
@@ -462,6 +464,7 @@ export function App() {
     // the cline-sdk-bridge sidecar) require a refresh anyway.
     api.listAdapters()
       .then((r) => {
+        setAdapterListError(null);
         const askables = r.adapters.filter((a) => a.capabilities.includes("ask"));
         setAdapters(askables);
         // If the default adapter is missing or unhealthy, pick the first
@@ -473,7 +476,11 @@ export function App() {
           return firstHealthy ? { ...f, adapter: firstHealthy.name } : f;
         });
       })
-      .catch((e) => console.warn("adapter list fetch failed", e));
+      .catch((e) => {
+        setAdapterListError((e as Error).message ?? String(e));
+        console.warn("adapter list fetch failed", e);
+      })
+      .finally(() => setAdapterListHydrated(true));
   }, [loadHistory]);
 
   const startNew = useCallback(() => {
@@ -484,11 +491,29 @@ export function App() {
     setError(null);
   }, []);
 
+  const pickedAdapter = useMemo(
+    () => adapters.find((a) => a.name === form.adapter),
+    [adapters, form.adapter],
+  );
+
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       const question = form.question.trim();
       if (!question || submitting) return;
+
+      const adapterMeta = adapters.find((a) => a.name === form.adapter);
+      if (!adapterListHydrated) {
+        setError("Still loading adapters — wait a moment and try again.");
+        return;
+      }
+      if (adapters.length > 0 && adapterMeta && !adapterMeta.health.ok) {
+        setError(
+          `Adapter "${form.adapter}" is not ready: ${adapterMeta.health.reason ?? "unhealthy"}`,
+        );
+        return;
+      }
+
       setSubmitting(true);
       setError(null);
       setAnswer(null);
@@ -566,7 +591,7 @@ export function App() {
         setSubmitting(false);
       }
     },
-    [form, submitting, loadHistory],
+    [form, submitting, loadHistory, adapters, adapterListHydrated],
   );
 
   useEffect(() => {
@@ -740,6 +765,31 @@ export function App() {
               </button>
             </header>
 
+            {adapterListHydrated &&
+              !adapterListError &&
+              adapters.length === 0 && (
+                <div className="alert alert-warning mb-4 text-xs">
+                  No adapters with <code>ask</code> capability were returned. Check API configuration
+                  (e.g. <code>ENABLED_ADAPTERS</code>) or server logs.
+                </div>
+              )}
+
+            {adapterListError && (
+              <div className="alert alert-warning mb-4 text-xs font-mono whitespace-pre-wrap">
+                Could not load adapter list (/v1/adapters): {adapterListError}
+              </div>
+            )}
+            {!adapterListError &&
+              adapterListHydrated &&
+              pickedAdapter &&
+              !pickedAdapter.health.ok && (
+                <div className="alert alert-warning mb-4 text-xs">
+                  Selected adapter <strong>{pickedAdapter.name}</strong> reports unhealthy —
+                  Ask stays disabled until it passes health ({pickedAdapter.health.reason ?? "reason unknown"}
+                  ).
+                </div>
+              )}
+
             {/* Ask form */}
             <form
               onSubmit={handleSubmit}
@@ -771,10 +821,10 @@ export function App() {
                       <option
                         key={a.name}
                         value={a.name}
-                        disabled={!a.health.ok}
-                        title={a.health.ok ? a.description : a.health.reason}
+                        title={a.health.ok ? a.description : (a.health.reason ?? "unhealthy")}
                       >
-                        {a.name}{a.health.ok ? "" : " (down)"}
+                        {a.name}
+                        {a.health.ok ? "" : " (unhealthy)"}
                       </option>
                     ))}
                   </select>
@@ -799,7 +849,12 @@ export function App() {
                 <button
                   type="submit"
                   className="btn btn-primary btn-sm ml-auto gap-2"
-                  disabled={submitting || !form.question.trim()}
+                  disabled={
+                    submitting ||
+                    !adapterListHydrated ||
+                    !form.question.trim() ||
+                    !pickedAdapter?.health.ok
+                  }
                 >
                   {submitting && <span className="loading loading-spinner loading-xs" />}
                   <span>{submitting ? "Asking…" : "Ask"}</span>

@@ -22,6 +22,9 @@ eval/outputs/eval-*
 # bridge dep installs happen inside the Docker container
 bridge/*/node_modules/
 
+# agent-node: install deps with `npm install` in services/agent-node
+services/agent-node/node_modules/
+
 # macOS / editor noise
 .DS_Store
 .idea/

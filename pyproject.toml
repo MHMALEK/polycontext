@@ -29,10 +29,8 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
 ]
-# The current adapter set (cline_sdk, opencode, cursor) has no extra Python
-# deps — Cline runs through the Node sidecar at ``bridge/cline_sdk/``,
-# OpenCode and Cursor are external CLI binaries. Left empty so external
-# references to ``.[adapters]`` keep working.
+# The adapter set talks to ``services/agent-node`` for cursor, cline_sdk, gemini;
+# optional extras remain empty for ``.[adapters]``.
 adapters = []
 
 [build-system]

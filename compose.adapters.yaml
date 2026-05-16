@@ -1,29 +1,40 @@
-# Optional compose overlay: adapter sidecars.
+# Optional compose overlay: agent-node (Cursor, Cline, Claude Code SDK, Gemini, OpenAI Agents, Sourcebot).
 #
 # Not part of the default `make up` / `make dev` stack — start with:
 #     docker compose -f docker-compose.yml -f compose.local.yaml -f compose.adapters.yaml up -d
-# or the convenience target:
-#     make adapters
-#
-# Currently the only sidecar is the cline-sdk-bridge — a tiny Node service
-# that exposes @cline/sdk over HTTP so the Python ``cline_sdk`` adapter can
-# call it. The OpenCode and Cursor adapters run as subprocesses on the host
-# and don't need a sidecar.
+# or: `make adapters`
 
 services:
 
-  cline_sdk_bridge:
-    build:
-      context: ./bridge/cline_sdk
-    ports:
-      - "${CLINE_SDK_BRIDGE_PORT:-13040}:3040"
+  app:
+    depends_on:
+      agent_node:
+        condition: service_started
     environment:
-      LOG_LEVEL: ${CLINE_SDK_BRIDGE_LOG_LEVEL:-info}
-      # Sourcebot is reachable from the bridge container via the host's
-      # localhost. ``host.docker.internal`` works out-of-the-box on Docker
-      # Desktop; the extra_hosts entry below makes it work on Linux too.
+      # Reach in-stack agent-node; 127.0.0.1 and host.docker.local would miss it.
+      AGENT_NODE_URL: http://agent_node:13100
+
+  agent_node:
+    build:
+      context: ./services/agent-node
+    ports:
+      - "${AGENT_NODE_PORT:-13100}:13100"
+    environment:
+      LOG_LEVEL: ${AGENT_NODE_LOG_LEVEL:-info}
+      PORT: "13100"
+      HOST: "0.0.0.0"
+      CURSOR_API_KEY: ${CURSOR_API_KEY}
+      CURSOR_SDK_MODEL: ${CURSOR_SDK_MODEL:-composer-2}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      CLAUDE_CODE_MODEL: ${CLAUDE_CODE_MODEL:-claude-sonnet-4-5}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_SDK_MODEL: ${GEMINI_SDK_MODEL:-gemini-2.5-flash}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_AGENTS_SDK_MODEL: ${OPENAI_AGENTS_SDK_MODEL:-gpt-4.1}
       SOURCEBOT_URL: ${BRIDGE_SOURCEBOT_URL:-http://host.docker.internal:${SOURCEBOT_HOST_PORT:-13000}}
       SOURCEBOT_API_KEY: ${SOURCEBOT_API_KEY}
+    volumes:
+      - "${REPOS_ROOT}:${REPOS_ROOT}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

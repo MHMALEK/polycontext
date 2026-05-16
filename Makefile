@@ -6,6 +6,11 @@
 #                   Backends (postgres, redis, sourcebot) run in Docker.
 #                   FastAPI + Vite run on the host with --reload + HMR.
 #                   Uses .env. Open http://localhost:${UI_PORT}.
+#                   Adapter health stays “unhealthy” until you start agent-node
+#                   separately (see make dev-all).
+#
+#   make dev-all   — Same as dev, plus agent-node in Docker so SDK adapters work.
+#                   One command for UI + API + Sourcebot backends + agent-node.
 #
 #   make up       — Full local stack in Docker. Image is built (incl. UI
 #                   bundle baked in). Same image artifact you'd ship to prod.
@@ -18,7 +23,7 @@
 #                   prod config locally before deploying.
 #
 # Override any port by editing .env (or exporting in the shell):
-#   API_PORT, UI_PORT, SOURCEBOT_HOST_PORT, CLINE_SDK_BRIDGE_PORT
+#   API_PORT, UI_PORT, SOURCEBOT_HOST_PORT, AGENT_NODE_PORT
 #
 # Other:
 #   make build    — rebuild the app image (UI included)
@@ -27,7 +32,7 @@
 #   make down-prod  stop the prod-mode stack
 #   make clean    — stop and remove named volumes (CAUTION: wipes index)
 
-.PHONY: up dev prod build logs down down-prod clean smoke install ui-install help \
+.PHONY: up dev dev-all prod build logs down down-prod clean smoke install ui-install help \
         eval-adapters eval-cases eval-run eval-report \
         adapters adapters-down adapters-logs
 .DEFAULT_GOAL := help
@@ -44,12 +49,12 @@ export
 API_PORT             ?= 18000
 UI_PORT              ?= 15173
 SOURCEBOT_HOST_PORT  ?= 13000
-CLINE_SDK_BRIDGE_PORT ?= 13040
+AGENT_NODE_PORT      ?= 13100
 
 # Compose file combinations
 #   LOCAL    = base + local overlay (publishes Sourcebot for the UI)
 #   PROD     = base + prod overlay  (no host port for Sourcebot; quieter logs)
-#   ADAPTERS = local + adapters overlay (cline-sdk-bridge sidecar)
+#   ADAPTERS = local + adapters overlay (agent-node: Cursor/Cline/Sourcebot proxy)
 COMPOSE_LOCAL    := -f docker-compose.yml -f compose.local.yaml
 COMPOSE_PROD     := -f docker-compose.yml -f compose.prod.yaml --env-file .env.prod
 COMPOSE_ADAPTERS := -f docker-compose.yml -f compose.local.yaml -f compose.adapters.yaml
@@ -98,6 +103,19 @@ dev: install ui-install  ## Local dev: backends in Docker, FastAPI + Vite on hos
 	(cd web && npm run dev -- --port $(UI_PORT)) & \
 	wait
 
+dev-all: install ui-install  ## dev + agent-node (Docker): one command so adapters stay healthy
+	@echo "Starting Postgres, Redis, Sourcebot, and agent-node in Docker..."
+	docker compose $(COMPOSE_ADAPTERS) up -d --build postgres redis sourcebot agent_node
+	@echo ""
+	@echo "Ensure AGENT_NODE_URL targets the published port (default http://127.0.0.1:$(AGENT_NODE_PORT))."
+	@echo "FastAPI on :$(API_PORT) + Vite on :$(UI_PORT). Ctrl-C stops API + UI (Docker stack keeps running)."
+	@echo "Open http://localhost:$(UI_PORT)"
+	@echo "agent-node http://localhost:$(AGENT_NODE_PORT)"
+	@trap 'kill 0' EXIT INT TERM; \
+	uv run uvicorn tech_decomposition.api:app --reload --port $(API_PORT) & \
+	(cd web && npm run dev -- --port $(UI_PORT)) & \
+	wait
+
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
@@ -132,30 +150,30 @@ ui-install:  ## Install UI deps via npm
 # ---------------------------------------------------------------------------
 
 smoke:  ## Ask one canned question via the running API (override ADAPTER=...)
-	curl -sS http://localhost:$(API_PORT)/v1/adapters/$${ADAPTER:-opencode}/ask \
+	curl -sS http://localhost:$(API_PORT)/v1/adapters/$${ADAPTER:-cursor}/ask \
 	  -H 'content-type: application/json' \
 	  -d '{"query":"Where is the Suppliers page rendered?"}' | \
 	  python -m json.tool
 
 # ---------------------------------------------------------------------------
-# Adapter sidecars (currently just the cline-sdk-bridge)
+# Adapter sidecars
 # ---------------------------------------------------------------------------
 
-adapters:  ## Start the cline-sdk-bridge sidecar
-	docker compose $(COMPOSE_ADAPTERS) up -d --build cline_sdk_bridge
+adapters:  ## Start/recreate agent-node + app so FastAPI sees in-stack AGENT_NODE_URL
+	docker compose $(COMPOSE_ADAPTERS) up -d --build app agent_node
 	@echo ""
-	@echo "  cline-sdk-bridge  : http://localhost:$(CLINE_SDK_BRIDGE_PORT)"
+	@echo "  agent-node : http://localhost:$(AGENT_NODE_PORT)"
 	@echo ""
 	@echo "Set in .env:"
-	@echo "  CLINE_SDK_BRIDGE_URL=http://localhost:$(CLINE_SDK_BRIDGE_PORT)"
+	@echo "  AGENT_NODE_URL=http://localhost:$(AGENT_NODE_PORT)"
 	@echo "Then 'make eval-adapters' to confirm health."
 
-adapters-down:  ## Stop the cline-sdk-bridge sidecar
-	docker compose $(COMPOSE_ADAPTERS) stop cline_sdk_bridge
-	docker compose $(COMPOSE_ADAPTERS) rm -f cline_sdk_bridge
+adapters-down:  ## Stop agent-node
+	docker compose $(COMPOSE_ADAPTERS) stop agent_node
+	docker compose $(COMPOSE_ADAPTERS) rm -f agent_node
 
-adapters-logs:  ## Tail cline-sdk-bridge logs
-	docker compose $(COMPOSE_ADAPTERS) logs -f cline_sdk_bridge
+adapters-logs:  ## Tail agent-node logs
+	docker compose $(COMPOSE_ADAPTERS) logs -f agent_node
 
 # ---------------------------------------------------------------------------
 # Adapter bake-off (eval/)
@@ -167,7 +185,7 @@ eval-adapters:  ## eval: list registered adapters and their health
 eval-cases:  ## eval: list discovered cases (filter with JOB=ask|decompose|implement)
 	uv run python -m eval.bakeoff.cli list-cases $(if $(JOB),--job $(JOB))
 
-# Example: make eval-run ADAPTERS=cline_sdk,opencode JOB=ask
+# Example: make eval-run ADAPTERS=cursor,cline_sdk JOB=ask
 eval-run:  ## eval: run the bake-off (ADAPTERS=a,b JOB=ask|decompose|implement)
 	@test -n "$(ADAPTERS)" || (echo "set ADAPTERS=a,b,c"; exit 1)
 	uv run python -m eval.bakeoff.cli run --adapters $(ADAPTERS) $(if $(JOB),--job $(JOB)) $(if $(IDS),--ids $(IDS)) $(if $(TAGS),--tags $(TAGS))

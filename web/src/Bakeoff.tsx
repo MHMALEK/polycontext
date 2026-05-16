@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "./api";
@@ -33,6 +33,13 @@ export function Bakeoff() {
   }, []);
 
   const eligible = adapters.filter((a) => a.capabilities.includes(job as Capability));
+
+  const selectedAllHealthy = useMemo(() => {
+    if (selected.size === 0) return false;
+    return [...selected].every((name) =>
+      Boolean(adapters.find((a) => a.name === name)?.health.ok),
+    );
+  }, [adapters, selected]);
 
   const toggle = useCallback((name: string) => {
     setSelected((prev) => {
@@ -176,17 +183,21 @@ export function Bakeoff() {
                   key={a.name}
                   className={`btn btn-sm ${
                     selected.has(a.name) ? "btn-secondary" : "btn-outline"
-                  } ${a.health.ok ? "" : "btn-disabled opacity-50"}`}
-                  title={a.health.ok ? a.description : a.health.reason}
+                  } ${a.health.ok ? "" : "opacity-60 ring-1 ring-warning/40"}`}
+                  title={
+                    a.health.ok
+                      ? a.description
+                      : `${a.description} — unhealthy: ${a.health.reason}`
+                  }
                 >
                   <input
                     type="checkbox"
                     className="sr-only"
                     checked={selected.has(a.name)}
                     onChange={() => toggle(a.name)}
-                    disabled={!a.health.ok}
                   />
                   {a.name}
+                  {!a.health.ok ? " ⚠" : ""}
                 </label>
               ))}
             </div>
@@ -195,7 +206,7 @@ export function Bakeoff() {
           <button
             type="submit"
             className="btn btn-primary btn-sm self-start"
-            disabled={submitting || selected.size === 0}
+            disabled={submitting || selected.size === 0 || !selectedAllHealthy}
           >
             {submitting && <span className="loading loading-spinner loading-xs" />}
             {submitting ? "Running…" : `Run on ${selected.size} adapter${selected.size === 1 ? "" : "s"}`}

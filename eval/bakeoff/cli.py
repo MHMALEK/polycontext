@@ -3,12 +3,13 @@
 Run via:
     uv run python -m eval.bakeoff.cli list-cases
     uv run python -m eval.bakeoff.cli list-adapters
-    uv run python -m eval.bakeoff.cli run --job ask --adapters cline_sdk,opencode
+    uv run python -m eval.bakeoff.cli run --job ask --adapters cursor,cline_sdk
     uv run python -m eval.bakeoff.cli report eval/outputs/eval-20260514T...
 
-The runner uses an in-process FastAPI ``TestClient`` by default (no need to
-start the server). Pass ``--base-url http://localhost:8000`` to hit a real
-running stack instead — useful when an adapter needs Docker sidecars.
+The runner uses an in-process FastAPI app (ASGI transport) by default — no
+``make dev`` required. Adapters that use agent-node (``cursor``, ``cline_sdk``,
+``sourcebot``, ``claude_code``, ``gemini``) still need **agent-node running** at ``AGENT_NODE_URL``. Pass
+``--base-url http://localhost:${API_PORT}`` to exercise the full HTTP stack.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ def _load_dotenv_into_environ() -> None:
     """Make ``.env`` available to subprocess-level libraries.
 
     ``pydantic-settings`` reads ``.env`` into the ``Settings`` model fields,
-    but the adapter CLIs (Cline, OpenCode, cursor-agent) read ``os.environ``
+    but Cursor SDK / Cline SDK agents in agent-node read ``os.environ``
     directly for provider keys. Without this shim, you get the surprising
     ``API_KEY_INVALID`` errors when an adapter inside the FastAPI process
     can't see keys that the parent app loaded.
@@ -129,6 +130,10 @@ async def _cmd_run(args) -> int:
             output_dir=out_dir,
             timeout_seconds=args.timeout,
             on_progress=_progress,
+            run_meta={
+                "client_backend": "http" if args.base_url else "in_process_asgi",
+                "client_base_url": args.base_url,
+            },
         )
     finally:
         await client.aclose()

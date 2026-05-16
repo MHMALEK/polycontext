@@ -1,6 +1,6 @@
 """Adapter contract: a uniform surface over heterogeneous code agents.
 
-Every adapter (Cline SDK, OpenCode, Cursor, ...) implements some subset
+Every registered adapter (e.g. Cursor SDK, Cline SDK, Sourcebot) implements some subset
 of three methods:
 
     ask        — code Q&A
@@ -70,6 +70,8 @@ class AdapterAskInput(BaseModel):
     query: str = Field(min_length=1)
     repos: list[str] | None = None
     top_k: int = Field(default=8, ge=1, le=50)
+    branch: str | None = None
+    starting_ref: str | None = None
 
 
 class AdapterAskResult(BaseModel):

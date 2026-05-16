@@ -1,21 +1,14 @@
 """Adapter discovery — name → class lookup.
 
 Registration is by **late import**: each adapter module is imported lazily on
-first lookup so a missing optional dependency doesn't take down the whole API.
+first lookup so a missing optional dependency does not take down the whole API.
 ``health()`` reports the failure if anyone asks for that adapter specifically.
 
-To add a new adapter:
-    1. Implement ``Adapter`` in a new ``_yourname.py`` module.
-    2. Add an entry to ``_REGISTRY`` below.
-
-Current set (post-narrowing): the bake-off has converged on Cline (SDK) and
-OpenCode as the strongest agents, with Cursor kept as a frozen secondary.
-Each primary has a ``_grounded`` sibling that pre-loads Sourcebot+ripgrep
-file pointers into the prompt.
-
-The legacy ``/ask`` endpoint (Sourcebot retrieval + Gemini answer) still
-exists in ``api.py`` and is what the UI calls when no adapter is selected —
-it is not exposed through the adapter registry.
+Current set: ``cursor`` (Cursor SDK), ``cline_sdk`` (Cline SDK),
+``claude_code`` (Claude Agent SDK / Claude Code), ``gemini`` (Google Gemini via
+``@google/genai``), ``sourcebot`` (blocking Sourcebot chat). All non-Python
+runtimes are served by ``services/agent-node``. The HTTP API
+routes through these adapters; the CLI may still call ``ask_sourcebot`` directly.
 """
 from __future__ import annotations
 
@@ -24,16 +17,13 @@ import importlib
 from .base import Adapter
 
 
-# name → (module, classname). Late-imported on demand.
 _REGISTRY: dict[str, tuple[str, str]] = {
-    # Primary: Cline via Node SDK bridge (real token/cost telemetry).
+    "cursor": ("tech_decomposition.adapters._cursor_sdk", "CursorSDKAdapter"),
     "cline_sdk": ("tech_decomposition.adapters._cline_sdk", "ClineSDKAdapter"),
-    "cline_sdk_grounded": ("tech_decomposition.adapters._cline_sdk", "ClineSDKGroundedAdapter"),
-    # Primary: OpenCode terminal agent (provider-agnostic).
-    "opencode": ("tech_decomposition.adapters._opencode", "OpenCodeAdapter"),
-    "opencode_grounded": ("tech_decomposition.adapters._opencode", "OpenCodeGroundedAdapter"),
-    # Secondary (kept, frozen): Cursor Agent CLI.
-    "cursor": ("tech_decomposition.adapters._cursor", "CursorAdapter"),
+    "claude_code": ("tech_decomposition.adapters._claude_code_sdk", "ClaudeCodeSDKAdapter"),
+    "gemini": ("tech_decomposition.adapters._gemini", "GeminiAdapter"),
+    "openai_agents": ("tech_decomposition.adapters._openai_agents", "OpenAIAgentsAdapter"),
+    "sourcebot": ("tech_decomposition.adapters._sourcebot", "SourcebotAdapter"),
 }
 
 
@@ -49,24 +39,13 @@ def _load_class(name: str) -> type[Adapter]:
 
 
 def get_adapter(name: str, settings) -> Adapter:
-    """Instantiate the named adapter with the given Settings.
-
-    Raises:
-        KeyError: name is not in the registry.
-        ImportError: adapter's optional dependency is missing — caller can
-            translate this to a 501/503.
-    """
+    """Instantiate the named adapter with the given Settings."""
     cls = _load_class(name)
     return cls(settings)
 
 
 def list_adapters(settings) -> list[dict]:
-    """Best-effort listing of every registered adapter and what it supports.
-
-    Adapters whose optional deps are missing are reported with ``installed=False``
-    and ``health.ok=False`` rather than omitted, so the UI can show a greyed-out
-    entry and tell the user how to enable it.
-    """
+    """Best-effort listing of every registered adapter and what it supports."""
     out: list[dict] = []
     for name in _REGISTRY:
         try:

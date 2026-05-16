@@ -39,7 +39,12 @@ class Settings(BaseSettings):
 
     sourcebot_url: str = ""
     sourcebot_api_key: str = ""
-    sourcebot_timeout_seconds: float = 15.0
+    # Used for Sourcebot HTTP (search + agent-node `/adapters/sourcebot/ask` → blocking chat).
+    # Low values produce fast 502 timeouts from agent-node during long reasoning turns.
+    sourcebot_timeout_seconds: float = 300.0
+    # Fail closed: when true, grounded retrieval requires Sourcebot to be
+    # configured and reachable; otherwise the pipeline raises.
+    grounding_require_sourcebot: bool = True
     # When true, ``ask_sourcebot`` uses only ``POST /api/chat/blocking`` and does
     # not fall back to MCP ``ask_codebase`` if the primary endpoint 404s.
     sourcebot_disable_mcp_fallback: bool = False
@@ -54,6 +59,9 @@ class Settings(BaseSettings):
     retrieval_max_hits: int = 40
     retrieval_snippet_lines: int = 8
     decompose_max_context_chars: int = 80_000
+    # Optional open-source cross-encoder reranker for grounding snippets.
+    grounding_reranker_model: str = ""
+    grounding_reranker_max_candidates: int = 48
 
     output_dir: Path = Path("./outputs")
 
@@ -63,32 +71,32 @@ class Settings(BaseSettings):
     #   local      = local Pydantic AI agent only.
     ask_via: Literal["auto", "sourcebot", "local"] = "auto"
 
-    # ----- adapter bake-off ---------------------------------------------------
-    # GitLab API token with ``api`` scope. Required for the ``implement``
-    # endpoint to open MRs; the rest of the bake-off works without it.
+    # ----- adapters / agent-node ------------------------------------------------
     gitlab_token: str = ""
-    # Commit author for adapter-generated commits. Falls back to whatever
-    # ``git config user.name/user.email`` resolves to in the worktree when blank.
     git_author_name: str = ""
     git_author_email: str = ""
-    # Comma-separated allowlist; empty = expose everything in the registry.
     enabled_adapters: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
-    # CLI binaries — empty string means "look on PATH". Set these only if
-    # you have a non-standard install location (e.g. a Homebrew prefix).
-    opencode_bin: str = ""
-    cursor_bin: str = ""
+    # Node service (services/agent-node) — Cursor, Cline, Claude Code, Gemini, OpenAI Agents, Sourcebot proxy.
+    agent_node_url: str = "http://127.0.0.1:13100"
+    agent_node_timeout_seconds: float = 600.0
 
-    # Per-CLI timeouts. CLI adapters launch real agent processes that can take
-    # minutes for non-trivial work; defaults are generous so they don't get
-    # killed mid-edit. Tune downward if you want fail-fast behavior.
-    opencode_timeout_seconds: float = 600.0
-    cursor_timeout_seconds: float = 600.0
+    # Cursor Cloud API key (also used by @cursor/sdk local runs).
+    cursor_api_key: str = ""
+    cursor_sdk_model: str = "composer-2"
+    # Claude Code (@anthropic-ai/claude-agent-sdk) default model when using ``claude_code`` adapter.
+    claude_code_model: str = "claude-sonnet-4-5"
 
-    # cline-sdk-bridge — Node sidecar wrapping @cline/sdk so the Python adapter
-    # can call it over HTTP. See bridge/cline_sdk/.
-    cline_sdk_bridge_url: str = ""
-    cline_sdk_timeout_seconds: float = 600.0
+    # Gemini via agent-node (`@google/genai` — https://googleapis.github.io/js-genai/).
+    gemini_sdk_model: str = "gemini-2.5-flash"
+    # If empty, decompose uses ``decompose_model``.
+    gemini_sdk_decompose_model: str = ""
+    gemini_sdk_timeout_seconds: float = 600.0
+
+    # OpenAI Agents SDK via agent-node (`@openai/agents` — https://github.com/openai/openai-agents-js).
+    openai_agents_sdk_model: str = "gpt-4.1"
+    openai_agents_sdk_decompose_model: str = ""
+    openai_agents_sdk_timeout_seconds: float = 600.0
 
     @field_validator("enabled_adapters", mode="before")
     @classmethod

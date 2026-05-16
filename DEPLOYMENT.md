@@ -75,7 +75,7 @@ curl -sS http://localhost:18000/health
 # {"status":"ok"}
 
 # Every Q&A request routes through an adapter — pick one from /v1/adapters.
-curl -sS http://localhost:18000/v1/adapters/opencode/ask \
+curl -sS http://localhost:18000/v1/adapters/cursor/ask \
   -H 'content-type: application/json' \
   -d '{"query":"Where is the supplier creation endpoint defined?"}' \
   | jq '{adapter: .result.adapter, run_id, model: .result.metrics.model}'

@@ -42,6 +42,7 @@ class RunRecord:
     status: int
     error: str | None
     duration_ms: int
+    run_id: str | None = None
     response: dict[str, Any] = field(default_factory=dict)
     score: dict[str, Any] = field(default_factory=dict)
 
@@ -59,6 +60,8 @@ def _case_input_for_adapter(case: Case) -> dict[str, Any]:
             "query": case.input["query"],
             "repos": case.input.get("repos"),
             "top_k": case.input.get("top_k", 8),
+            "branch": case.input.get("branch"),
+            "starting_ref": case.input.get("starting_ref"),
         }
     if case.job == "decompose":
         return {
@@ -100,12 +103,14 @@ async def run_case(
             case_id=case.id, job=case.job, adapter=adapter,
             ok=False, status=504, error=f"runner timeout after {timeout_seconds}s",
             duration_ms=int((time.monotonic() - t) * 1000),
+            run_id=None,
         )
     except Exception as e:  # noqa: BLE001 — capture everything for the report
         return RunRecord(
             case_id=case.id, job=case.job, adapter=adapter,
             ok=False, status=500, error=f"{type(e).__name__}: {e}",
             duration_ms=int((time.monotonic() - t) * 1000),
+            run_id=None,
         )
 
     duration_ms = int((time.monotonic() - t) * 1000)
@@ -116,6 +121,7 @@ async def run_case(
             ok=False, status=envelope.get("status", 500),
             error=envelope.get("error", "unknown"),
             duration_ms=duration_ms,
+            run_id=envelope.get("run_id"),
         )
 
     result = envelope.get("result") or {}
@@ -124,6 +130,7 @@ async def run_case(
         case_id=case.id, job=case.job, adapter=adapter,
         ok=True, status=envelope.get("status", 200), error=None,
         duration_ms=duration_ms,
+        run_id=envelope.get("run_id"),
         response=result,
         score=asdict(score),
     )
@@ -137,6 +144,7 @@ async def run_bakeoff(
     output_dir: Path,
     timeout_seconds: float = 900.0,
     on_progress=None,
+    run_meta: dict[str, Any] | None = None,
 ) -> Path:
     """Execute the full grid and write everything to disk.
 
@@ -148,6 +156,7 @@ async def run_bakeoff(
         "adapters": adapters,
         "cases": [{"id": c.id, "job": c.job, "tags": c.tags} for c in cases],
         "timeout_seconds": timeout_seconds,
+        "run_meta": run_meta or {},
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 

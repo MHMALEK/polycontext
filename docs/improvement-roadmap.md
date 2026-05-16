@@ -292,6 +292,69 @@ If you have a month:
 
 ---
 
+## Execution TODO (adapter hardening track)
+
+This is the concrete, adapter-agnostic improvement plan we agreed to execute
+incrementally (harden one adapter first, then roll out).
+
+### A) Retrieval quality (highest ROI)
+
+- [ ] Add **ast-grep** as a structural retriever stage (AST-aware rules) to
+      complement keyword retrieval.
+  - Goal: improve cross-repo recall for symbols/call chains that plain text
+    search misses.
+  - Initial scope: use ast-grep for Python/TS import, handler, and call-site
+    patterns only.
+- [x] Keep existing hybrid retrieval (`ripgrep` + `sourcebot`) and rerank on top.
+- [x] Add optional **BGE reranker** (`FlagEmbedding`) in grounding pipeline.
+  - Config: `GROUNDING_RERANKER_MODEL`, `GROUNDING_RERANKER_MAX_CANDIDATES`.
+  - Next: calibrate model/thresholds with eval data.
+- [ ] Add retrieval observability per ask run:
+  - candidate count, selected count, repo distribution, rerank latency.
+
+### B) Prompt management
+
+- [ ] Integrate **Langfuse** for prompt versioning + labels (`production`,
+      `staging`, `exp-*`).
+- [ ] Move ask/decompose prompt templates to managed prompt IDs (not hardcoded
+      strings only).
+- [ ] Implement A/B prompt selection by label (e.g. `prod-a` vs `prod-b`),
+      recording selected prompt version in run metadata.
+- [ ] Enable trace linking: each ask/decompose run links response, retrieval
+      context, and prompt version.
+- [ ] Add rollback playbook: "flip label to previous known-good prompt".
+
+### C) Answer quality gating
+
+- [ ] Add **DeepEval** checks for ask quality:
+  - faithfulness
+  - answer relevancy
+  - contextual precision / recall / relevancy
+- [ ] Gate adapter regressions in CI with pytest assertions on critical cases.
+- [x] Add master-data cross-repo ask case (`q7-master-data-upload-e2e`) as a
+      fixed regression target.
+- [ ] Define adapter pass criteria before rollout:
+  - minimum quality score threshold
+  - max allowed contract failures/retries
+  - latency budget.
+
+### D) Rollout strategy (one adapter at a time)
+
+- [x] Create shared stage pipeline for ask:
+      input prep -> retrieval -> prompt prep -> invoke -> response formatting.
+- [x] Apply strict contract + retry hardening to **OpenCode** first.
+- [ ] Tune OpenCode policy and retrieval settings until stable on fixed eval set.
+- [ ] Promote the same hardened pipeline contract to the next adapter
+      (`cline_sdk`, then `cursor`) with adapter-specific policy overrides.
+
+### Definition of done for each adapter
+
+- [ ] Passes agreed quality gates on fixed cross-repo ask cases.
+- [ ] Produces stable, cited answers with low contract-repair retry rate.
+- [ ] Emits per-stage telemetry for debugging and optimization.
+
+---
+
 ## Anti-recommendations (don't do these, even though they're tempting)
 
 - **Don't fine-tune a custom model.** You don't have the eval set or the

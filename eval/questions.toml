@@ -61,3 +61,20 @@ tags = ["cross-repo", "frontend", "traceability", "permissions"]
 text = """
 Can DATA_VIEWER_ROLE access the Settings area at all? Find where Settings access is gated and which roles pass that gate.
 """
+
+[[questions]]
+id = "q7-master-data-upload-e2e"
+tags = ["cross-repo", "frontend", "traceability", "data-cloud-functions", "data", "master-data"]
+text = """
+How does master data upload work across all flows in the app?
+Trace the end-to-end flow across repos, including:
+- UI entry points
+- API/backend processing
+- validation and persistence
+- async/background jobs
+- where users see status/errors
+"""
+[questions.expected]
+min_chars = 400
+must_mention = ["frontend", "traceability", "data-cloud-functions", "data"]
+should_mention = ["validation", "status", "error"]

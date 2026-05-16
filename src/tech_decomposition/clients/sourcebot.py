@@ -85,6 +85,29 @@ def _default_sourcebot_repos(settings: Settings) -> list[str] | None:
     return deduped or None
 
 
+def effective_sourcebot_repos_for_ask(
+    settings: Settings,
+    repos: list[str] | None,
+) -> list[str] | None:
+    """Resolve short repo keys (e.g. ``frontend``) to Sourcebot repo filters."""
+    if not repos:
+        return _default_sourcebot_repos(settings)
+    out: list[str] = []
+    for name in repos:
+        path = settings.gitlab_projects.get(name)
+        if path:
+            p = str(path).strip().lstrip("/")
+            out.append(f"gitlab.com/{p}")
+        else:
+            n = name.strip()
+            if n.startswith("gitlab.com/"):
+                out.append(n)
+            else:
+                out.append(f"gitlab.com/{n.lstrip('/')}")
+    deduped = [r for i, r in enumerate(out) if r and r not in out[:i]]
+    return deduped or None
+
+
 async def _ask_via_chat_blocking(
     question: str,
     *,
@@ -218,7 +241,7 @@ async def ask_sourcebot(
         else disable_mcp_fallback
     )
 
-    effective_repos = repos or _default_sourcebot_repos(settings)
+    effective_repos = effective_sourcebot_repos_for_ask(settings, repos)
 
     try:
         return await _ask_via_chat_blocking(
