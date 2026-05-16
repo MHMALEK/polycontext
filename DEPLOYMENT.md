@@ -113,7 +113,7 @@ Optional (each opt-in by setting the credential):
 - `OPENAI_API_KEY` — to use `openai:gpt-...`.
 - `OPENROUTER_API_KEY` — to use `openrouter:anthropic/claude-...` or any other OR-routed model.
 - `CUSTOM_LLM_BASE_URL` + `CUSTOM_LLM_API_KEY` — any OpenAI-compatible endpoint (LiteLLM proxy, vLLM, Ollama).
-- `GITLAB_TOKEN` — needed only when the `gitlab-tract` connector in [config/sourcebot/config.json](config/sourcebot/config.json) is active.
+- `GITLAB_TOKEN` — needed only when the `gitlab-company` connector in [config/sourcebot/config.json](config/sourcebot/config.json) is active.
 - `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` — needed for `decompose --ticket-key` and `--post-to-jira`.
 
 Per-stage model selection — set in `.env`:
@@ -137,8 +137,8 @@ manually:
 ```bash
 mkdir -p ~/repos
 cd ~/repos
-git clone git@gitlab.com:tract1/application/api/traceability.git
-git clone git@gitlab.com:tract1/application/frontend.git
+git clone git@github.com:your-company/backend-api.git
+git clone git@github.com:your-company/frontend-webapp.git
 # ...
 ```
 
@@ -154,8 +154,8 @@ cron job is enough:
 ### Path B — Sourcebot-managed clones (preferred for prod)
 
 Add a `GITLAB_TOKEN` (scopes: `read_api`, `read_repository`) to `.env`. The
-`gitlab-tract` connector in [config/sourcebot/config.json](config/sourcebot/config.json)
-will then clone every repo under the `tract1/application` group into Sourcebot's
+`gitlab-company` connector in [config/sourcebot/config.json](config/sourcebot/config.json)
+will then clone every repo under the `your-company/backend-api` group into Sourcebot's
 own data volume and keep them updated on a schedule. No host-side `git pull`
 needed. To narrow scope, edit the `groups` / add `projects` arrays in that
 config and restart Sourcebot:

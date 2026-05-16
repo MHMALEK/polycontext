@@ -89,7 +89,7 @@ class SourcebotRetriever(Retriever):
 
     def _expected_repo_name(self, repo: str) -> str | None:
         """Sourcebot indexes the repos under their git origin
-        (e.g. `gitlab.com/tract1/application/frontend`)."""
+        (e.g. `gitlab.com/your-company/frontend-webapp`)."""
         project = self.settings.gitlab_projects.get(repo)
         if project:
             return f"gitlab.com/{project}"

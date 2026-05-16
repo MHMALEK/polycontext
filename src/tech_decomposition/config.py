@@ -20,17 +20,15 @@ class Settings(BaseSettings):
     custom_llm_base_url: str = ""
     custom_llm_api_key: str = ""
 
-    repos_root: Path = Path("/Users/mohammadhosseinmalek/tract-projects/aider-experiments")
+    repos_root: Path = Path("./repos")
     repos: Annotated[list[str], NoDecode] = Field(default_factory=lambda: [
-        "traceability", "frontend", "data-cloud-functions", "data",
+        "backend-api", "frontend-webapp",
     ])
 
     gitlab_base_url: str = "https://gitlab.com"
     gitlab_projects: Annotated[dict[str, str], NoDecode] = Field(default_factory=lambda: {
-        "traceability": "tract1/application/api/traceability",
-        "frontend": "tract1/application/frontend",
-        "data-cloud-functions": "tract1/application/data-cloud-functions",
-        "data": "tract1/application/data",
+        "backend-api": "your-company/backend-api",
+        "frontend-webapp": "your-company/frontend-webapp",
     })
 
     jira_base_url: str = ""

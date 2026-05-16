@@ -58,7 +58,7 @@ class GitLabClient:
         """Open an MR. Returns the GitLab MR JSON (including ``web_url``).
 
         ``project_path`` is the full namespace path, e.g.
-        ``tract1/application/api/traceability``. GitLab accepts URL-encoded
+        ``your-company/backend-api``. GitLab accepts URL-encoded
         paths as the ``id`` segment.
         """
         from urllib.parse import quote

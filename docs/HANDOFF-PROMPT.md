@@ -7,9 +7,9 @@ Copy everything between the `---` lines below into your other AI tool.
 You're picking up work on **tech-decomposition**, a Python service that turns
 Jira tickets into AI-friendly tech decompositions with multi-repo
 context and clickable GitLab permalinks. The project lives at
-`/Users/mohammadhosseinmalek/tract-projects/tech-decomposition` and runs against
-four real repos cloned at `/Users/mohammadhosseinmalek/tract-projects/aider-experiments/`:
-`traceability`, `frontend`, `data-cloud-functions`, `data`.
+`/path/to/tech-decomposition` and runs against
+four real repos cloned at `/path/to/repos/`:
+`backend-api`, `frontend-webapp`, etc.
 
 ## Architecture (what already works)
 
@@ -213,7 +213,7 @@ re-stated here so you can pick them up directly:
 ## How to verify your changes
 
 ```bash
-cd /Users/mohammadhosseinmalek/tract-projects/tech-decomposition
+cd /path/to/tech-decomposition
 # Already has .venv. If missing:  uv venv && uv pip install -e .
 
 # Make sure docker stack is up:

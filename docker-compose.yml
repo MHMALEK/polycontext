@@ -50,7 +50,7 @@ services:
     volumes:
       # Bind-mount the parent folder containing the 4 repo clones, read-only.
       # Sourcebot config.json globs file:///data/repos/* so each subdir gets indexed.
-      - ${REPOS_ROOT:-/Users/mohammadhosseinmalek/tract-projects/aider-experiments}:/data/repos:ro
+      - ${REPOS_ROOT:-./repos}:/data/repos:ro
       - ./config/sourcebot/config.json:/data/config.json:ro
       - sourcebot_data:/data/.sourcebot
     environment:
@@ -82,7 +82,7 @@ services:
     ports:
       - "9121:9121"
     volumes:
-      - ${REPOS_ROOT:-/Users/mohammadhosseinmalek/tract-projects/aider-experiments}:/workspaces/projects
+      - ${REPOS_ROOT:-./repos}:/workspaces/projects
     command: >
       serena start-mcp-server
       --transport sse

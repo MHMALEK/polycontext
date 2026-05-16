@@ -5,17 +5,15 @@
       "type": "git",
       "url": "file:///data/repos/*"
     },
-    "gitlab-tract": {
+    "gitlab-company": {
       "type": "gitlab",
       "token": {
         "env": "GITLAB_TOKEN"
       },
       "url": "https://gitlab.com",
       "projects": [
-        "tract1/application/api/traceability",
-        "tract1/application/frontend",
-        "tract1/application/data",
-        "tract1/application/data-cloud-functions"
+        "your-company/backend-api",
+        "your-company/frontend-webapp"
       ],
       "exclude": {
         "archived": true,
