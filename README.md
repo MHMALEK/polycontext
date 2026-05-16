@@ -170,7 +170,23 @@ The system automatically measures:
 1. **Environment:**
    ```bash
    cp .env.example .env
-   # Add your GEMINI_API_KEY and configure REPOS_ROOT
+   # Add your GEMINI_API_KEY
+   ```
+
+2. **Configure Your Proprietary Repositories:**
+   This framework is designed to search your private, proprietary company repositories without ever committing them to this tool's codebase. 
+   
+   Create a local folder (e.g., `repos/` which is already included in our `.gitignore` to prevent accidental commits) and clone your company's repositories inside it:
+   ```bash
+   mkdir repos
+   cd repos
+   git clone git@github.com:your-company/backend-api.git
+   git clone git@github.com:your-company/frontend-webapp.git
+   ```
+   Then, update your `.env` file to point to this folder and list the repositories you want the AI to index:
+   ```env
+   REPOS_ROOT=./repos
+   REPOS=backend-api,frontend-webapp
    ```
 
 2. **Install Python & Node Dependencies:**

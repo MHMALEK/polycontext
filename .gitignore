@@ -31,3 +31,7 @@ services/agent-node/node_modules/
 .vscode/
 .chroma_db/
 .chroma_db_test/
+
+# User repositories (for local experimentation, ignored to prevent pushing proprietary code)
+repos/
+company-repos/
