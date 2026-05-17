@@ -23,14 +23,6 @@
   },
   "models": [
     {
-      "provider": "openai",
-      "model": "gpt-4.1",
-      "displayName": "GPT-4.1",
-      "token": {
-        "env": "OPENAI_API_KEY"
-      }
-    },
-    {
       "provider": "google-generative-ai",
       "model": "gemini-2.5-pro",
       "displayName": "Gemini 2.5 Pro",
@@ -44,6 +36,14 @@
       "displayName": "Gemini 2.5 Flash",
       "token": {
         "env": "GOOGLE_GENERATIVE_AI_API_KEY"
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "displayName": "GPT-4.1",
+      "token": {
+        "env": "OPENAI_API_KEY"
       }
     }
   ]
