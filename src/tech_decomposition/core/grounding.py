@@ -238,6 +238,91 @@ def _has_strong_terms(terms: list[str]) -> bool:
     return has_symbol or len(terms) >= 3
 
 
+def _generate_code_variants(phrase: str) -> list[str]:
+    """For a multi-word phrase, generate code-style compound variants.
+
+    Sourcebot's search is case-insensitive on individual tokens but treats
+    multi-word phrases (``"Data Sharing"``) as a phrase search. Files that
+    use the compound form (``DataSharing``, ``data_sharing``) won't match.
+    Emitting variants explicitly widens recall when the question phrases
+    a concept differently from how the code names it.
+
+    Returns PascalCase / camelCase / snake_case / UPPER_SNAKE_CASE forms,
+    deduped. Single-word inputs return ``[]`` (already covered by literal
+    matching).
+    """
+    parts = [p for p in phrase.split() if p]
+    if len(parts) < 2:
+        return []
+    lower = [p.lower() for p in parts]
+    pascal = "".join(w.capitalize() for w in lower)
+    camel = lower[0] + "".join(w.capitalize() for w in lower[1:])
+    snake = "_".join(lower)
+    upper = snake.upper()
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in (pascal, camel, snake, upper):
+        if v.lower() not in seen:
+            seen.add(v.lower())
+            out.append(v)
+    return out
+
+
+def _adjacent_lowercase_pair_variants(terms: list[str]) -> list[str]:
+    """For pairs of adjacent simple-lowercase terms in ``terms``, generate
+    compound variants. Catches the "user roles" → ``UserRoles`` /
+    ``user_roles`` case where the question used English but the codebase
+    names things with CamelCase or snake_case.
+
+    Only pairs that are BOTH simple lowercase (no spaces, no underscores,
+    no uppercase) qualify — multi-word phrases already get variants
+    directly via ``_generate_code_variants``.
+    """
+    def _is_simple_lower(t: str) -> bool:
+        return bool(t) and t == t.lower() and " " not in t and "_" not in t and "." not in t
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for i in range(len(terms) - 1):
+        a, b = terms[i], terms[i + 1]
+        if not (_is_simple_lower(a) and _is_simple_lower(b)):
+            continue
+        for v in _generate_code_variants(f"{a} {b}"):
+            if v.lower() not in seen:
+                seen.add(v.lower())
+                out.append(v)
+    return out
+
+
+def _expand_with_variants(terms: list[str], *, max_total: int = 14) -> list[str]:
+    """Append code-style variants for each multi-word term + adjacent-pair
+    variants for simple lowercase tokens.
+
+    Original term order is preserved (variants follow their source phrase
+    in the output, then pair-variants at the end). Capped at ``max_total``
+    to avoid blowing up the per-term parallel-search fan-out.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in terms:
+        low = t.lower()
+        if low not in seen:
+            seen.add(low)
+            out.append(t)
+        for v in _generate_code_variants(t):
+            if v.lower() not in seen:
+                seen.add(v.lower())
+                out.append(v)
+        if len(out) >= max_total:
+            return out[:max_total]
+    # Adjacent-pair variants for lowercase singletons ("user roles" → UserRoles).
+    for v in _adjacent_lowercase_pair_variants(terms):
+        if v.lower() not in seen and len(out) < max_total:
+            seen.add(v.lower())
+            out.append(v)
+    return out[:max_total]
+
+
 def _quote_if_needed(t: str) -> str:
     return f'"{t}"' if (" " in t or any(c in t for c in '()')) else t
 
@@ -478,7 +563,12 @@ async def retrieve_grounded_context(
 
         if not files and len(terms) > 1:
             t_fallback = time.monotonic()
-            quoted_terms = [_quote_if_needed(t) for t in terms]
+            # Expand each multi-word term to its code-style variants. A
+            # question saying "Data Sharing" then yields DataSharing,
+            # dataSharing, data_sharing, DATA_SHARING for the search —
+            # files that use any of those naming conventions get found.
+            expanded = _expand_with_variants(terms)
+            quoted_terms = [_quote_if_needed(t) for t in expanded]
             per_term = await asyncio.gather(
                 *[_search(client, q) for q in quoted_terms],
                 return_exceptions=False,
@@ -498,7 +588,7 @@ async def retrieve_grounded_context(
                 if len(merged) >= top_k:
                     break
             files = merged
-            final_query = "per-term: " + " | ".join(quoted_terms)
+            final_query = f"per-term ({len(quoted_terms)} variants): " + " | ".join(quoted_terms)
 
     snippets = _snippets_from_sourcebot_files(files)
     return GroundedContext(
