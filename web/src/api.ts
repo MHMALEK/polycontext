@@ -150,6 +150,13 @@ export interface GroundingMetrics {
   error: string | null;
   extracted_terms: string[];
   search_query: string;
+  /** "llm" if the Gemini Flash classifier produced the terms; "regex" otherwise. */
+  extractor: "llm" | "regex" | string;
+  /** Verdict from the LLM classifier when used: "needs_grounding" / "skip" / "". */
+  classifier_decision: string;
+  /** One-sentence reasoning from the classifier — surface in tooltips/logs. */
+  classifier_reason: string;
+  classifier_ms: number;
 }
 
 export interface GroundedContext {

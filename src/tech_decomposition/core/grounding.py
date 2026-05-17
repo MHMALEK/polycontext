@@ -1,17 +1,22 @@
 """Grounded retrieval — opt-in pre-fetch of code snippets via Sourcebot search.
 
-Single source for v1: Sourcebot's ``/api/search`` (a zoekt-style code search
-engine). Returns typed snippets, a ready-to-prepend grounding block, and its
-own metrics so the caller can see what grounding cost in latency / snippet
+Single source: Sourcebot's ``/api/search`` (a zoekt-style code search engine).
+Returns typed snippets, a ready-to-prepend grounding block, and its own
+metrics so the caller can see what grounding cost in latency / snippet
 count / chars separately from the adapter's own LLM call.
 
-Sourcebot's search is literal/regex — it does NOT do semantic search. Passing
-it an English sentence finds nothing. So we extract code-relevant keywords
-from the user's natural-language query first (CamelCase, UPPER_SNAKE,
-snake_case, dotted paths, quoted strings, distinctive lowercase tokens) and
-OR them in a zoekt query. The list of extracted terms is reported in
-``metrics.extracted_terms`` so the caller can see what we actually searched
-for.
+Two query-planning paths:
+
+1. **LLM classifier (preferred)** — a Gemini Flash pass decides whether the
+   question would benefit from pre-fetched code at all, and if yes, extracts
+   1-6 code-relevant search terms tuned for zoekt. Handles multi-word
+   domain phrases ("Data Sharing", "Farm Name", "supplier portal") that
+   regex misses. Cost: ~$0.0003, ~500ms.
+
+2. **Regex fallback** — used when ``GEMINI_API_KEY`` isn't set. Pulls
+   CamelCase, UPPER_SNAKE, snake_case, dotted paths, quoted strings, and
+   distinctive lowercase tokens. Works for symbol-heavy queries; fails on
+   pure English questions.
 
 Callers:
 - ``POST /v1/grounding/retrieve`` — see grounding output alone (and its cost).
@@ -20,6 +25,8 @@ Callers:
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 import time
 from typing import Any
@@ -60,6 +67,53 @@ class GroundingMetrics(BaseModel):
         default="",
         description="The literal query string sent to Sourcebot — useful for debugging.",
     )
+    extractor: str = Field(
+        default="regex",
+        description='Which extractor produced the terms: "llm" or "regex".',
+    )
+    classifier_decision: str = Field(
+        default="",
+        description='LLM classifier verdict: "needs_grounding" / "skip" / "" if not used.',
+    )
+    classifier_reason: str = Field(
+        default="",
+        description="Brief reasoning from the classifier — visible in the UI/logs.",
+    )
+    classifier_ms: int = 0
+
+
+class GroundingDecision(BaseModel):
+    """Output of the LLM-based pre-grounding step.
+
+    The classifier decides BOTH:
+      1. whether this question would benefit from pre-fetched code at all
+         (skips conceptual / architecture / opinion questions), and
+      2. if yes, which 1-6 code-relevant terms to search for.
+    """
+
+    needs_grounding: bool = Field(
+        description=(
+            "True if pre-fetching code snippets would likely help answer this "
+            "code-Q&A question. False for conceptual, opinion, or "
+            "architecture-level questions where the LLM's general reasoning "
+            "is more useful than retrieved code."
+        ),
+    )
+    search_terms: list[str] = Field(
+        default_factory=list,
+        description=(
+            "1-6 short, code-relevant search terms tuned for zoekt-style "
+            "literal matching. Prefer: class names, function names, file "
+            "stems, UPPER_SNAKE constants, domain nouns (e.g. 'Farm Name', "
+            "'Data Sharing'). AVOID generic English (the, and, what, etc.). "
+            "Multi-word phrases are OK and will be searched as-is. Empty "
+            "list when needs_grounding=false."
+        ),
+    )
+    reasoning: str = Field(
+        default="",
+        description="One short sentence (under 25 words) explaining the decision.",
+    )
 
 
 class GroundedContext(BaseModel):
@@ -80,26 +134,40 @@ _RX_SNAKE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}\b")
 _RX_DOTTED = re.compile(r"\b[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z][a-zA-Z0-9_.]+\b")
 _RX_QUOTED = re.compile(r'["\']([^"\']{2,40})["\']')
 _RX_LOWER_WORD = re.compile(r"\b[a-z][a-z0-9]{3,}\b")
+# Title Case multi-word: "Data Sharing", "Farm Name", "Reference ID", "Data Uploader".
+# Sentinel users phrase things this way constantly; CamelCase regex misses these
+# because each word is a separate capitalized token.
+_RX_TITLE_PHRASE = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-zA-Z0-9]+){1,3}\b")
 
 # Tokens that look like words but never help a code search.
 _STOPWORDS = {
+    # short / function words (catch in leading-strip of Title Case phrases too:
+    # "On Data Sharing" → "Data Sharing")
+    "a", "an", "as", "at", "be", "by", "do", "if", "in", "is", "it", "of",
+    "on", "or", "to", "we", "you",
+    # generic English filler
     "about", "across", "after", "again", "all", "also", "and", "any",
     "are", "around", "based", "between", "both", "but", "can", "come",
     "comes", "could", "current", "currently", "describe", "describes",
     "different", "does", "doing", "each", "every", "exactly", "explain",
     "explains", "for", "from", "give", "gives", "going", "good", "has",
     "have", "help", "here", "how", "into", "just", "know", "knows",
-    "like", "list", "lists", "look", "make", "many", "more", "most",
-    "much", "must", "name", "names", "need", "new", "now", "off", "one",
+    "like", "look", "make", "many", "more", "most",
+    "much", "must", "need", "new", "now", "off", "one",
     "only", "our", "out", "over", "platform", "please", "really", "same",
     "see", "should", "show", "shows", "some", "such", "tell", "tells",
     "than", "that", "the", "their", "them", "then", "there", "these",
     "they", "this", "those", "through", "use", "used", "uses", "using",
     "very", "want", "wants", "was", "way", "ways", "were", "what",
     "when", "where", "whether", "which", "while", "will", "with",
-    "work", "works", "would", "you", "your",
+    "work", "works", "would", "your",
     # Vague filler nouns
     "thing", "things", "time", "times", "stuff",
+    # NOTE: deliberately keeping "name", "names", "list", "lists", "type"
+    # OUT — they're meaningful suffixes in code-domain phrases like
+    # "Farm Name", "Reference Type", "Supplier List". The leading-strip
+    # logic in _extract_search_terms() handles the case where a question
+    # starts with "List the ..." by removing only LEADING stopwords.
 }
 
 
@@ -110,7 +178,8 @@ def _extract_search_terms(query: str, *, max_terms: int = 8) -> list[str]:
       1. Quoted strings — user is signaling exact text.
       2. UPPER_SNAKE constants, CamelCase classes, snake_case identifiers,
          dotted paths (``user_model.py``, ``a.b.c``).
-      3. Distinctive lowercase words (≥4 chars, not stopwords).
+      3. Title Case multi-word phrases ("Data Sharing", "Farm Name").
+      4. Distinctive lowercase words (≥4 chars, not stopwords).
 
     Returns up to ``max_terms`` terms with duplicates collapsed
     case-insensitively. Empty list when nothing useful can be extracted.
@@ -120,7 +189,17 @@ def _extract_search_terms(query: str, *, max_terms: int = 8) -> list[str]:
 
     def add(token: str) -> None:
         t = token.strip()
-        if not t:
+        # Trim leading stopword tokens from multi-word phrases:
+        # "On Data Sharing" → "Data Sharing". DO NOT trim trailing — words
+        # like "Name" / "Type" / "List" are in the English-stopword set but
+        # are meaningful suffixes in code-domain phrases ("Farm Name",
+        # "User Type").
+        if " " in t:
+            parts = t.split()
+            while parts and parts[0].lower() in _STOPWORDS:
+                parts.pop(0)
+            t = " ".join(parts)
+        if not t or len(t) < 2:
             return
         low = t.lower()
         if low in _STOPWORDS or low in seen:
@@ -130,7 +209,7 @@ def _extract_search_terms(query: str, *, max_terms: int = 8) -> list[str]:
 
     for m in _RX_QUOTED.finditer(query):
         add(m.group(1))
-    for rx in (_RX_UPPER_SNAKE, _RX_CAMEL, _RX_DOTTED, _RX_SNAKE):
+    for rx in (_RX_UPPER_SNAKE, _RX_CAMEL, _RX_DOTTED, _RX_SNAKE, _RX_TITLE_PHRASE):
         for m in rx.finditer(query):
             add(m.group(0))
         if len(terms) >= max_terms:
@@ -144,8 +223,107 @@ def _extract_search_terms(query: str, *, max_terms: int = 8) -> list[str]:
     return terms[:max_terms]
 
 
+def _has_strong_terms(terms: list[str]) -> bool:
+    """True if the regex produced at least one symbol-class term, OR ≥3 distinct
+    terms total. Used to gate the LLM classifier — if regex already has a
+    strong set, we skip the 5-8s Flash call.
+
+    Symbol-class = contains an uppercase letter, underscore, dot, or space
+    (i.e. came from one of the higher-priority regexes, not the lowercase
+    fallback).
+    """
+    if not terms:
+        return False
+    has_symbol = any(re.search(r"[A-Z_.\s]", t) for t in terms)
+    return has_symbol or len(terms) >= 3
+
+
 def _quote_if_needed(t: str) -> str:
     return f'"{t}"' if (" " in t or any(c in t for c in '()')) else t
+
+
+# ---------------------------------------------------------------------------
+# LLM classifier — Gemini Flash decides "needs grounding?" + extracts terms
+# ---------------------------------------------------------------------------
+
+_CLASSIFIER_SYSTEM = """\
+You are a pre-grounding planner for a code-Q&A agent. Decide:
+
+1. Would pre-fetching code snippets help answer this question?
+2. If yes, what 1-6 short search terms should we send to a zoekt-style
+   code-search index?
+
+YES (needs_grounding=true) — questions that map to specific code:
+- factual lookups: roles, constants, field definitions
+- validation rules: "what's the regex for X?", "is Y allowed?"
+- behavior: "what happens when X?", "how does Y flow?"
+- enumeration: "list all endpoints that...", "what are the types of..."
+- file/symbol-named questions: "what does UserModel do?"
+
+NO (needs_grounding=false) — questions where retrieval adds noise:
+- opinion / suggestion: "what would you recommend?", "should we...?"
+- pure conceptual: "what is OAuth?", "explain JWT in general"
+- meta questions about the codebase as a whole, with no specific anchor
+
+SEARCH TERMS:
+- 1-6 terms, each 1-3 words.
+- Prefer: class names, function names, file stems, UPPER_SNAKE constants,
+  multi-word domain nouns (e.g. "Farm Name", "Data Sharing", "supplier portal").
+- AVOID generic English (the, and, what, current, describe, list).
+- Multi-word terms are OK — the search engine handles them as phrases.
+- Skip terms that would match millions of files ("user", "id", "data" alone).
+
+REASONING: one short sentence on why you chose this decision.
+"""
+
+
+# Module-level Agent cache. Schema generation + model lookup take ~7s on cold
+# build for pydantic-ai's GeminiModel; cache by (api_key_fingerprint, model)
+# so the second call onward pays only the network round-trip (~500ms).
+_AGENT_CACHE: dict[tuple[str, str], Any] = {}
+
+
+def _build_classifier_agent(settings: Settings) -> Any | None:
+    """Build (or fetch from cache) the pydantic-ai classifier agent."""
+    if not settings.gemini_api_key:
+        return None
+    try:
+        from pydantic_ai import Agent
+        from pydantic_ai.models.gemini import GeminiModel
+        from pydantic_ai.settings import ModelSettings
+    except ImportError:
+        return None
+
+    os.environ.setdefault("GEMINI_API_KEY", settings.gemini_api_key)
+    model_name = (settings.enrich_model or "gemini-2.5-flash").strip()
+    key = (settings.gemini_api_key[-8:], model_name)
+    cached = _AGENT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        agent = Agent(
+            model=GeminiModel(model_name),
+            output_type=GroundingDecision,
+            system_prompt=_CLASSIFIER_SYSTEM,
+            model_settings=ModelSettings(temperature=0.0),
+        )
+        _AGENT_CACHE[key] = agent
+        return agent
+    except Exception:
+        return None
+
+
+async def _classify_with_llm(query: str, settings: Settings) -> GroundingDecision | None:
+    """Run the Gemini Flash classifier. Returns None on any failure (caller
+    falls back to regex extractor)."""
+    agent = _build_classifier_agent(settings)
+    if agent is None:
+        return None
+    try:
+        result = await agent.run(query.strip())
+        return result.output
+    except Exception:
+        return None
 
 
 def _build_sourcebot_query(terms: list[str], *, mode: str = "and") -> str:
@@ -193,12 +371,54 @@ async def retrieve_grounded_context(
             error="SOURCEBOT_URL or SOURCEBOT_API_KEY not set",
         ))
 
-    terms = _extract_search_terms(query)
+    # 1. Plan: regex first (instant, free), LLM classifier only as fallback
+    #    when regex returns weak terms. The LLM adds 5-8s per call so we only
+    #    pay for it when the question clearly needs help — usually pure
+    #    English questions with no symbols or Title Case phrases the regex
+    #    can grab.
+    classifier_ms = 0
+    classifier_decision = ""
+    classifier_reason = ""
+
+    regex_terms = _extract_search_terms(query)
+    extractor = "regex"
+    terms = regex_terms
+
+    if not _has_strong_terms(regex_terms):
+        cls_t0 = time.monotonic()
+        decision = await _classify_with_llm(query, settings)
+        classifier_ms = int((time.monotonic() - cls_t0) * 1000) if decision is not None else 0
+        if decision is not None:
+            classifier_decision = "needs_grounding" if decision.needs_grounding else "skip"
+            classifier_reason = decision.reasoning
+            if not decision.needs_grounding:
+                return GroundedContext(metrics=GroundingMetrics(
+                    sources=["sourcebot"],
+                    error="classifier: question does not need grounding",
+                    extractor="llm",
+                    classifier_decision=classifier_decision,
+                    classifier_reason=classifier_reason,
+                    classifier_ms=classifier_ms,
+                ))
+            # Merge LLM + regex terms (LLM first for priority, dedupe case-insensitive).
+            seen_low: set[str] = set()
+            merged: list[str] = []
+            for t in list(decision.search_terms) + regex_terms:
+                low = t.strip().lower()
+                if low and low not in seen_low:
+                    seen_low.add(low)
+                    merged.append(t.strip())
+            terms = merged
+            extractor = "llm+regex"
+
     if not terms:
         return GroundedContext(metrics=GroundingMetrics(
             sources=["sourcebot"],
-            error="no code-like keywords extracted from query",
-            extracted_terms=[],
+            error="no search terms produced (classifier and regex both empty)",
+            extractor=extractor,
+            classifier_decision=classifier_decision,
+            classifier_reason=classifier_reason,
+            classifier_ms=classifier_ms,
         ))
 
     url = settings.sourcebot_url.rstrip("/") + "/api/search"
@@ -211,53 +431,74 @@ async def retrieve_grounded_context(
     # Sourcebot AND-joins multiple repo: clauses (returning 0).
     _ = effective_sourcebot_repos_for_ask(settings, repos)
 
-    async def _search(q: str) -> tuple[int, list[dict[str, Any]], int]:
+    async def _search(client: httpx.AsyncClient, q: str) -> tuple[int, list[dict[str, Any]], int]:
         t0 = time.monotonic()
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+        try:
             r = await client.post(
                 url,
                 json={"query": q, "matches": top_k, "contextLines": context_lines},
                 headers=headers,
             )
+        except httpx.HTTPError:
+            return 0, [], int((time.monotonic() - t0) * 1000)
         ms = int((time.monotonic() - t0) * 1000)
         if r.status_code != 200:
             return r.status_code, [], ms
         body = r.json() if r.content else {}
         return r.status_code, (body.get("files") or []), ms
 
-    # 1st try: strict implicit-AND search — surfaces the most relevant file.
+    def _file_id(f: dict[str, Any]) -> str:
+        return f"{f.get('repository','')}::{_file_path_text(f.get('fileName'))}"
+
+    # Two-stage strategy:
+    #   1. Strict implicit-AND search — surfaces the single most-relevant file
+    #      when all terms co-occur. (e.g. "user roles role" → user_model.py)
+    #   2. If AND returns 0, run each term SEPARATELY in parallel and merge.
+    #      Sourcebot's OR operator silently breaks for mixed quoted/unquoted
+    #      multi-term queries (verified empirically); per-term parallel
+    #      searches are more robust and naturally bound the latency cost.
     and_query = _build_sourcebot_query(terms, mode="and")
-    try:
-        status, files, dur_and = await _search(and_query)
-    except httpx.HTTPError as e:
-        return GroundedContext(metrics=GroundingMetrics(
-            sources=["sourcebot"],
-            error=f"network: {type(e).__name__}: {e}",
-            extracted_terms=terms,
-            search_query=and_query,
-        ))
-    if status != 200:
-        return GroundedContext(metrics=GroundingMetrics(
-            duration_ms=dur_and,
-            sources=["sourcebot"],
-            error=f"HTTP {status}",
-            extracted_terms=terms,
-            search_query=and_query,
-        ))
-
     final_query = and_query
-    total_ms = dur_and
+    total_ms = 0
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+        status, files, dur = await _search(client, and_query)
+        total_ms += dur
+        if status != 200:
+            return GroundedContext(metrics=GroundingMetrics(
+                duration_ms=total_ms,
+                sources=["sourcebot"],
+                error=f"HTTP {status}",
+                extracted_terms=terms,
+                search_query=and_query,
+                extractor=extractor,
+                classifier_decision=classifier_decision,
+                classifier_reason=classifier_reason,
+                classifier_ms=classifier_ms,
+            ))
 
-    # Fallback: if AND found nothing, try OR alternation for broader recall.
-    if not files and len(terms) > 1:
-        or_query = _build_sourcebot_query(terms, mode="or")
-        try:
-            status, files, dur_or = await _search(or_query)
-        except httpx.HTTPError:
-            files, dur_or = [], 0
-        if status == 200:
-            final_query = or_query
-            total_ms += dur_or
+        if not files and len(terms) > 1:
+            t_fallback = time.monotonic()
+            quoted_terms = [_quote_if_needed(t) for t in terms]
+            per_term = await asyncio.gather(
+                *[_search(client, q) for q in quoted_terms],
+                return_exceptions=False,
+            )
+            total_ms += int((time.monotonic() - t_fallback) * 1000)
+            seen: set[str] = set()
+            merged: list[dict[str, Any]] = []
+            for _status, found, _ms in per_term:
+                for f in found:
+                    fid = _file_id(f)
+                    if fid in seen:
+                        continue
+                    seen.add(fid)
+                    merged.append(f)
+                    if len(merged) >= top_k:
+                        break
+                if len(merged) >= top_k:
+                    break
+            files = merged
+            final_query = "per-term: " + " | ".join(quoted_terms)
 
     snippets = _snippets_from_sourcebot_files(files)
     return GroundedContext(
@@ -271,6 +512,10 @@ async def retrieve_grounded_context(
             sourcebot_files_seen=len(files),
             extracted_terms=terms,
             search_query=final_query,
+            extractor=extractor,
+            classifier_decision=classifier_decision,
+            classifier_reason=classifier_reason,
+            classifier_ms=classifier_ms,
         ),
     )
 
