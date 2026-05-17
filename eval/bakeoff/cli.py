@@ -130,9 +130,11 @@ async def _cmd_run(args) -> int:
             output_dir=out_dir,
             timeout_seconds=args.timeout,
             on_progress=_progress,
+            grounded=args.grounded,
             run_meta={
                 "client_backend": "http" if args.base_url else "in_process_asgi",
                 "client_base_url": args.base_url,
+                "grounded": args.grounded,
             },
         )
     finally:
@@ -184,6 +186,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    required=True, help="comma-separated adapter names")
     r.add_argument("--base-url", default=None, help="omit to use in-process TestClient")
     r.add_argument("--timeout", type=float, default=900.0, help="per-case timeout seconds")
+    r.add_argument("--grounded", action="store_true",
+                   help="force grounded=true on every ask case (for A/B vs ungrounded)")
     _common_run_filters(r)
 
     rp = sub.add_parser("report", help="regenerate report.md/summary.json for a run dir")

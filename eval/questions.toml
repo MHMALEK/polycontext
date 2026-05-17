@@ -1,69 +1,262 @@
-# Eval set for comparing local agent vs. Sourcebot.
-# Tags describe (a) likely scope (single-repo / cross-repo) and (b) topic so the
-# summary report can break results down by axis.
+# Real Q&A harvested from the Sentinel Slack channel (C0AF8G9DBM0).
+# Each ``gold_answer`` is Sentinel's actual reply, condensed to the essential
+# facts. Future LLM-judge scorers can grade adapter answers against it.
+#
+# Tags describe:
+#   - scope:        single-repo | cross-repo
+#   - area:         frontend | traceability | data | data-cloud-functions | airflow
+#   - kind:         validation | rbac | behavior | architecture | enumeration
+
+
+# ===========================================================================
+# RBAC / roles
+# ===========================================================================
 
 [[questions]]
-id = "q1-data-sharing-geolocation"
-tags = ["single-repo", "frontend", "ui-behavior"]
-text = """
-On Data Sharing, if I do not select anything aside from Geolocation, what will show when I import? Will I be able to see any of my Deforestation status?
+id = "q-user-roles"
+tags = ["cross-repo", "frontend", "traceability", "rbac", "enumeration"]
+text = "what are the current user roles we have in the platform and describe what each role can do?"
+[questions.expected]
+min_chars = 200
+must_mention = ["DATA_VIEWER", "DATA_UPLOADER", "DATA_ADMIN", "DATA_SUBMITTER"]
+should_mention = ["RolesChecker", "deprecated", "supplier"]
+gold_answer = """
+The platform uses role-based access control via Keycloak. Five roles exist:
+
+- DATA_ADMIN ("User admin") — full administrative access: manage users (create/activate/deactivate/list), manage suppliers and connected environments, full access to master data and segments.
+- DATA_UPLOADER ("Data uploader") — upload data, create/update/delete segments, create/update master data nodes. Inherits DATA_VIEWER permissions automatically on creation.
+- DATA_VIEWER ("Data viewer") — read-only: view countries, segments, static master data; access read-only endpoints for filtering and searching.
+- DATA_SUBMITTER ("Data submitter") — specifically for submitting Due Diligence Statements (DDS); supplier-specific APIs for master data and segments; view product options and country codes.
+- DATA_SUPPLIER ("Data supplier") — deprecated and being phased out; authorization removed from most controllers, kept only for legacy supplier-list UI.
+
+Defined as constants in traceability/src/common/constants.py and as a StrEnum (UserRoles) in traceability/src/models/user_model.py; enforced by RolesChecker dependency on FastAPI routes.
 """
 
 [[questions]]
-id = "q2-supplier-prefill"
-tags = ["cross-repo", "frontend", "traceability", "behavior"]
-text = """
-Question about "pre-filling" information on a questionnaire on behalf of a supplier.
+id = "q-viewer-settings-access"
+tags = ["cross-repo", "frontend", "traceability", "rbac"]
+text = "can DATA_VIEWER_ROLE access the Settings area at all? Find where Settings access is gated and which roles pass that gate."
+[questions.expected]
+min_chars = 150
+must_mention = ["DATA_VIEWER", "uploader", "admin"]
+should_mention = ["Settings", "route"]
+gold_answer = """
+No. DATA_VIEWER_ROLE cannot access the Settings area in the UI.
 
-Workflow:
-- An Internal employee logs-in on behalf of the supplier and pre-fills some information and saves the responses.
-- Supplier logins and reviews information then submits.
+Gating:
+- Routing: /settings and sub-routes (/settings/preferences, /settings/geolocation/audit-log) only render for uploader or admin roles.
+- Navigation: the "Settings" link in the top nav is conditionally shown only to uploader or admin.
+- Sidebar: viewer's sidebar config doesn't include Settings.
 
-Questions:
-1. What happens if the Internal representative who edited the questionnaire with some pre-filled information is removed as a supplier user? For example, once the questionnaire was edited, we delete that user. What happens with the edited questionnaire answers?
-2. Are there any limitations or technical considerations to consider?
+Note: the backend API technically allows DATA_VIEWER_ROLE to GET some settings endpoints (e.g. global deforestation settings), but the UI doesn't expose them. Viewers can access "Master Data" under "Data Manager" (separate area).
 """
 
 [[questions]]
-id = "q3-dashboard-suppliers-count"
-tags = ["cross-repo", "frontend", "traceability", "count-discrepancy"]
-text = """
-In the dashboard, what number is the "Suppliers" number? It does not fit the number on the Suppliers page. Trace where each number is computed and explain the difference.
+id = "q-viewer-prereq-uploader"
+tags = ["cross-repo", "frontend", "traceability", "rbac"]
+text = "do I need to have DATA_VIEWER_ROLE on my account in order to access what DATA_UPLOADER_ROLE can do? Is data viewer a prerequisite for data_uploader?"
+[questions.expected]
+min_chars = 150
+must_mention = ["DATA_VIEWER", "DATA_UPLOADER", "RolesChecker"]
+should_mention = ["OR", "independent"]
+gold_answer = """
+No, DATA_VIEWER_ROLE is not a prerequisite for DATA_UPLOADER_ROLE. They are independent roles.
+
+- RolesChecker uses OR logic: an endpoint grants access if the user has ANY of the listed roles.
+- For uploading/modification (POST/PATCH/DELETE), DATA_UPLOADER_ROLE alone is sufficient.
+- For viewing (GET), most endpoints list BOTH viewer and uploader, so uploader can view without needing viewer.
+- Exception: a few endpoints (listing products, certain aggregated views) only list DATA_VIEWER_ROLE. A pure uploader would be denied on those specific routes.
+
+User-creation flow does auto-assign DATA_VIEWER when DATA_UPLOADER is requested, but that's a service-level convenience, not an authorization prerequisite.
 """
 
 [[questions]]
-id = "q4-farm-name-unicode"
-tags = ["single-repo", "frontend", "validation"]
-text = """
-Are other-language letters accepted in Farm Name and/or ReferenceID? For example: é, ñ, ü, ç. Look at the actual validation logic, not docs.
+id = "q-multi-role-user"
+tags = ["cross-repo", "frontend", "traceability", "rbac"]
+text = "can one user have more than one role, for example data viewer and data uploader?"
+[questions.expected]
+min_chars = 100
+must_mention = ["multiple", "roles"]
+should_mention = ["realm_access", "Keycloak", "RolesChecker"]
+gold_answer = """
+Yes. The system is designed for multi-role users.
+
+- Roles are managed in Keycloak and delivered as a list in the JWT's realm_access.roles claim.
+- Backend RolesChecker extracts the role list from the user's identity and checks if any user role matches the authorized roles for the endpoint.
+- Frontend stores roles in a Set and provides hooks like hasAnyRole / hasAllRoles for permission checks against multiple roles simultaneously.
 """
-# A correct answer cites the actual validator, not the docs.
+
+
+# ===========================================================================
+# Validation rules
+# ===========================================================================
+
+[[questions]]
+id = "q-farm-name-unicode"
+tags = ["single-repo", "frontend", "traceability", "validation"]
+text = "Are other-language letters accepted in Farm Name and/or ReferenceID? For example: é, ñ, ü, ç. Look at the actual validation logic, not docs."
 [questions.expected]
 min_chars = 120
 min_citations = 1
 must_mention = ["regex"]
-should_mention = ["unicode", "validator"]
+should_mention = ["unicode", "validator", "template"]
+gold_answer = """
+Non-English characters (é, ñ, etc.) are accepted by the TEMPLATE-UPLOAD path but NOT by the UI or (for Farm Name) the API.
+
+Farm Name (Node Name):
+- Template upload: accepted (backend Master Data validator uses a Unicode word-character pattern).
+- UI (manual entry): NOT accepted — frontend pattern /^[a-zA-Z0-9-_,.'&#(/)%]+$/.
+- API: NOT accepted — strict ASCII pattern ^[a-zA-Z0-9-_,.'()&%#/]+$.
+
+ReferenceID (External ID):
+- Template upload: accepted (Master Data validator uses Unicode-letter pattern). Note Traceability template uses a stricter ASCII pattern when ReferenceID is a node identifier.
+- UI: NOT accepted — frontend pattern /^[A-Za-z0-9]+(?:[._'’-][A-Za-z0-9]+)*$/.
+- API: accepted (IDENTIFIER_STRING_PATTERN allows Unicode letters).
+"""
 
 [[questions]]
-id = "q5-farm-name-special-chars"
-tags = ["single-repo", "frontend", "validation"]
-text = """
-What special characters are NOT allowed in Farm Name and/or ReferenceID? Cite the exact regex / validator that enforces this.
-"""
+id = "q-farm-name-special-chars"
+tags = ["single-repo", "frontend", "traceability", "validation"]
+text = "What special characters are NOT allowed in Farm Name and/or ReferenceID? Cite the exact regex / validator that enforces this."
 [questions.expected]
-min_chars = 120
+min_chars = 150
 min_citations = 1
 must_mention = ["regex"]
+should_mention = ["NODE_NAME_PATTERN", "IDENTIFIER_STRING_PATTERN"]
+gold_answer = """
+Farm Name (NODE_NAME_PATTERN):
+- Allowed: alphanumeric, space, and these specials: - _ , . ' ( ) & % # /
+- Restricted: ! @ $ ^ * + = [ ] { } | \\ : ; " < > ? ~
 
-[[questions]]
-id = "q6-data-viewer-settings"
-tags = ["cross-repo", "frontend", "traceability", "permissions"]
-text = """
-Can DATA_VIEWER_ROLE access the Settings area at all? Find where Settings access is gated and which roles pass that gate.
+Reference ID (IDENTIFIER_STRING_PATTERN, API):
+- Allowed: alphanumeric, with single separators between alphanumeric groups: space, . _ - ' ’
+- Rules: consecutive separators NOT allowed; cannot start or end with a separator; ID must start and end with letter/digit.
+- Restricted: & % # / ( ) ! @ etc.
+- Bulk-upload pattern (reference_id_pattern) is even stricter: max 255 chars, only alphanumeric, space, underscore, hyphen, dot.
 """
 
 [[questions]]
-id = "q7-master-data-upload-e2e"
+id = "q-startnode-validation"
+tags = ["single-repo", "traceability", "validation"]
+text = "when a supplier uploads the traceability template, do we check if the StartNodeName matches with the StartNodeID?"
+[questions.expected]
+min_chars = 150
+must_mention = ["StartNodeID", "StartNodeName"]
+should_mention = ["master data", "overwrite"]
+gold_answer = """
+No — the system does not check that StartNodeName matches StartNodeID. Instead, the StartNodeID is used to look up the node from master data and the system overwrites the supplied name with the official one.
+
+- StartNodeID is mandatory; StartNodeName is not.
+- ID validation: StartNodeID must exist in MasterData records, otherwise a validation error is raised.
+- During ingestion, an enrichment step joins to master data and OVERWRITES StartNodeName, StartNodeType, StartNodeCountry with the official values for that StartNodeID.
+- EndNodeID / EndNodeName follow the same pattern.
+"""
+
+[[questions]]
+id = "q-geojson-country-check"
+tags = ["cross-repo", "data-cloud-functions", "data", "validation"]
+text = "on geojson upload, in static check, how is the country being checked?"
+[questions.expected]
+min_chars = 150
+must_mention = ["NodeID", "country"]
+should_mention = ["static", "SQL", "master data"]
+gold_answer = """
+During the static check, the country is NOT validated in the GeoJSON file itself. The GeoJSON doesn't carry a Country property — instead it must carry a NodeID, and country is resolved later.
+
+- GeoJSON files are not required to have a Country property in their features.
+- The system ensures a NodeID property is present on each feature.
+- Country is resolved in the SQL validation step by joining the uploaded geospatial data with Master Data on NodeID.
+- Static validators (Cloud Functions) only check structural and geometric integrity: FeatureCollection / Feature / Point / Polygon / MultiPolygon types, coordinate precision and ranges, ring closure, duplicate vertices, self-intersections, and NodeID presence.
+"""
+
+
+# ===========================================================================
+# Cross-repo / behavior
+# ===========================================================================
+
+[[questions]]
+id = "q-data-sharing-geolocation"
+tags = ["single-repo", "traceability", "behavior"]
+text = "On Data Sharing, if I do not select anything aside from Geolocation, what will show when I import? Will I be able to see any of my Deforestation status?"
+[questions.expected]
+min_chars = 150
+must_mention = ["deforestation", "geolocation"]
+should_mention = ["includeGeolocation", "includeDeforestation", "GeoSpatialDumpStrategy"]
+gold_answer = """
+No — selecting only Geolocation does NOT include Deforestation status on import.
+
+- includeGeolocation includes: node_name, geo_id, node_id, geo (spatial data), plot_id, area, country.
+- includeDeforestation (must be explicitly checked) includes: deforestation_status, monitoring_status, previous_deforestation_status, explanation, status_updated_at.
+- GeoSpatialDumpStrategy enforces strict separation: if Deforestation is not selected, those fields are excluded from the package.
+"""
+
+[[questions]]
+id = "q-tcl-threshold-sharing"
+tags = ["cross-repo", "data", "traceability", "behavior"]
+text = "on data sharing to another environment, if I share deforestation status, and the receiver environment has different TCL threshold from the sender, which will be used to determine deforestation status in the receiver environment?"
+[questions.expected]
+min_chars = 200
+must_mention = ["sender", "TCL"]
+should_mention = ["import", "merge", "recalculation"]
+gold_answer = """
+The sender's deforestation status is used in the receiver environment. Receiver's TCL thresholds are NOT automatically applied during import.
+
+- Data export: current deforestation_status of each geolocation is captured from the sender and stored in the data files (e.g. geo_spatial.ndjson).
+- Data import: the import_package Airflow DAG uses a SQL merge to upsert into the receiver's GeoSpatial table, copying DeforestationStatus directly from the imported data.
+- Threshold application: the receiver's DeforestationThresholds table is used primarily for UI display, NOT to re-evaluate imported status during import.
+- Recalculation: master_data_manager DAG has a recalculation task but it's a no-op during standard imports (requires a country_name parameter that import_package doesn't provide). Re-evaluation only happens on manual trigger or when receiver thresholds are updated for a country.
+"""
+
+[[questions]]
+id = "q-dashboard-suppliers-count"
+tags = ["cross-repo", "frontend", "traceability", "data"]
+text = "In the dashboard, what number is the 'Suppliers' number? It does not fit the number on Suppliers page. Trace where each number is computed and explain the difference."
+[questions.expected]
+min_chars = 200
+must_mention = ["BigQuery", "PostgreSQL"]
+should_mention = ["SupplyChainSourcingFarms", "Organization"]
+gold_answer = """
+The dashboard's "Suppliers" number ≠ the Suppliers page count because they come from different sources and apply different filters.
+
+Dashboard:
+- Source: SupplyChainSourcingFarms table in BigQuery.
+- Counts only unique suppliers that have actual sourcing data (shipments, farm associations).
+- Subject to global Dashboard Filters (date range, products, countries).
+- Updated periodically via Airflow tasks; shows a "Last updated" timestamp.
+
+Suppliers page:
+- Source: Organization table in PostgreSQL.
+- Counts all active suppliers registered, regardless of whether they have sourcing data.
+- Real-time.
+- Independent of dashboard filters.
+"""
+
+
+# ===========================================================================
+# Architecture
+# ===========================================================================
+
+[[questions]]
+id = "q-jwt-stateless"
+tags = ["single-repo", "traceability", "architecture"]
+text = "how does user authorization work currently with JWT? Do we use it as a stateless token with no interaction with Keycloak once the token is issued, or do we call Keycloak on every REST call for introspection?"
+[questions.expected]
+min_chars = 200
+must_mention = ["stateless", "JWT"]
+should_mention = ["JWKS", "RolesChecker", "Keycloak"]
+gold_answer = """
+Stateless. The system does NOT call Keycloak for introspection on every REST call — it validates the JWT locally.
+
+- Local validation: get_identity decodes and validates the JWT locally via jwt.decode.
+- Cached public keys (JWKS): to verify signatures the system fetches Keycloak's JWKS once and caches it for 15 minutes (900s) to minimize network overhead.
+- Claim verification: verifies the iss (issuer) claim; allows 60s clock-skew leeway. The aud (audience) check is currently disabled for legacy compatibility.
+- RBAC: once the token is validated, roles are extracted from realm_access and checked against required roles via the RolesChecker dependency.
+
+The KeycloakService class exists in the codebase but is reserved for administrative operations (creating users, assigning roles) and is not part of the standard request-authorization flow.
+"""
+
+[[questions]]
+id = "q-master-data-upload-e2e"
 tags = ["cross-repo", "frontend", "traceability", "data-cloud-functions", "data", "master-data"]
 text = """
 How does master data upload work across all flows in the app?
@@ -78,3 +271,4 @@ Trace the end-to-end flow across repos, including:
 min_chars = 400
 must_mention = ["frontend", "traceability", "data-cloud-functions", "data"]
 should_mention = ["validation", "status", "error"]
+# No gold_answer — this is a synthesis question, no Sentinel reference available.

@@ -47,13 +47,16 @@ class RunRecord:
     score: dict[str, Any] = field(default_factory=dict)
 
 
-def _case_input_for_adapter(case: Case) -> dict[str, Any]:
+def _case_input_for_adapter(case: Case, *, grounded: bool = False) -> dict[str, Any]:
     """Per-job mapping from the case's ``input`` shape to the adapter's
     request body shape.
 
     The case files use the *minimal* fields a human would write; the
     adapters' Pydantic models accept a few extras. This is where we fill
     in the rest of the request payload.
+
+    ``grounded`` forces the ``grounded`` flag true on ask cases for the
+    whole run — useful for grounded vs ungrounded A/B comparisons.
     """
     if case.job == "ask":
         return {
@@ -62,6 +65,7 @@ def _case_input_for_adapter(case: Case) -> dict[str, Any]:
             "top_k": case.input.get("top_k", 8),
             "branch": case.input.get("branch"),
             "starting_ref": case.input.get("starting_ref"),
+            "grounded": bool(grounded or case.input.get("grounded", False)),
         }
     if case.job == "decompose":
         return {
@@ -78,9 +82,10 @@ async def run_case(
     adapter: str,
     *,
     timeout_seconds: float = 900.0,
+    grounded: bool = False,
 ) -> RunRecord:
     """One adapter, one case. Failures are captured, not raised."""
-    body = _case_input_for_adapter(case)
+    body = _case_input_for_adapter(case, grounded=grounded)
     t = time.monotonic()
     try:
         envelope = await asyncio.wait_for(
@@ -134,6 +139,7 @@ async def run_bakeoff(
     timeout_seconds: float = 900.0,
     on_progress=None,
     run_meta: dict[str, Any] | None = None,
+    grounded: bool = False,
 ) -> Path:
     """Execute the full grid and write everything to disk.
 
@@ -162,7 +168,7 @@ async def run_bakeoff(
             if on_progress:
                 on_progress(done, total, case.id, adapter)
             log.info("[%d/%d] case=%s adapter=%s", done, total, case.id, adapter)
-            rec = await run_case(client, case, adapter, timeout_seconds=timeout_seconds)
+            rec = await run_case(client, case, adapter, timeout_seconds=timeout_seconds, grounded=grounded)
             (case_dir / f"{adapter}.json").write_text(json.dumps(asdict(rec), indent=2, default=str))
 
     manifest["finished_at"] = datetime.now(timezone.utc).isoformat()
