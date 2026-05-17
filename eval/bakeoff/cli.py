@@ -122,6 +122,11 @@ async def _cmd_run(args) -> int:
         bar = f"[{done:>3}/{total}]"
         print(f"{bar} {adapter:14} {case_id}", file=sys.stderr)
 
+    settings = None
+    if args.use_judge:
+        from tech_decomposition.config import get_settings as _get_settings
+        settings = _get_settings()
+
     try:
         await run_bakeoff(
             client=client,
@@ -131,10 +136,13 @@ async def _cmd_run(args) -> int:
             timeout_seconds=args.timeout,
             on_progress=_progress,
             grounded=args.grounded,
+            use_judge=args.use_judge,
+            settings=settings,
             run_meta={
                 "client_backend": "http" if args.base_url else "in_process_asgi",
                 "client_base_url": args.base_url,
                 "grounded": args.grounded,
+                "use_judge": args.use_judge,
             },
         )
     finally:
@@ -188,6 +196,8 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--timeout", type=float, default=900.0, help="per-case timeout seconds")
     r.add_argument("--grounded", action="store_true",
                    help="force grounded=true on every ask case (for A/B vs ungrounded)")
+    r.add_argument("--use-judge", action="store_true",
+                   help="enable LLM-as-judge scoring against ``gold_answer`` (Gemini Flash, ~1 call per ask case)")
     _common_run_filters(r)
 
     rp = sub.add_parser("report", help="regenerate report.md/summary.json for a run dir")

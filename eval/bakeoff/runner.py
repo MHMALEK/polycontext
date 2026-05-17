@@ -26,7 +26,7 @@ from typing import Any
 
 from .cases import Case, Job
 from .client import AdapterClient
-from .scorer import Score, score_response
+from .scorer import Score, score_response, score_response_async
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +83,8 @@ async def run_case(
     *,
     timeout_seconds: float = 900.0,
     grounded: bool = False,
+    use_judge: bool = False,
+    settings=None,
 ) -> RunRecord:
     """One adapter, one case. Failures are captured, not raised."""
     body = _case_input_for_adapter(case, grounded=grounded)
@@ -119,7 +121,9 @@ async def run_case(
         )
 
     result = envelope.get("result") or {}
-    score: Score = score_response(case=case, response=result)
+    score: Score = await score_response_async(
+        case=case, response=result, settings=settings, use_judge=use_judge,
+    )
     return RunRecord(
         case_id=case.id, job=case.job, adapter=adapter,
         ok=True, status=envelope.get("status", 200), error=None,
@@ -140,6 +144,8 @@ async def run_bakeoff(
     on_progress=None,
     run_meta: dict[str, Any] | None = None,
     grounded: bool = False,
+    use_judge: bool = False,
+    settings=None,
 ) -> Path:
     """Execute the full grid and write everything to disk.
 
@@ -168,7 +174,13 @@ async def run_bakeoff(
             if on_progress:
                 on_progress(done, total, case.id, adapter)
             log.info("[%d/%d] case=%s adapter=%s", done, total, case.id, adapter)
-            rec = await run_case(client, case, adapter, timeout_seconds=timeout_seconds, grounded=grounded)
+            rec = await run_case(
+                client, case, adapter,
+                timeout_seconds=timeout_seconds,
+                grounded=grounded,
+                use_judge=use_judge,
+                settings=settings,
+            )
             (case_dir / f"{adapter}.json").write_text(json.dumps(asdict(rec), indent=2, default=str))
 
     manifest["finished_at"] = datetime.now(timezone.utc).isoformat()

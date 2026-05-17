@@ -1,21 +1,32 @@
 """Scoring rubrics.
 
-Three families, one per job. All scorers are **rule-based** for now — no
-LLM-as-judge in this cut — so the harness has zero external dependencies and
-is deterministic.
+Two layers:
+
+1. **Rule-based** (``score_response`` / ``_score_ask`` / ``_score_decompose``).
+   Cheap, deterministic substring + structure checks. Used by default and
+   always when no ``gold_answer`` is available.
+
+2. **LLM-as-judge** (``score_response_async`` with ``use_judge=True``).
+   When a case carries a ``gold_answer`` in ``expected``, a single Gemini
+   Flash call grades the adapter's answer along two dimensions —
+   coverage (does it carry the facts that the gold has?) and accuracy
+   (does it contradict the gold?) — and merges those as extra ``Check``
+   entries alongside the rule-based ones. Substring matching can't tell
+   "good answer, slightly different wording" from "wrong answer"; the
+   judge can.
 
 Each scorer returns a ``Score`` with:
   * a normalized 0..1 ``overall`` for sorting in the report
   * a list of named ``checks`` (each pass/fail with a message) so the
     report can show *why* one adapter scored higher than another
-
-Add an LLM-judge layer later by writing a second scorer that consumes the
-same response objects and merges into ``checks``.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 from .cases import Case
 
@@ -36,12 +47,176 @@ class Score:
 
 
 def score_response(*, case: Case, response: dict[str, Any]) -> Score:
-    """Dispatch on job type. ``response`` is the adapter's ``result`` payload."""
+    """Dispatch on job type — rule-based only (sync, no LLM)."""
     if case.job == "ask":
         return _score_ask(case, response)
     if case.job == "decompose":
         return _score_decompose(case, response)
     return Score(notes=f"no scorer for job={case.job}")
+
+
+async def score_response_async(
+    *,
+    case: Case,
+    response: dict[str, Any],
+    settings=None,
+    use_judge: bool = False,
+) -> Score:
+    """Dispatch + optional LLM-judge layer.
+
+    When ``use_judge=True`` AND ``settings`` is provided AND the case has a
+    ``gold_answer`` in ``expected``, an LLM judge call grades the adapter
+    answer against the gold and merges two extra checks (gold_coverage,
+    gold_accuracy) into the rule-based score before final aggregation.
+
+    Falls back to plain rule-based scoring on any judge failure.
+    """
+    base = score_response(case=case, response=response)
+    if not use_judge or settings is None:
+        return base
+    if case.job != "ask":
+        return base
+    gold = (case.expected or {}).get("gold_answer")
+    if not gold or not isinstance(gold, str):
+        return base
+    candidate = (response.get("answer") or "").strip()
+    if not candidate:
+        return base
+    try:
+        verdict = await _judge_against_gold(
+            question=case.input.get("query", ""),
+            gold=gold.strip(),
+            candidate=candidate,
+            settings=settings,
+        )
+    except Exception:
+        return base
+    if verdict is None:
+        return base
+    # When the judge runs, its two dimensions should DOMINATE the total —
+    # rule-based mentions/min_chars are brittle (exact substring match) and
+    # often penalize semantically correct answers that paraphrase. Heavy
+    # weight on the judge means: if coverage/accuracy are high, the score
+    # is high regardless of whether the answer used the exact tokens the
+    # ``must_mention`` list expected. Rule-based checks remain in the list
+    # for diagnostic value (visible in the report) but don't dominate.
+    checks = list(base.checks)
+    checks.append(Check(
+        name="gold_coverage",
+        ok=verdict.coverage >= 0.7,
+        detail=f"{verdict.coverage:.2f}",
+        weight=10.0,
+    ))
+    checks.append(Check(
+        name="gold_accuracy",
+        ok=verdict.accuracy >= 0.8,
+        detail=f"{verdict.accuracy:.2f}",
+        weight=10.0,
+    ))
+    out = _aggregate(checks)
+    out.notes = f"judge: {verdict.notes}"
+    return out
+
+
+# ---------------------------------------------------------------------------
+# LLM-as-judge
+# ---------------------------------------------------------------------------
+
+
+class _JudgeVerdict(BaseModel):
+    """Output of the LLM judge — two scalar dimensions + a short note."""
+
+    coverage: float = Field(
+        ge=0.0, le=1.0,
+        description=(
+            "Fraction of distinct facts in the reference answer that appear "
+            "in the candidate answer (in any phrasing). 1.0 = candidate "
+            "covers everything the reference covers. Extra accurate facts "
+            "in the candidate do NOT lower this score."
+        ),
+    )
+    accuracy: float = Field(
+        ge=0.0, le=1.0,
+        description=(
+            "1.0 if the candidate does not contradict any fact in the "
+            "reference. Reduce by ~0.2 per contradiction. Plausible extra "
+            "info that is not in the reference is NOT a contradiction."
+        ),
+    )
+    notes: str = Field(
+        default="",
+        description="One short sentence (under 30 words) explaining the verdict.",
+    )
+
+
+_JUDGE_SYSTEM = """\
+You are evaluating code-Q&A answers. You will see:
+  - QUESTION: the user's question
+  - REFERENCE: a known-correct condensed answer
+  - CANDIDATE: an answer to grade
+
+Score two dimensions on 0.0-1.0:
+
+coverage — Fraction of distinct FACTS in the REFERENCE that appear in
+the CANDIDATE (any phrasing, any structure). If REFERENCE covers 5 facts
+and CANDIDATE covers 4 of them, coverage = 0.8. Extra accurate facts in
+the candidate do NOT lower coverage.
+
+accuracy — 1.0 if CANDIDATE contradicts no fact in REFERENCE. Reduce by
+~0.2 per contradiction. Plausible additional info not in REFERENCE is
+NOT a contradiction — only mark down for statements that conflict with
+the reference.
+
+Return ONE short sentence in notes explaining your scores.
+"""
+
+
+_JUDGE_AGENT_CACHE: dict[str, Any] = {}
+
+
+def _build_judge_agent(settings) -> Any | None:
+    if not getattr(settings, "gemini_api_key", ""):
+        return None
+    try:
+        from pydantic_ai import Agent
+        from pydantic_ai.models.gemini import GeminiModel
+        from pydantic_ai.settings import ModelSettings
+    except ImportError:
+        return None
+    os.environ.setdefault("GEMINI_API_KEY", settings.gemini_api_key)
+    model_name = (getattr(settings, "enrich_model", None) or "gemini-2.5-flash").strip()
+    cached = _JUDGE_AGENT_CACHE.get(model_name)
+    if cached is not None:
+        return cached
+    try:
+        agent = Agent(
+            model=GeminiModel(model_name),
+            output_type=_JudgeVerdict,
+            system_prompt=_JUDGE_SYSTEM,
+            model_settings=ModelSettings(temperature=0.0),
+        )
+        _JUDGE_AGENT_CACHE[model_name] = agent
+        return agent
+    except Exception:
+        return None
+
+
+async def _judge_against_gold(
+    *, question: str, gold: str, candidate: str, settings,
+) -> _JudgeVerdict | None:
+    agent = _build_judge_agent(settings)
+    if agent is None:
+        return None
+    prompt = (
+        f"QUESTION:\n{question.strip()}\n\n"
+        f"REFERENCE:\n{gold.strip()}\n\n"
+        f"CANDIDATE:\n{candidate.strip()}\n"
+    )
+    try:
+        result = await agent.run(prompt)
+        return result.output
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
