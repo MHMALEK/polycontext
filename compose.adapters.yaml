@@ -41,6 +41,11 @@ services:
       #   SERENA_URL=http://host.docker.internal:9121/sse
       SERENA_URL: ${SERENA_URL:-}
       SERENA_API_KEY: ${SERENA_API_KEY:-}
+      # OpenCode runs as a separate `opencode serve` process (the SDK is a thin HTTP
+      # client). Point this at wherever you started it; from a Docker agent_node, use
+      # host.docker.internal when opencode runs on the Mac host.
+      #   OPENCODE_BASE_URL=http://host.docker.internal:4096
+      OPENCODE_BASE_URL: ${OPENCODE_BASE_URL:-}
     volumes:
       - "${REPOS_ROOT}:${REPOS_ROOT}"
     extra_hosts:
