@@ -12,6 +12,7 @@ import type {
   StructuredOutputError,
   TextPart,
 } from "@opencode-ai/sdk/v2";
+import { serenaEnv } from "./_serena.js";
 
 export type OpencodeRunBody = {
   systemPrompt?: string;
@@ -179,11 +180,27 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
         ...(cwd ? { directory: cwd } : {}),
       });
     } else {
+      // Serena MCP is registered through OpenCode's embedded-server config when
+      // SERENA_URL is set. OpenCode only has a single `type: "remote"` MCP shape
+      // — auto-detection handles SSE vs streamable HTTP from the URL.
+      const sEnv = serenaEnv();
+      const mcp = sEnv
+        ? {
+            serena: {
+              type: "remote" as const,
+              url: sEnv.url,
+              enabled: true,
+              ...(sEnv.apiKey
+                ? { headers: { Authorization: `Bearer ${sEnv.apiKey}` } }
+                : {}),
+            },
+          }
+        : undefined;
       const oc = await createOpencode({
         timeout: Number(process.env.OPENCODE_SERVER_START_TIMEOUT_MS || 30_000),
         hostname: (process.env.OPENCODE_HOSTNAME || "127.0.0.1").trim() || "127.0.0.1",
         port: Number(process.env.OPENCODE_PORT || 4096) || 4096,
-        config: { model: modelSpec },
+        config: { model: modelSpec, ...(mcp ? { mcp } : {}) },
       });
       serverClose = () => oc.server.close();
       client = oc.client;

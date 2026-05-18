@@ -4,7 +4,15 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-import { Agent, createTool } from "@cline/sdk";
+import {
+  Agent,
+  createTool,
+  InMemoryMcpManager,
+  createDefaultMcpServerClientFactory,
+  createMcpTools,
+  type McpServerTransportConfig,
+} from "@cline/sdk";
+import { serenaEnv } from "./_serena.js";
 
 export type ClineRunBody = {
   systemPrompt?: string;
@@ -337,6 +345,12 @@ export async function runCline(body: ClineRunBody): Promise<{
     }
   }
 
+  // Serena MCP is wired through Cline's InMemoryMcpManager when SERENA_URL is set.
+  // The manager owns the connection; createMcpTools turns each MCP tool into a
+  // Cline AgentTool that the agent can call alongside the workspace tools.
+  let mcpManager: InMemoryMcpManager | undefined;
+  const sEnv = serenaEnv();
+
   try {
     const tools = [];
     const wsRoot = body.cwd?.trim() ? path.resolve(body.cwd.trim()) : "";
@@ -352,6 +366,35 @@ export async function runCline(body: ClineRunBody): Promise<{
     }
     if (body.enableFindCode && (process.env.SOURCEBOT_URL || "").trim()) {
       tools.push(findCodeTool);
+    }
+
+    if (sEnv) {
+      const transport: McpServerTransportConfig =
+        sEnv.transport === "sse"
+          ? {
+              type: "sse",
+              url: sEnv.url,
+              ...(sEnv.apiKey
+                ? { headers: { Authorization: `Bearer ${sEnv.apiKey}` } }
+                : {}),
+            }
+          : {
+              type: "streamableHttp",
+              url: sEnv.url,
+              ...(sEnv.apiKey
+                ? { headers: { Authorization: `Bearer ${sEnv.apiKey}` } }
+                : {}),
+            };
+      mcpManager = new InMemoryMcpManager({
+        clientFactory: createDefaultMcpServerClientFactory(),
+      });
+      await mcpManager.registerServer({ name: "serena", transport });
+      await mcpManager.connectServer("serena");
+      const mcpTools = await createMcpTools({
+        serverName: "serena",
+        provider: mcpManager,
+      });
+      tools.push(...mcpTools);
     }
 
     if (tools.length === 0) {
@@ -442,6 +485,9 @@ export async function runCline(body: ClineRunBody): Promise<{
       events: events.slice(-20),
     };
   } finally {
+    if (mcpManager) {
+      await mcpManager.dispose().catch(() => undefined);
+    }
     if (body.cwd) {
       try {
         process.chdir(originalCwd);
