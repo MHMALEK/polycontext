@@ -47,46 +47,38 @@ Slack channels against the actual codebase (5 git repos, ~1.2M LOC), with
 the answers scored by both a deterministic rubric (`must_mention` substrings)
 and a Gemini Flash LLM-judge against a hand-written gold answer.
 
-**What ships today vs. naive baseline:**
+**Best result, full bake-off (5 hand-curated questions × 5 adapters × 2 modes, scored by rubric + LLM-judge against hand-written gold answers):**
 
-| Adapter | Baseline | After this work | Δ |
-|---|---|---|---|
-| Gemini (agentic, strong prompt) | 0.64 | **0.79** | **+0.15** |
-| Gemini (grounded + Serena, fast mode) | — | **0.74** | new path |
-| Cline + Serena MCP | 0.648 | **0.815** | **+0.167** |
-| OpenCode + Serena MCP | 0.522 | **0.648** | **+0.126** |
+| Recommended config | Score |
+|---|---|
+| **`cursor` ungrounded** (default) | **0.773** |
+| `gemini` ungrounded (agentic, strong prompt) | 0.677 |
+| `cursor` grounded — for enumeration questions only | 0.731 (and 0.984 on `q-user-roles` specifically) |
 
-Three things moved each of those numbers:
+Everything else trails. Cline_sdk and OpenCode both scored in the 0.26–0.48 range and showed high run-to-run variance (Cline swung 0.79 on the same question across two runs). Sourcebot's own chat scored 0.45.
 
-1. **Forced tool use for Gemini.** The default `_ASK_SYSTEM` prompt told
-   Gemini that tools "were available." Gemini ignored them — ~1 call per
-   question, answers from training knowledge. The new prompt makes tool
-   use *mandatory* with a 3-step workflow. Tool calls jumped from 1 → 7.67
-   per case. Score 0.64 → 0.79.
+Per-question pattern that emerged:
 
-2. **Serena MCP** wired into every adapter that supports MCP — Cursor, Claude
-   Code, Cline, OpenCode, OpenAI Agents. Cline + OpenCode actually *use*
-   Serena's LSP-backed tools (`find_symbol`, `search_for_pattern`,
-   `find_referencing_symbols`); Cursor's Composer-2 and gpt-4o-mini saw the
-   tools but never called them. The model matters more than the tools.
+| Question pattern | What works |
+|---|---|
+| Bounded symbol lookup (`q-jwt-stateless`, `q-geojson-country-check`) | Cursor / Gemini ungrounded, both hit 1.0 |
+| Enumeration ("list all X" — `q-user-roles`) | Cursor **grounded** (0.984) |
+| Behavior trace | Gemini ungrounded (1.0 on `q-data-sharing-geolocation` from 3-case eval) |
+| Validator/regex lookup (`q-farm-name-unicode`) | **Nothing works yet.** Every adapter 0.10–0.46. Real product gap. |
 
-3. **Serena as a grounding source.** For adapters that can't take MCP
-   themselves (Gemini direct, Sourcebot's `/api/chat`), the grounding
-   pipeline now runs Sourcebot search AND Serena search in parallel and
-   merges the snippets. Gives Gemini a fast-mode path: 0.744 quality at
-   **17.9 s wall / 3,075 input tokens**, vs. agentic mode at 47.6 s /
-   26,031 tokens — 38 % of the time, 12 % of the tokens, 94 % of the quality.
+Three things drove those numbers:
+
+1. **Forced tool use for Gemini.** The default `_ASK_SYSTEM` prompt told Gemini that tools "were available." Gemini ignored them — ~1 call per question, answers from training knowledge. The new prompt makes tool use *mandatory* with a 3-step workflow. Tool calls jumped from 1 → 7.67 per case. Score 0.64 → 0.79.
+
+2. **Serena MCP** wired into every adapter that supports MCP — Cursor, Claude Code, Cline, OpenCode, OpenAI Agents. Cline + OpenCode actually *use* Serena's LSP-backed tools (`find_symbol`, `search_for_pattern`, `find_referencing_symbols`); Cursor's Composer-2 and gpt-4o-mini saw the tools but never called them. The model matters more than the tools.
+
+3. **Serena as a grounding source.** For adapters that can't take MCP themselves (Gemini direct, Sourcebot's `/api/chat`), the grounding pipeline now runs Sourcebot search AND Serena search in parallel and merges the snippets.
 
 **What didn't pan out (recorded honestly):**
 
-- **Grounding hurt most tool-using adapters.** Pre-fetched snippets make
-  the model trust the first hit and stop investigating, which catastrophically
-  fails on enumerative questions (e.g. "list all user roles"): Cline 0.909 →
-  0.318 when grounded. We now recommend grounding *off* by default for
-  Cline / OpenCode / Gemini / OpenAI Agents.
-- **Cursor (Composer-2) ignored Serena.** It listed Serena's 28 tools every
-  request but never called one. Wiring is in place for free if a future
-  Cursor model changes that.
+- **Grounding is not a useful default.** Pre-fetched snippets make the model trust the first hit and stop investigating, which catastrophically fails on enumerative and trace questions (Gemini dropped 1.0 → 0.148 on `q-geojson-country-check` when grounded). Default is `grounded=false`. Flip on per-request for enumeration questions or for OpenCode specifically.
+- **Cursor (Composer-2) ignored Serena.** It listed Serena's 28 tools every request but never called one. Wiring is in place for free if a future Cursor model changes that.
+- **The regex/validator pattern is unsolved.** None of the adapters, grounding, MCP, or prompt tricks moved `q-farm-name-unicode` above 0.46.
 
 ---
 
@@ -107,15 +99,15 @@ That's the whole project. Nothing else hides under the hood.
 
 Registered in `src/tech_decomposition/adapters/registry.py`. Most SDK-backed adapters run inside `services/agent-node` (Node, Fastify) — the Python side is a thin HTTP client. `sourcebot` is the exception: it's a Python adapter that talks directly to Sourcebot's chat API.
 
-| Adapter | Backend | Runtime | Capabilities | Serena MCP | Best mode |
+| Adapter | Backend | Runtime | Capabilities | Serena MCP | Default mode |
 |---|---|---|---|---|---|
-| **`sourcebot`** | Sourcebot `/api/chat/blocking` | Python | `ask` | via grounding | grounded+Serena |
-| **`claude_code`** | [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) | Node | `ask`, `decompose` | per-request | tool-using |
-| **`cursor`** | [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) | Node | `ask`, `decompose` | per-request* | grounded |
-| **`cline_sdk`** | [`@cline/sdk`](https://www.npmjs.com/package/@cline/sdk) | Node | `ask`, `decompose` | **per-request ✓** | **+Serena** |
-| **`gemini`** | [`@google/genai`](https://www.npmjs.com/package/@google/genai) | Node | `ask`, `decompose` | via grounding | **agentic OR grounded+Serena** |
-| **`openai_agents`** | [`@openai/agents`](https://github.com/openai/openai-agents-js) | Node | `ask`, `decompose` | per-request* | baseline |
-| **`opencode`** | [`@opencode-ai/sdk`](https://opencode.ai/) | Node | `ask`, `decompose` | **per-request ✓** | **+Serena** |
+| **`cursor`** | [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) | Node | `ask`, `decompose` | per-request* | **ungrounded (0.773)** — recommended |
+| **`gemini`** | [`@google/genai`](https://www.npmjs.com/package/@google/genai) | Node | `ask`, `decompose` | via grounding | ungrounded agentic (0.677) |
+| **`sourcebot`** | Sourcebot `/api/chat/blocking` | Python | `ask` | via grounding | grounded (0.45) — no agent loop |
+| **`opencode`** | [`@opencode-ai/sdk`](https://opencode.ai/) | Node | `ask`, `decompose` | **per-request ✓** | grounded (0.406) |
+| **`cline_sdk`** | [`@cline/sdk`](https://www.npmjs.com/package/@cline/sdk) | Node | `ask`, `decompose` | **per-request ✓** | noisy — judge case-by-case |
+| **`claude_code`** | [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) | Node | `ask`, `decompose` | per-request | (Docker arm64-musl native binary issue — works on host) |
+| **`openai_agents`** | [`@openai/agents`](https://github.com/openai/openai-agents-js) | Node | `ask`, `decompose` | per-request* | tier-1 TPM caps gpt-4.1; gpt-4o-mini works |
 
 \* Wired but the underlying model (Composer-2 / gpt-4o-mini) doesn't call MCP tools in measurements so far. Cline (Gemini Pro driving) and OpenCode (Gemini Pro driving) do call them and benefit.
 
@@ -189,15 +181,19 @@ Grounding is a **single composable step**, not a default. You ask for it per req
 
 The two sources fan out in parallel, are deduped by file path, and merged up to `top_k` snippets. `GroundingMetrics` reports `sourcebot_files_seen` and `serena_hits` separately so you can see which source contributed what.
 
-### When to turn grounding on (measured)
+### Default: leave grounding off
 
-| Adapter | Recommended | Why |
-|---|---|---|
-| **`gemini`** (fast mode) | ✅ grounded + Serena | 0.744 score, 17.9 s, 3,075 tokens — fastest path with near-agentic quality. |
-| **`sourcebot`** | ✅ grounded | The adapter doesn't take MCP, so this is the only way to feed it Serena's signal. |
-| **`cursor`** | ✅ grounded | Composer-2's native tools benefit from a head-start snippet (+0.113 in earlier eval). |
-| `gemini` (agentic mode) | ❌ ungrounded | Higher quality (0.791) but slower (47.6 s) — use when latency doesn't matter. |
-| `cline_sdk`, `opencode`, `openai_agents` | ❌ ungrounded + Serena per-request | Grounding pre-fetch *hurts* these adapters (catastrophic on enumerative questions). Use the MCP path instead. |
+The 5-case bake-off (see [eval/outputs/bakeoff-20260518T134739Z/](eval/outputs/bakeoff-20260518T134739Z/)) settles this empirically: the **best single result** is **`cursor` ungrounded at 0.773**. Grounding helps on one specific question pattern (enumeration — "list all X") and hurts on everything else, sometimes catastrophically (Gemini dropped 1.0 → 0.148 on `q-geojson-country-check` when grounded).
+
+| Adapter | Avg ungrounded | Avg grounded | Verdict |
+|---|---|---|---|
+| `cursor` | **0.773** | 0.731 | Default off. Flip on per-request for enumeration questions (`q-user-roles`-style). |
+| `gemini` | **0.677** | 0.428 | Default off. Grounding consistently hurts. |
+| `sourcebot` | 0.450 | 0.384 | No agent loop — grounding can't make it worse than its own chat. Leave on. |
+| `cline_sdk` | 0.263–0.453 (noisy) | 0.301–0.483 (noisy) | Either way; high run-to-run variance, judge case-by-case. |
+| `opencode` | 0.275 | **0.406** | Default on. Grounding helps this adapter on average. |
+
+**Bottom line for callers**: `grounded` is already `false` by default on `AdapterAskInput`. Don't change that. The two exceptions worth a `grounded=true` request are: any adapter on an enumeration question, and OpenCode in general.
 
 What grounding does **not** include (vs. the v0 pipeline that was removed):
 

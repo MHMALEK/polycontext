@@ -1208,18 +1208,40 @@ export function App() {
                     </select>
                   </label>
                 )}
-                <label
-                  className="flex items-center gap-1.5 text-[11px] text-base-content/78 font-medium cursor-pointer select-none"
-                  title="Prepend Sourcebot search snippets to the prompt before the adapter runs. Costs extra latency, may help cross-repo questions."
-                >
-                  <input
-                    type="checkbox"
-                    className="checkbox checkbox-xs"
-                    checked={form.grounded}
-                    onChange={(e) => setForm((f) => ({ ...f, grounded: e.target.checked }))}
-                  />
-                  <span>Grounded</span>
-                </label>
+                {/*
+                  Grounding is opt-in and off by default — the bake-off
+                  (eval/outputs/bakeoff-20260518T134739Z) showed grounding
+                  hurts most adapters on most questions. Demoted from a
+                  visible checkbox to an Advanced disclosure so we don't
+                  push casual users toward a worse default.
+                */}
+                <details className="relative">
+                  <summary className="list-none cursor-pointer text-[11px] text-base-content/65 font-medium hover:text-base-content flex items-center gap-1 select-none">
+                    Advanced
+                    {form.grounded && (
+                      <span className="badge badge-xs badge-outline badge-primary">grounded</span>
+                    )}
+                  </summary>
+                  <div className="absolute z-10 mt-2 p-3 rounded-lg bg-base-100 border border-base-300 shadow-lg w-72 text-[11px] space-y-2">
+                    <label className="flex items-start gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-xs mt-0.5"
+                        checked={form.grounded}
+                        onChange={(e) => setForm((f) => ({ ...f, grounded: e.target.checked }))}
+                      />
+                      <span>
+                        <span className="font-medium">Grounded retrieval</span>
+                        <br />
+                        <span className="text-base-content/65">
+                          Prepend Sourcebot + Serena snippets before the adapter
+                          runs. Helps enumeration questions ("list all X") and
+                          OpenCode; hurts most other cases.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                </details>
                 <span className="text-[10px] text-base-content/65 hidden sm:inline ml-auto sm:ml-0">
                   ⌘↵ send
                 </span>

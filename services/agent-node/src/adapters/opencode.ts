@@ -211,10 +211,15 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
         providerID: body.providerID,
         auth: { type: "api", key: body.apiKey },
       });
+      // The v2 SDK returns `{ data, error, request, response }`. On a
+      // connect-refused (e.g. baseUrl pointing at 127.0.0.1 from inside Docker
+      // when opencode is on the host) the SDK swallows the network error into
+      // an empty `{}` envelope — including the response status helps diagnose
+      // that case vs a real auth/protocol failure.
       if (authSet.error) {
         return {
           ok: false,
-          error: `auth.set failed: ${JSON.stringify(authSet.error).slice(0, 420)}`,
+          error: `auth.set failed: ${JSON.stringify(authSet.error).slice(0, 420)} (response status ${authSet.response?.status})`,
         };
       }
     }
