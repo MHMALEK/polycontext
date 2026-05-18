@@ -1,6 +1,7 @@
 /** Claude Code via @anthropic-ai/claude-agent-sdk (query API). */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { serenaMcpConfig } from "./_serena.js";
 
 export type ClaudeCodeRunBody = {
   systemPrompt?: string;
@@ -59,6 +60,7 @@ export async function runClaudeCode(body: ClaudeCodeRunBody): Promise<{
   let lastAssistantFallback = "";
 
   const model = body.model || process.env.CLAUDE_CODE_MODEL || "claude-sonnet-4-5";
+  const mcpServers = serenaMcpConfig();
 
   const q = query({
     prompt: body.prompt,
@@ -72,6 +74,7 @@ export async function runClaudeCode(body: ClaudeCodeRunBody): Promise<{
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       tools: { type: "preset", preset: "claude_code" },
+      ...(mcpServers ? { mcpServers } : {}),
       env: {
         ...process.env,
         ANTHROPIC_API_KEY: body.apiKey,

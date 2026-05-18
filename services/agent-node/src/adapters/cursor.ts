@@ -1,6 +1,7 @@
 /** Cursor SDK local execution — matches cookbook quickstart + stream then wait. */
 
 import { Agent } from "@cursor/sdk";
+import { serenaMcpConfig } from "./_serena.js";
 
 export type CursorRunBody = {
   systemPrompt?: string;
@@ -58,11 +59,13 @@ export async function runCursor(body: CursorRunBody): Promise<{
   let agent: Awaited<ReturnType<typeof Agent.create>> | undefined;
 
   try {
+    const mcpServers = serenaMcpConfig();
     agent = await Agent.create({
       apiKey: body.apiKey,
       name: "tech-decomposition agent-node",
       model: { id: modelId },
       local: { cwd: body.cwd },
+      ...(mcpServers ? { mcpServers } : {}),
     });
 
     const message = body.systemPrompt

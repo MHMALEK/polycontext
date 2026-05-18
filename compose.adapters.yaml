@@ -36,6 +36,11 @@ services:
       # Same docker network as ``sourcebot`` — avoid localhost (wrong inside the container).
       SOURCEBOT_URL: ${BRIDGE_SOURCEBOT_URL:-http://sourcebot:3000}
       SOURCEBOT_API_KEY: ${SOURCEBOT_API_KEY}
+      # Optional Serena MCP server (LSP-backed semantic tools for Cursor + Claude Code).
+      # When agent_node runs in Docker and Serena runs on the host, set in .env:
+      #   SERENA_URL=http://host.docker.internal:9121/sse
+      SERENA_URL: ${SERENA_URL:-}
+      SERENA_API_KEY: ${SERENA_API_KEY:-}
     volumes:
       - "${REPOS_ROOT}:${REPOS_ROOT}"
     extra_hosts:
