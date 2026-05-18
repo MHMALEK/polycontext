@@ -1,0 +1,25 @@
+{
+  "name": "jira-bridge",
+  "version": "0.1.0",
+  "description": "Stand-alone service that fetches a Jira ticket, runs it through tech-decomposition's /v1/adapters/{name}/decompose endpoint, and posts the result back as a comment. Self-contained — designed to be moved to its own repo whenever.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
