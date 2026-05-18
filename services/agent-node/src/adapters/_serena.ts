@@ -19,22 +19,27 @@
  * protocol — both are out of scope here.
  */
 
-type SerenaSseConfig = {
-  type: "sse";
+type SerenaHttpLikeConfig = {
+  type: "sse" | "http";
   url: string;
   headers?: Record<string, string>;
 };
 
 /**
- * Returns an MCP `Record<name, config>` when `SERENA_URL` is set,
- * otherwise `undefined`. The shape ({ type: "sse", url, headers? })
- * is the intersection accepted by both Cursor and Claude SDKs.
+ * Transport is inferred from the URL: paths ending in `/sse` use the (legacy
+ * but still supported) SSE transport; anything else uses streamable HTTP,
+ * which is Serena's recommended transport going forward.
+ *
+ * Both Cursor SDK (`{ type: "sse" | "http", url }`) and Claude Agent SDK
+ * (`{ type: "sse" | "http", url }`) accept the same shape, so a single
+ * helper feeds both adapters.
  */
-export function serenaMcpConfig(): Record<string, SerenaSseConfig> | undefined {
+export function serenaMcpConfig(): Record<string, SerenaHttpLikeConfig> | undefined {
   const url = (process.env.SERENA_URL || "").trim();
   if (!url) return undefined;
+  const transport: "sse" | "http" = url.endsWith("/sse") ? "sse" : "http";
   const apiKey = (process.env.SERENA_API_KEY || "").trim();
-  const cfg: SerenaSseConfig = { type: "sse", url };
+  const cfg: SerenaHttpLikeConfig = { type: transport, url };
   if (apiKey) cfg.headers = { Authorization: `Bearer ${apiKey}` };
   return { serena: cfg };
 }
