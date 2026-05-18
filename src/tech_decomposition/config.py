@@ -100,6 +100,15 @@ class Settings(BaseSettings):
     opencode_sdk_base_url: str = ""
     opencode_sdk_structured_retry_count: int = 2
 
+    # Serena MCP server (https://github.com/oraios/serena).
+    # When set, ``core/grounding.py`` will call Serena.search_for_pattern in parallel with
+    # Sourcebot's /api/search and merge structured semantic-search results into the
+    # grounding block. Mainly benefits the adapters that can't take MCP themselves
+    # (gemini direct, sourcebot's own /api/chat). Empty = disabled.
+    serena_url: str = ""
+    serena_api_key: str = ""
+    serena_timeout_seconds: float = 20.0
+
     @field_validator("enabled_adapters", mode="before")
     @classmethod
     def _split_enabled(cls, v):

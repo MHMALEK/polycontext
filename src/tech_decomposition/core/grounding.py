@@ -26,6 +26,7 @@ Callers:
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import os
 import re
 import time
@@ -36,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from ..clients.sourcebot import _x_sourcebot_api_key_value, effective_sourcebot_repos_for_ask
 from ..config import Settings
+from .serena_client import SerenaError, SerenaMcpClient
 
 
 class GroundingSnippet(BaseModel):
@@ -58,6 +60,9 @@ class GroundingMetrics(BaseModel):
     total_chars: int = 0
     sources: list[str] = Field(default_factory=list)
     sourcebot_files_seen: int = 0
+    serena_hits: int = 0
+    serena_ms: int = 0
+    serena_error: str | None = None
     error: str | None = None
     extracted_terms: list[str] = Field(
         default_factory=list,
@@ -591,15 +596,47 @@ async def retrieve_grounded_context(
             final_query = f"per-term ({len(quoted_terms)} variants): " + " | ".join(quoted_terms)
 
     snippets = _snippets_from_sourcebot_files(files)
+    sources = ["sourcebot"]
+
+    # When SERENA_URL is configured, run Serena.search_for_pattern per term in
+    # parallel and append any hits Sourcebot missed. Serena's LSP-aware results
+    # complement zoekt's regex hits — e.g. for "what are the user roles" the
+    # regex term ``UserRoles`` lands on the enum file but Sourcebot caps at
+    # one chunk; Serena returns the whole class body with surrounding context.
+    serena_hits = 0
+    serena_ms = 0
+    serena_error: str | None = None
+    if (settings.serena_url or "").strip() and terms:
+        s_t0 = time.monotonic()
+        try:
+            serena_snippets = await _serena_search_terms(
+                terms=terms,
+                settings=settings,
+                already_seen=_already_seen_ids(snippets),
+                cap=max(0, top_k - len(snippets)),
+            )
+            if serena_snippets:
+                snippets.extend(serena_snippets)
+                serena_hits = len(serena_snippets)
+                sources.append("serena")
+        except SerenaError as e:
+            serena_error = str(e)[:300]
+        except Exception as e:
+            serena_error = f"{type(e).__name__}: {e}"[:300]
+        serena_ms = int((time.monotonic() - s_t0) * 1000)
+
     return GroundedContext(
         snippets=snippets,
         grounding_block=format_grounding_block(snippets),
         metrics=GroundingMetrics(
-            duration_ms=total_ms,
+            duration_ms=total_ms + serena_ms,
             snippet_count=len(snippets),
             total_chars=sum(len(s.content) for s in snippets),
-            sources=["sourcebot"],
+            sources=sources,
             sourcebot_files_seen=len(files),
+            serena_hits=serena_hits,
+            serena_ms=serena_ms,
+            serena_error=serena_error,
             extracted_terms=terms,
             search_query=final_query,
             extractor=extractor,
@@ -608,6 +645,111 @@ async def retrieve_grounded_context(
             classifier_ms=classifier_ms,
         ),
     )
+
+
+def _already_seen_ids(snippets: list[GroundingSnippet]) -> set[str]:
+    """File-level dedup keys (repo + path) for snippets already in the result."""
+    return {f"{s.repo}::{s.path}" for s in snippets if s.path}
+
+
+async def _serena_search_terms(
+    *,
+    terms: list[str],
+    settings: Settings,
+    already_seen: set[str],
+    cap: int,
+) -> list[GroundingSnippet]:
+    """Call Serena.search_for_pattern once per term in parallel; turn results
+    into GroundingSnippets, dedupe against ``already_seen``, cap at ``cap``."""
+    if cap <= 0:
+        return []
+    client = SerenaMcpClient(
+        url=settings.serena_url,
+        api_key=settings.serena_api_key,
+        timeout=settings.serena_timeout_seconds,
+    )
+    results = await asyncio.gather(
+        *[
+            client.call(
+                "search_for_pattern",
+                {
+                    "substring_pattern": t,
+                    "context_lines_before": 1,
+                    "context_lines_after": 6,
+                },
+            )
+            for t in terms
+        ],
+        return_exceptions=True,
+    )
+    out: list[GroundingSnippet] = []
+    for term, raw in zip(terms, results, strict=True):
+        if isinstance(raw, BaseException) or not raw:
+            continue
+        for snippet in _parse_serena_search_result(raw, term=term):
+            file_id = f"::{snippet.path}"
+            if file_id in already_seen:
+                continue
+            already_seen.add(file_id)
+            out.append(snippet)
+            if len(out) >= cap:
+                return out
+    return out
+
+
+def _parse_serena_search_result(raw: str, *, term: str) -> list[GroundingSnippet]:
+    """Serena.search_for_pattern returns a JSON-stringified
+    ``{path: [block, ...]}`` mapping. Convert to GroundingSnippets.
+
+    Each block is a text run like ``"  >  N:line\\n... M:context_line\\n..."``.
+    We capture the first hit-line per file (good enough for grounding signal —
+    multiple chunks per file inflate the prompt without adding signal)."""
+    try:
+        parsed = _json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    out: list[GroundingSnippet] = []
+    for path, blocks in parsed.items():
+        if not isinstance(path, str) or not isinstance(blocks, list) or not blocks:
+            continue
+        first = blocks[0]
+        if not isinstance(first, str):
+            continue
+        start_line = _serena_first_lineno(first)
+        out.append(GroundingSnippet(
+            repo="",
+            path=path,
+            start_line=start_line,
+            end_line=None,
+            content=first,
+            language=_language_from_path(path),
+        ))
+    return out
+
+
+_RX_SERENA_LINENO = re.compile(r"^\s*>?\s*(\d+):", re.MULTILINE)
+
+
+def _serena_first_lineno(block: str) -> int | None:
+    m = _RX_SERENA_LINENO.search(block)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _language_from_path(path: str) -> str | None:
+    p = path.lower()
+    if p.endswith(".py"): return "python"
+    if p.endswith((".ts", ".tsx")): return "typescript"
+    if p.endswith((".js", ".jsx")): return "javascript"
+    if p.endswith(".go"): return "go"
+    if p.endswith(".rs"): return "rust"
+    return None
 
 
 def _file_path_text(file_name: Any) -> str:
