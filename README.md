@@ -20,19 +20,73 @@
   <h1>tech-decomposition</h1>
   <p align="center">
     One JSON API. Seven code-AI backends. Two modes (ask, decompose).<br/>
-    Optional grounded retrieval. A web UI to drive both.
+    Optional grounded retrieval, augmented with LSP-backed semantic search via Serena MCP.<br/>
+    A web UI to drive both, an eval harness to compare them.
   </p>
 
   <p>
+    <a href="#results">Results</a> ·
     <a href="#what-it-is">What it is</a> ·
     <a href="#adapters">Adapters</a> ·
     <a href="#http-api">HTTP API</a> ·
     <a href="#grounded-retrieval-opt-in">Grounding</a> ·
+    <a href="#serena-mcp-optional">Serena</a> ·
     <a href="#web-ui">UI</a> ·
     <a href="#quick-start">Quick start</a>
   </p>
 
 </div>
+
+---
+
+## Results
+
+We don't ship features without measuring them. Every number below is from
+the eval harness in [`eval/`](eval/) running real questions from production
+Slack channels against the actual codebase (5 git repos, ~1.2M LOC), with
+the answers scored by both a deterministic rubric (`must_mention` substrings)
+and a Gemini Flash LLM-judge against a hand-written gold answer.
+
+**What ships today vs. naive baseline:**
+
+| Adapter | Baseline | After this work | Δ |
+|---|---|---|---|
+| Gemini (agentic, strong prompt) | 0.64 | **0.79** | **+0.15** |
+| Gemini (grounded + Serena, fast mode) | — | **0.74** | new path |
+| Cline + Serena MCP | 0.648 | **0.815** | **+0.167** |
+| OpenCode + Serena MCP | 0.522 | **0.648** | **+0.126** |
+
+Three things moved each of those numbers:
+
+1. **Forced tool use for Gemini.** The default `_ASK_SYSTEM` prompt told
+   Gemini that tools "were available." Gemini ignored them — ~1 call per
+   question, answers from training knowledge. The new prompt makes tool
+   use *mandatory* with a 3-step workflow. Tool calls jumped from 1 → 7.67
+   per case. Score 0.64 → 0.79.
+
+2. **Serena MCP** wired into every adapter that supports MCP — Cursor, Claude
+   Code, Cline, OpenCode, OpenAI Agents. Cline + OpenCode actually *use*
+   Serena's LSP-backed tools (`find_symbol`, `search_for_pattern`,
+   `find_referencing_symbols`); Cursor's Composer-2 and gpt-4o-mini saw the
+   tools but never called them. The model matters more than the tools.
+
+3. **Serena as a grounding source.** For adapters that can't take MCP
+   themselves (Gemini direct, Sourcebot's `/api/chat`), the grounding
+   pipeline now runs Sourcebot search AND Serena search in parallel and
+   merges the snippets. Gives Gemini a fast-mode path: 0.744 quality at
+   **17.9 s wall / 3,075 input tokens**, vs. agentic mode at 47.6 s /
+   26,031 tokens — 38 % of the time, 12 % of the tokens, 94 % of the quality.
+
+**What didn't pan out (recorded honestly):**
+
+- **Grounding hurt most tool-using adapters.** Pre-fetched snippets make
+  the model trust the first hit and stop investigating, which catastrophically
+  fails on enumerative questions (e.g. "list all user roles"): Cline 0.909 →
+  0.318 when grounded. We now recommend grounding *off* by default for
+  Cline / OpenCode / Gemini / OpenAI Agents.
+- **Cursor (Composer-2) ignored Serena.** It listed Serena's 28 tools every
+  request but never called one. Wiring is in place for free if a future
+  Cursor model changes that.
 
 ---
 
@@ -53,17 +107,19 @@ That's the whole project. Nothing else hides under the hood.
 
 Registered in `src/tech_decomposition/adapters/registry.py`. Most SDK-backed adapters run inside `services/agent-node` (Node, Fastify) — the Python side is a thin HTTP client. `sourcebot` is the exception: it's a Python adapter that talks directly to Sourcebot's chat API.
 
-| Adapter | Backend | Runtime | Capabilities |
-|---|---|---|---|
-| **`sourcebot`** | Sourcebot `/api/chat/blocking` | Python | `ask` |
-| **`claude_code`** | [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) | Node | `ask`, `decompose` |
-| **`cursor`** | [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) | Node | `ask`, `decompose` |
-| **`cline_sdk`** | [`@cline/sdk`](https://www.npmjs.com/package/@cline/sdk) | Node | `ask`, `decompose` |
-| **`gemini`** | [`@google/genai`](https://www.npmjs.com/package/@google/genai) | Node | `ask`, `decompose` |
-| **`openai_agents`** | [`@openai/agents`](https://github.com/openai/openai-agents-js) | Node | `ask`, `decompose` |
-| **`opencode`** | [`@opencode-ai/sdk`](https://opencode.ai/) | Node | `ask`, `decompose` |
+| Adapter | Backend | Runtime | Capabilities | Serena MCP | Best mode |
+|---|---|---|---|---|---|
+| **`sourcebot`** | Sourcebot `/api/chat/blocking` | Python | `ask` | via grounding | grounded+Serena |
+| **`claude_code`** | [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) | Node | `ask`, `decompose` | per-request | tool-using |
+| **`cursor`** | [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) | Node | `ask`, `decompose` | per-request* | grounded |
+| **`cline_sdk`** | [`@cline/sdk`](https://www.npmjs.com/package/@cline/sdk) | Node | `ask`, `decompose` | **per-request ✓** | **+Serena** |
+| **`gemini`** | [`@google/genai`](https://www.npmjs.com/package/@google/genai) | Node | `ask`, `decompose` | via grounding | **agentic OR grounded+Serena** |
+| **`openai_agents`** | [`@openai/agents`](https://github.com/openai/openai-agents-js) | Node | `ask`, `decompose` | per-request* | baseline |
+| **`opencode`** | [`@opencode-ai/sdk`](https://opencode.ai/) | Node | `ask`, `decompose` | **per-request ✓** | **+Serena** |
 
-Each Node-side adapter exposes the SDK's own workspace tools (`read_file`, `list_directory`, `grep_search`, `search_files`) so its agent can explore your local clones at `REPOS_ROOT`.
+\* Wired but the underlying model (Composer-2 / gpt-4o-mini) doesn't call MCP tools in measurements so far. Cline (Gemini Pro driving) and OpenCode (Gemini Pro driving) do call them and benefit.
+
+Each Node-side adapter exposes the SDK's own workspace tools (`read_file`, `list_directory`, `grep_search`, `search_files`) so its agent can explore your local clones at `REPOS_ROOT`. When `SERENA_URL` is set, Cursor / Claude Code / Cline / OpenCode / OpenAI Agents get Serena's tools registered automatically over MCP; Gemini and Sourcebot (which can't take MCP) get Serena via the grounding step instead.
 
 Discover what's installed + healthy at runtime:
 
@@ -126,16 +182,63 @@ Grounding is a **single composable step**, not a default. You ask for it per req
 - **As a standalone call**: `POST /v1/grounding/retrieve` returns the snippets, the rendered markdown block, and timing/char metrics — no LLM call. Useful to see *what* grounding produces and *what it costs* before deciding to inject it.
 - **As a flag on ask**: `POST /v1/adapters/{name}/ask` with `{"grounded": true}` runs the same retrieval, prepends the block to the user prompt, then calls the adapter. The adapter's `metrics` (tokens/cost) and `grounding.metrics` (latency/snippets/chars) are reported separately so you can compare grounded vs not on the same question.
 
-V1 uses Sourcebot's `/api/search` as the only retrieval source. Configure Sourcebot's `config.json` `models` array to pick the LLM Sourcebot's agent uses (we default to OpenAI gpt-4.1 — see `config/sourcebot/config.json`).
+**Two parallel sources** (when both are configured):
+
+1. **Sourcebot `/api/search`** — zoekt-style regex search across all indexed repos. Returns chunked file matches with surrounding context lines. Picks the LLM Sourcebot's chat uses from `config/sourcebot/config.json`.
+2. **Serena `search_for_pattern`** — LSP-backed semantic search via MCP. Adds structured matches that complement Sourcebot's regex hits. Only runs when `SERENA_URL` is set; degrades silently otherwise.
+
+The two sources fan out in parallel, are deduped by file path, and merged up to `top_k` snippets. `GroundingMetrics` reports `sourcebot_files_seen` and `serena_hits` separately so you can see which source contributed what.
+
+### When to turn grounding on (measured)
+
+| Adapter | Recommended | Why |
+|---|---|---|
+| **`gemini`** (fast mode) | ✅ grounded + Serena | 0.744 score, 17.9 s, 3,075 tokens — fastest path with near-agentic quality. |
+| **`sourcebot`** | ✅ grounded | The adapter doesn't take MCP, so this is the only way to feed it Serena's signal. |
+| **`cursor`** | ✅ grounded | Composer-2's native tools benefit from a head-start snippet (+0.113 in earlier eval). |
+| `gemini` (agentic mode) | ❌ ungrounded | Higher quality (0.791) but slower (47.6 s) — use when latency doesn't matter. |
+| `cline_sdk`, `opencode`, `openai_agents` | ❌ ungrounded + Serena per-request | Grounding pre-fetch *hurts* these adapters (catastrophic on enumerative questions). Use the MCP path instead. |
 
 What grounding does **not** include (vs. the v0 pipeline that was removed):
 
 - No ChromaDB / Sentence Transformers local index
 - No tree-sitter repo map / structural prelude
-- No LLM query enrichment hop
 - No reranker
 
-Reason: each SDK adapter has its own retrieval inside its agent loop (Cursor/Claude/Gemini all use their own `read_file`/`grep_search`/`list_directory` tools). Re-running our own retrieval on top of that adds latency without proportional gain. Grounding is here for the **Sourcebot case** — where a centrally-indexed snippet block helps an SDK that's running in a single repo see cross-repo context — and as an opt-in everywhere else.
+Reason: each SDK adapter has its own retrieval inside its agent loop. Adding our own embedding store on top adds latency without proportional gain — Serena's LSP-backed lookups subsume what those layers were going to provide, and are scoped to the adapters that actually benefit.
+
+---
+
+## Serena MCP (optional)
+
+[Serena](https://github.com/oraios/serena) is an LSP-backed MCP server that
+exposes semantic code tools (`find_symbol`, `find_references`,
+`get_symbols_overview`, `search_for_pattern`, ...) that go beyond plain
+grep. When `SERENA_URL` is set in `.env`, two things happen automatically:
+
+1. **Per-request MCP wiring** for Cursor, Claude Code, Cline, OpenCode, and
+   OpenAI Agents — Serena's tools are registered alongside the SDK's
+   native workspace tools so the agent can call them as it explores.
+2. **Grounding augmentation** for Gemini direct and Sourcebot (the two
+   adapters whose runtimes don't accept MCP) — Serena
+   `search_for_pattern` is fanned out per term in parallel with Sourcebot
+   and the results are merged into the snippet block.
+
+Run Serena out-of-band:
+
+```bash
+uvx --from git+https://github.com/oraios/serena serena start-mcp-server \
+  --transport streamable-http --port 9121 --context agent \
+  --project "$REPOS_ROOT"
+
+# in .env:
+SERENA_URL=http://localhost:9121/mcp           # host agent-node
+# or:
+SERENA_URL=http://host.docker.internal:9121/mcp  # docker agent-node
+```
+
+Leave `SERENA_URL` unset to skip Serena entirely — every adapter falls back
+to its prior behavior.
 
 ---
 
@@ -159,18 +262,65 @@ For prod the UI is bundled with `npm run build`; FastAPI serves `web/dist/` at `
 ## Architecture
 
 ```mermaid
-flowchart LR
-  UI[Web UI] -- POST /v1/adapters/.../ask --> API[FastAPI]
-  CLI[curl / scripts] -- same --> API
-  API -- if grounded=true --> SB1[Sourcebot /api/search]
-  API -- adapter.ask --> AN[agent-node]
-  API -- sourcebot adapter --> SB2[Sourcebot /api/chat/blocking]
-  AN -- SDK call --> LLM[Cursor / Claude / Gemini / OpenAI / Cline / OpenCode]
-  SB1 -. snippets prepended .-> AN
-  API --> RS[(SQLite runstore)]
+flowchart TB
+  subgraph clients[Clients]
+    UI[Web UI]
+    CLI[curl / scripts / eval]
+  end
+
+  API[FastAPI<br/>/v1/adapters/.../ask<br/>/v1/adapters/.../decompose]
+
+  subgraph grounding[Grounding pre-fetch — when grounded=true]
+    direction LR
+    SBS[Sourcebot /api/search<br/>zoekt regex]
+    SER1[Serena search_for_pattern<br/>LSP-backed]
+    MERGE[merge + dedupe<br/>up to top_k snippets]
+    SBS --> MERGE
+    SER1 -. parallel .-> MERGE
+  end
+
+  subgraph adapters[Adapters]
+    direction LR
+    AN[agent-node<br/>Fastify + SDKs]
+    SBA[Sourcebot adapter<br/>/api/chat/blocking]
+  end
+
+  subgraph sdks[Per-request SDK runtimes]
+    direction LR
+    Cline[Cline SDK]
+    OC[OpenCode SDK]
+    Cur[Cursor SDK]
+    CC[Claude Code SDK]
+    Gem[Gemini @google/genai]
+    OAI[OpenAI Agents SDK]
+  end
+
+  SER2[Serena MCP<br/>find_symbol · find_references<br/>get_symbols_overview · ...]
+  RS[(SQLite runstore<br/>history + replay)]
+
+  UI --> API
+  CLI --> API
+  API -- if grounded=true --> grounding
+  grounding -. snippets prepended .-> API
+  API --> AN
+  API --> SBA
+  AN --> sdks
+  Cline -. MCP per request .-> SER2
+  OC -. MCP per request .-> SER2
+  Cur -. MCP per request .-> SER2
+  CC -. MCP per request .-> SER2
+  OAI -. MCP per request .-> SER2
+  API --> RS
+
+  classDef extra fill:#fef9c3,stroke:#ca8a04;
+  class grounding,SER2 extra;
 ```
 
-Grounding (the dashed line) is the only "extra" step. Without it, the path is straight: API → adapter → LLM → response → save to runstore → return.
+The two yellow blocks are optional and gated on env config:
+- **Grounding** runs only when the request has `grounded=true`; degrades to Sourcebot-only when Serena isn't configured.
+- **Serena MCP** is wired into the tool-using adapters only when `SERENA_URL` is set.
+
+Without either, the path is straight: API → adapter → SDK → LLM → response → runstore.
 
 ---
 
@@ -249,16 +399,33 @@ Open the UI at `http://localhost:${UI_PORT:-15173}` (dev) or `http://localhost:$
 
 ## Evaluation
 
-A small bake-off runner under [`eval/`](eval/) — fan a TOML/YAML case set across one or more adapters, score with simple rule checks, write a markdown report.
+A bake-off runner under [`eval/`](eval/) — fan a TOML/YAML case set across
+one or more adapters, score with two layers, write a markdown report.
+
+**Scoring layers** (`eval/bakeoff/scorer.py`):
+
+1. **Rule-based** — deterministic substring + structure checks (`must_mention`,
+   `min_chars`, `min_citations`). Cheap, runs on every case.
+2. **LLM-as-judge** — when a case carries a hand-written `gold_answer`, a
+   single Gemini Flash call grades the adapter's answer on `coverage`
+   (fraction of facts from gold present) and `accuracy` (no contradictions),
+   merged as weighted checks. Enable with `--use-judge`.
+
+**Cases** live in [`eval/questions.toml`](eval/questions.toml) — 13 real
+questions harvested from production Slack channels with gold answers
+written by domain experts.
 
 ```bash
 make eval-adapters                              # show registered adapters + health
 make eval-cases                                 # list discovered cases (JOB=ask|decompose)
-make eval-run ADAPTERS=cursor JOB=ask
-make eval-run ADAPTERS=gemini,openai_agents JOB=decompose
+uv run python -m eval.bakeoff.cli run --job ask --adapters cline_sdk,opencode --use-judge
+uv run python -m eval.bakeoff.cli run --job ask --adapters gemini --grounded --use-judge
 ```
 
-Output: `eval/outputs/eval-<timestamp>/report.md` + `summary.json` + per-run JSON.
+Output: `eval/outputs/eval-<timestamp>/report.md` + `summary.json` + per-run
+JSON. The report includes a leaderboard, per-case score breakdown, full
+answer bodies for diff-style comparison across adapters, and (when enabled)
+LLM-judge verdicts inline.
 
 ---
 

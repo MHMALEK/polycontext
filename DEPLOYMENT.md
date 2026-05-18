@@ -123,6 +123,36 @@ Switching providers requires no code changes; the model registry in
 [core/llm_registry.py](src/tech_decomposition/core/llm_registry.py) resolves `provider:name`
 strings at runtime.
 
+### Optional integrations
+
+**Serena MCP** (semantic code tools — see `README.md#serena-mcp-optional`):
+
+```bash
+# Start out-of-band, then in .env:
+SERENA_URL=http://host.docker.internal:9121/mcp   # docker agent-node
+SERENA_URL=http://localhost:9121/mcp              # host agent-node
+```
+
+When `SERENA_URL` is set the grounding pipeline runs Sourcebot AND Serena in
+parallel, and the MCP-capable adapters (Cursor / Claude Code / Cline /
+OpenCode / OpenAI Agents) get Serena's tools registered per request. Unset =
+disabled, no effect on any adapter.
+
+**OpenCode adapter** (`@opencode-ai/sdk` is an HTTP client around the
+`opencode` CLI — the SDK does *not* bundle the binary):
+
+```bash
+# Run on host (the npm `opencode-ai` package; or `brew install opencode-ai`):
+opencode serve --hostname 0.0.0.0 --port 4096
+
+# Then in .env:
+OPENCODE_SDK_BASE_URL=http://host.docker.internal:4096   # docker agent-node
+```
+
+Leaving `OPENCODE_SDK_BASE_URL` empty falls back to spawning `opencode` from
+the agent-node container's `PATH` — fails with `ENOENT` unless you've baked
+the CLI into the image yourself.
+
 ## Repo management — two paths
 
 ### Path A — local-mount (default, simpler)
