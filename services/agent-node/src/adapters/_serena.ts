@@ -25,21 +25,37 @@ type SerenaHttpLikeConfig = {
   headers?: Record<string, string>;
 };
 
+export type SerenaEnv = {
+  url: string;
+  /** Inferred from URL path: `/sse` → SSE, anything else → streamable HTTP. */
+  transport: "sse" | "http";
+  apiKey: string | undefined;
+};
+
 /**
- * Transport is inferred from the URL: paths ending in `/sse` use the (legacy
- * but still supported) SSE transport; anything else uses streamable HTTP,
- * which is Serena's recommended transport going forward.
+ * Parsed Serena environment, or `undefined` when `SERENA_URL` is unset.
  *
- * Both Cursor SDK (`{ type: "sse" | "http", url }`) and Claude Agent SDK
- * (`{ type: "sse" | "http", url }`) accept the same shape, so a single
- * helper feeds both adapters.
+ * Adapters whose SDK uses class-based MCP wiring (OpenAI Agents SDK) call
+ * this and build their own `MCPServerStreamableHttp` / `MCPServerSSE`
+ * instance. Adapters whose SDK takes a JSON config (Cursor, Claude Agent)
+ * use `serenaMcpConfig()` below.
  */
-export function serenaMcpConfig(): Record<string, SerenaHttpLikeConfig> | undefined {
+export function serenaEnv(): SerenaEnv | undefined {
   const url = (process.env.SERENA_URL || "").trim();
   if (!url) return undefined;
   const transport: "sse" | "http" = url.endsWith("/sse") ? "sse" : "http";
-  const apiKey = (process.env.SERENA_API_KEY || "").trim();
-  const cfg: SerenaHttpLikeConfig = { type: transport, url };
-  if (apiKey) cfg.headers = { Authorization: `Bearer ${apiKey}` };
+  const apiKey = (process.env.SERENA_API_KEY || "").trim() || undefined;
+  return { url, transport, apiKey };
+}
+
+/**
+ * MCP config object accepted by both Cursor SDK and Claude Agent SDK
+ * (`mcpServers?: Record<name, { type: "sse" | "http", url, headers? }>`).
+ */
+export function serenaMcpConfig(): Record<string, SerenaHttpLikeConfig> | undefined {
+  const env = serenaEnv();
+  if (!env) return undefined;
+  const cfg: SerenaHttpLikeConfig = { type: env.transport, url: env.url };
+  if (env.apiKey) cfg.headers = { Authorization: `Bearer ${env.apiKey}` };
   return { serena: cfg };
 }

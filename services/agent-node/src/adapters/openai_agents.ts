@@ -3,7 +3,12 @@
  */
 import { Agent, Runner, tool, type Tool } from "@openai/agents";
 import { OpenAIProvider } from "@openai/agents-openai";
-import type { Usage } from "@openai/agents-core";
+import {
+  MCPServerSSE,
+  MCPServerStreamableHttp,
+  type MCPServer,
+  type Usage,
+} from "@openai/agents-core";
 import { z } from "zod";
 import {
   workspaceReadFile,
@@ -12,6 +17,7 @@ import {
   workspaceGrepSearch,
   DEFAULT_MAX_BYTES,
 } from "./workspace_tools.js";
+import { serenaEnv } from "./_serena.js";
 
 export type OpenAIAgentsRunBody = {
   systemPrompt?: string;
@@ -141,6 +147,33 @@ export async function runOpenAIAgents(body: OpenAIAgentsRunBody): Promise<{
     ? `${baseInstructions}\n\nUse the read_file, list_directory, search_files, and grep_search tools to inspect the workspace before answering. Paths are relative to the workspace root (${cwd}). Cite paths relative to that root.`
     : baseInstructions;
 
+  const sEnv = serenaEnv();
+  const mcpServers: MCPServer[] = sEnv
+    ? [
+        sEnv.transport === "sse"
+          ? new MCPServerSSE({
+              url: sEnv.url,
+              name: "serena",
+              ...(sEnv.apiKey
+                ? { requestInit: { headers: { Authorization: `Bearer ${sEnv.apiKey}` } } }
+                : {}),
+            })
+          : new MCPServerStreamableHttp({
+              url: sEnv.url,
+              name: "serena",
+              ...(sEnv.apiKey
+                ? { requestInit: { headers: { Authorization: `Bearer ${sEnv.apiKey}` } } }
+                : {}),
+            }),
+      ]
+    : [];
+
+  // OpenAI Agents SDK requires MCP servers to be explicitly connected before
+  // the Agent uses them (unlike Cursor / Claude Agent SDKs which auto-connect).
+  for (const s of mcpServers) {
+    await s.connect();
+  }
+
   try {
     const agent = new Agent({
       name: "tech-decomposition",
@@ -148,6 +181,7 @@ export async function runOpenAIAgents(body: OpenAIAgentsRunBody): Promise<{
       model: modelId,
       modelSettings: cwd ? { toolChoice: "required", parallelToolCalls: true } : {},
       tools: cwd ? createWorkspaceTools(cwd) : [],
+      ...(mcpServers.length ? { mcpServers } : {}),
     });
 
     const result = await withTimeout(
@@ -187,5 +221,8 @@ export async function runOpenAIAgents(body: OpenAIAgentsRunBody): Promise<{
     };
   } finally {
     await provider.close().catch(() => undefined);
+    for (const s of mcpServers) {
+      await s.close().catch(() => undefined);
+    }
   }
 }
