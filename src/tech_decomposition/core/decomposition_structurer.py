@@ -36,6 +36,7 @@ Flow:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -92,16 +93,54 @@ async def structure_decomposition(
     settings: Settings,
     model_tag: str = "",
 ) -> StructureResult:
-    """Always-on schema enforcer.
+    """Two-step schema enforcer.
 
-    The upstream text is passed verbatim to Gemini with
-    ``output_type=Decomposition``. Gemini's ``responseSchema`` makes the
-    API itself guarantee a schema-valid response — no extract_json, no
-    regex, no model_validate gambling.
+    Step A (fast path) — try ``Decomposition.model_validate_json(text)``
+    directly. This is for adapters that already produce schema-valid JSON
+    (Gemini with ``responseSchema``, OpenAI Agents with ``response_format``,
+    OpenCode with its structured output). No regex parsing, no extract_json:
+    if the text isn't already a valid Decomposition JSON object, fall
+    through.
 
-    Returns a minimal fallback Decomposition if Gemini isn't available
-    so callers never see a 502 because of structurer plumbing.
+    Step B (slow path) — pass the upstream text to ``pydantic_ai.Agent``
+    with ``output_type=Decomposition``. Gemini Flash (configurable via
+    ``enrich_model``) uses its native ``responseSchema`` to coerce arbitrary
+    upstream text into a schema-valid Decomposition. This is the fallback
+    for adapters whose upstream is free-form (Cursor, Cline, Claude Code,
+    Gemini without responseSchema).
+
+    Both steps return a fully validated ``Decomposition`` — there is no
+    parsing gamble left in the pipeline. The ``_fallback_minimal`` path is
+    only used when Gemini itself is unreachable.
     """
+    # Step A — direct JSON validation.
+    #
+    # Even when Gemini is told to emit application/json via responseSchema,
+    # it occasionally wraps the body in ```json fences. We strip them here
+    # so the fast path catches that case too — the JSON inside is still
+    # schema-valid by construction.
+    stripped = _strip_json_fences((text or "").strip())
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            decomp = Decomposition.model_validate_json(stripped)
+            if query and not decomp.query:
+                decomp = decomp.model_copy(update={"query": query})
+            if model_tag and not decomp.decomposition_model:
+                decomp = decomp.model_copy(update={"decomposition_model": model_tag})
+            return StructureResult(
+                decomposition=decomp,
+                used_llm_repair=False,
+                repair_model=None,
+                repair_tokens_in=None,
+                repair_tokens_out=None,
+                notes="fast-path: model_validate_json direct",
+            )
+        except Exception:
+            # Fall through to LLM repair — upstream text claims to be JSON
+            # but doesn't match the Decomposition schema.
+            pass
+
+    # Step B — LLM repair via pydantic-ai.
     if not settings.gemini_api_key:
         return _fallback_minimal(text=text, query=query, reason="GEMINI_API_KEY not set")
 
@@ -171,6 +210,17 @@ def _fallback_minimal(*, text: str, query: str, reason: str) -> StructureResult:
         repair_tokens_out=None,
         notes=f"fallback: {reason}",
     )
+
+
+_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*", re.IGNORECASE)
+_JSON_FENCE_END_RE = re.compile(r"\s*```\s*$")
+
+
+def _strip_json_fences(text: str) -> str:
+    """Strip leading ```json / ``` fences and trailing ``` from a body."""
+    out = _JSON_FENCE_RE.sub("", text, count=1)
+    out = _JSON_FENCE_END_RE.sub("", out)
+    return out.strip()
 
 
 def _usage_from(result: Any) -> tuple[int | None, int | None]:

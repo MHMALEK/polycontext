@@ -41,40 +41,90 @@ _ASK_SYSTEM = (
     "Paths are relative to the workspace root. Return only the final answer; no "
     "progress narration."
 )
-_DECOMPOSE_SYSTEM = (
-    "You decompose engineering tickets into structured tech work using "
-    "read-only filesystem tools (read_file, list_directory, search_files, "
-    "grep_search) over the workspace at the path mentioned in the user "
-    "message.\n\n"
-    "MANDATORY: Before producing the decomposition, you MUST call these tools "
-    "to verify the repos, files, and symbols exist. Every file path in your "
-    "output must be one you actually opened or saw in a search/list result. "
-    "If you cannot find evidence for a path, omit it — DO NOT invent paths.\n\n"
-    "Workflow:\n"
-    "1. list_directory(\".\") to map the top-level repos. Note any repos "
-    "named like `*-cloud-functions`, `*-cf`, `*-lambdas`, `*-functions`, or "
-    "`services/*` — these typically host NEW serverless/microservice code.\n"
-    "2. search_files / grep_search to locate the modules, classes, and "
-    "constants the ticket mentions in the existing code (the source side).\n"
-    "3. When the ticket is about MOVING / PORTING / CREATING new code:\n"
-    "   a. Find the destination repo first by ls'ing each plausible sibling "
-    "(e.g. if the ticket says \"move X to a Cloud Function\", read the "
-    "main.py / entrypoint of EVERY *-cloud-functions or similar repo to "
-    "find existing patterns and placeholders).\n"
-    "   b. Look specifically for stub functions like `def process_X(...): "
-    "pass` or `TODO`/`DEV-` comments — these are explicit extension points.\n"
-    "   c. DO NOT assume the target repo is the one named after the domain "
-    "(e.g. don't put a CF into `traceability/` just because the work is "
-    "about traceability — check if there's a dedicated CF repo first).\n"
-    "4. read_file on the key files (both source AND destination) so you "
-    "can cite real symbols and line ranges in subtask descriptions.\n"
-    "5. THEN emit the final JSON object matching the schema in the user "
-    "message — exactly one object, no prose, no fences.\n\n"
-    "A decomposition that cites files we cannot verify, or puts new code "
-    "in the wrong repo when a dedicated target repo exists, is worse than "
-    "no decomposition — a developer will waste time chasing made-up paths "
-    "or mis-placing code."
-)
+_DECOMPOSE_SYSTEM = """\
+You decompose engineering tickets into structured tech work for a real
+developer to pick up. You have read-only filesystem tools (read_file,
+list_directory, search_files, grep_search) over a workspace on disk that
+contains multiple repos.
+
+# Output contract
+
+The user message describes the output JSON schema. Your final response
+must be exactly one JSON object matching it — no prose, no markdown
+fences. Every file path in the output must be one you actually opened
+or saw in a search/list result. DO NOT invent paths.
+
+# Required workflow (read this carefully)
+
+You are not done until you have done all of these. Skipping steps
+produces decompositions that mis-place code in the wrong repo or cite
+files that don't exist — both of which waste a developer's afternoon.
+
+## Step 1 — Map the workspace
+
+Call list_directory(".") FIRST. Look at every top-level repo name.
+
+For a "move / port / create new code" ticket, every repo name with a
+serverless/microservice flavor is a candidate destination — names like
+`*-cloud-functions`, `*-cf`, `*-functions`, `*-lambdas`, `services/*`,
+`*-workers`, `*-jobs`. Note all of them.
+
+## Step 2 — Find the SOURCE (where the existing code is)
+
+search_files / grep_search for the class, function, or DAG name the
+ticket mentions. read_file on the hits. Note the actual classes you
+find and the modules they live in.
+
+## Step 3 — Find the DESTINATION (where the new code goes)
+
+DO NOT skip this step. Domain repos (e.g. `traceability/`) are usually
+NOT where new Cloud Functions belong — even when the ticket talks about
+"traceability validation", new CF code typically goes in a dedicated
+CF repo.
+
+For each candidate destination repo from Step 1:
+  a. list_directory(<repo>/src) (or wherever the source code lives).
+  b. If you see existing entrypoints / cloud function modules, read
+     their main.py. Look for stub functions: `def process_X(...): pass`,
+     `TODO`, `DEV-XXXX`, `raise NotImplementedError`. These are explicit
+     extension points that the new code should slot into.
+  c. Read at least one EXISTING sibling implementation to understand
+     the pattern to mirror.
+
+## Step 4 — Emit the JSON
+
+When citing files, use the FULL path relative to the workspace root
+(e.g. `data-cloud-functions/src/cloud_functions/composer_dag_trigger/main.py`,
+NOT bare `main.py`). When you name a class or function, name the one
+you actually saw in a read_file output.
+
+# Worked example (study this — it shows what good exploration looks like)
+
+User ticket: "Move the foo-bar batch job out of Airflow and into a Cloud
+Function".
+
+Good exploration sequence:
+  1. list_directory(".") → sees `data/`, `data-cloud-functions/`, `frontend/`, `services/`
+  2. search_files("foo_bar") → finds `data/src/dags/foo_bar_job.py`
+  3. read_file("data/src/dags/foo_bar_job.py") → confirms it's the source DAG
+  4. list_directory("data-cloud-functions/src") → sees `cloud_functions/`
+  5. list_directory("data-cloud-functions/src/cloud_functions") → sees several existing CFs and a `composer_dag_trigger/`
+  6. read_file("data-cloud-functions/src/cloud_functions/composer_dag_trigger/main.py")
+     → finds `def process_foo_bar(...): pass` near the bottom — THE EXTENSION POINT
+  7. Emit Decomposition citing `data/src/dags/foo_bar_job.py` (source) AND
+     `data-cloud-functions/src/cloud_functions/composer_dag_trigger/main.py`
+     (destination — replace the `process_foo_bar` stub).
+
+Bad exploration (DO NOT do this):
+  1. list_directory(".") → sees the repos
+  2. search_files / grep_search the source
+  3. read_file the source
+  4. ASSUMES the new code goes in a repo named after the domain
+  5. Emits Decomposition citing fabricated path like `<domain-repo>/src/main.py`
+
+If you find yourself about to emit JSON without having read any file
+inside the destination repo's `src/` directory, STOP and do Step 3.
+"""
 
 
 class GeminiAdapter(Adapter):
@@ -126,12 +176,18 @@ class GeminiAdapter(Adapter):
     async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()
         prompt = DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
+        # Pass the Decomposition JSON schema so Gemini's API forces
+        # schema-valid output for the terminal response. Tool calls during
+        # AFC iterations are unconstrained. Downstream structurer then takes
+        # the fast path (direct JSON validation) instead of re-running a
+        # Flash repair call — saving ~1-2 s per decompose.
         out = await self._run(
             system=_DECOMPOSE_SYSTEM,
             prompt=prompt,
             model_id=self._decompose_model_id(),
             timeout_seconds=float(self.settings.gemini_sdk_timeout_seconds),
             cwd=self._cwd_for_repos(inp.repos),
+            response_schema=_gemini_decomposition_schema(),
         )
         return RawDecomposeText(
             text=(out.get("answer") or ""),
@@ -151,6 +207,7 @@ class GeminiAdapter(Adapter):
         model_id: str,
         timeout_seconds: float,
         cwd: Path | str | None = None,
+        response_schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         url = self.settings.agent_node_url.rstrip("/") + "/adapters/gemini/run"
         body: dict[str, Any] = {
@@ -162,6 +219,8 @@ class GeminiAdapter(Adapter):
         }
         if cwd is not None:
             body["cwd"] = str(cwd)
+        if response_schema is not None:
+            body["responseSchema"] = response_schema
         async with httpx.AsyncClient(timeout=timeout_seconds + 30) as c:
             r = await c.post(url, json=body)
         if r.status_code >= 400:
@@ -198,3 +257,58 @@ def _as_int(v: Any) -> int | None:
 
 def _as_str(v: Any) -> str | None:
     return v if isinstance(v, str) and v else None
+
+
+# ---------------------------------------------------------------------------
+# Decomposition responseSchema for Gemini
+# ---------------------------------------------------------------------------
+#
+# Gemini's ``responseSchema`` is a subset of JSON Schema — it doesn't accept
+# ``$ref`` / ``$defs`` (which pydantic uses heavily for nested models) and is
+# strict about properties. Hand-rolling a flat schema is safer than trying to
+# inline-resolve pydantic's auto-generated one.
+
+_GEMINI_DECOMPOSITION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "description": "Echo of the user's question."},
+        "overview": {
+            "type": "string",
+            "description": "2–4 sentence engineer-readable framing of what needs to happen.",
+        },
+        "affected_repos": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Repo names touched by this work (must exist on disk).",
+        },
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "open_questions": {"type": "array", "items": {"type": "string"}},
+        "subtasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "repo": {"type": "string"},
+                    "files": {"type": "array", "items": {"type": "string"}},
+                    "file_links": {"type": "array", "items": {"type": "string"}},
+                    "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+                    "estimated_complexity": {
+                        "type": "string",
+                        "enum": ["small", "medium", "large", "unknown"],
+                    },
+                },
+                "required": ["title", "description", "repo", "estimated_complexity"],
+            },
+        },
+        "enrichment_model": {"type": "string"},
+        "decomposition_model": {"type": "string"},
+    },
+    "required": ["query", "overview", "affected_repos", "subtasks"],
+}
+
+
+def _gemini_decomposition_schema() -> dict[str, Any]:
+    """Return the Gemini-compatible JSON schema for ``Decomposition``."""
+    return _GEMINI_DECOMPOSITION_SCHEMA

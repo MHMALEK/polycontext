@@ -12,6 +12,7 @@ import {
   type Content,
   type FunctionCall,
   type Part,
+  type Schema,
   type Tool,
 } from "@google/genai";
 import {
@@ -31,6 +32,17 @@ export type GeminiRunBody = {
   /** Workspace root on the agent-node host (e.g. REPOS_ROOT); enables CallableTool + AFC. */
   cwd?: string;
   maxToolRounds?: number;
+  /**
+   * Optional Gemini ``responseSchema``. When set, the API forces the model to
+   * emit JSON matching this schema for the final response. Tool calls during
+   * AFC iterations are unaffected; only the terminal response is constrained.
+   *
+   * Used by the Python decompose path to make Gemini natively produce a
+   * ``Decomposition``-shaped JSON object — the downstream structurer then
+   * just re-validates it via pydantic-ai (fast path) rather than re-prompting
+   * a separate Flash model.
+   */
+  responseSchema?: Record<string, unknown>;
 };
 
 
@@ -295,6 +307,18 @@ export async function runGemini(body: GeminiRunBody): Promise<{
         // invent file paths. The forced-tool-use system prompt still does
         // the heavy lifting; this just trims the variance.
         temperature: 0.2,
+        // When the caller wants a schema-constrained response (decompose
+        // path), force the API to emit JSON matching the schema. Tool calls
+        // during AFC are still free-form; only the terminal response is
+        // constrained. Cuts the downstream pydantic-ai structurer call out
+        // for the common case where Gemini natively produces a valid
+        // Decomposition.
+        ...(body.responseSchema
+          ? {
+              responseMimeType: "application/json",
+              responseSchema: body.responseSchema as Schema,
+            }
+          : {}),
         httpOptions: { timeout: timeoutMs },
       },
     });
