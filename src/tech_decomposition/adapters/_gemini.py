@@ -1,38 +1,29 @@
-"""Gemini adapter.
+"""Gemini via services/agent-node (`@google/genai` JS SDK).
 
-Two distinct paths:
-
-- **ask** — routed through services/agent-node (`@google/genai` JS SDK). The
-  agent loop benefits from agent-node's workspace tools and forced tool-use
-  prompt; round-tripping to Python pydantic-ai for ask would lose those.
-- **decompose** — direct call from Python via pydantic-ai's ``Agent`` with
-  ``output_type=Decomposition``. Gemini's ``responseSchema`` feature is used
-  under the hood and the SDK returns a fully-validated ``Decomposition``
-  object. No more ``extract_json`` fragility on the decompose path — the
-  shape is enforced by the API, not coaxed out of free-form text. (This is
-  why ``_extract_json`` is no longer imported here.)
+Both ask and decompose go through agent-node now. Schema enforcement for
+the decompose path lives in ``core/decomposition_structurer`` (shared
+across every adapter), so the adapter's only job is to drive the model
+and hand back the raw text response.
 
 Docs: https://googleapis.github.io/js-genai/ · https://ai.google.dev/gemini-api/docs
 """
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from ..models import Decomposition
 from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
     AdapterDecomposeInput,
-    AdapterDecomposeResult,
     AdapterMetrics,
     Capability,
+    RawDecomposeText,
 )
 
 _ASK_SYSTEM = (
@@ -102,74 +93,19 @@ class GeminiAdapter(Adapter):
         d = (self.settings.decompose_model or "").strip()
         return d if d else "gemini-2.5-pro"
 
-    async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
-        """Decompose via pydantic-ai → Gemini ``responseSchema``.
-
-        Switched away from the agent-node + extract_json path because the model
-        was non-deterministically returning bare ``Subtask`` objects instead of
-        the outer ``Decomposition`` wrapper. With ``output_type=Decomposition``,
-        the SDK forces the schema via Gemini's structured-output feature and
-        returns an already-validated ``Decomposition`` instance.
-        """
+    async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()
         prompt = DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
-        model_id = self._decompose_model_id()
-        # Lazy import — pydantic-ai is heavy and not needed for ask.
-        from pydantic_ai import Agent
-        from pydantic_ai.models.gemini import GeminiModel
-        from pydantic_ai.settings import ModelSettings
-
-        # The Gemini provider in pydantic-ai reads the API key from env; set it
-        # explicitly so it works even when the host shell hasn't exported it.
-        os.environ.setdefault("GEMINI_API_KEY", self.settings.gemini_api_key)
-
-        agent = Agent(
-            model=GeminiModel(model_id),
-            output_type=Decomposition,
-            system_prompt=_DECOMPOSE_SYSTEM,
-            model_settings=ModelSettings(temperature=0.2),
+        out = await self._run(
+            system=_DECOMPOSE_SYSTEM,
+            prompt=prompt,
+            model_id=self._decompose_model_id(),
+            timeout_seconds=float(self.settings.gemini_sdk_timeout_seconds),
+            cwd=self._cwd_for_repos(inp.repos),
         )
-        result = await agent.run(prompt)
-        decomp = result.output  # already a validated Decomposition
-
-        # Fill in the query if the model echoed something different; the caller
-        # often relies on this field to correlate.
-        if inp.query and not decomp.query:
-            decomp = decomp.model_copy(update={"query": inp.query})
-
-        # Re-render as markdown for the UI's "Raw markdown" panel and for any
-        # downstream caller (e.g. jira-bridge) that wants a textual rendering.
-        markdown = decomp.model_dump_json(indent=2)
-
-        # Best-effort usage extraction — pydantic-ai exposes a Usage object on
-        # the result with attributes that vary slightly by version.
-        tokens_in: int | None = None
-        tokens_out: int | None = None
-        try:
-            usage_obj = result.usage()
-            tokens_in = (
-                getattr(usage_obj, "request_tokens", None)
-                or getattr(usage_obj, "input_tokens", None)
-            )
-            tokens_out = (
-                getattr(usage_obj, "response_tokens", None)
-                or getattr(usage_obj, "output_tokens", None)
-            )
-        except Exception:
-            pass
-
-        return AdapterDecomposeResult(
-            adapter=self.name,
-            decomposition=decomp,
-            markdown=markdown,
-            metrics=AdapterMetrics(
-                duration_ms=int((time.monotonic() - t) * 1000),
-                tokens_in=tokens_in if isinstance(tokens_in, int) else None,
-                tokens_out=tokens_out if isinstance(tokens_out, int) else None,
-                model=model_id,
-                tool_calls=0,
-                extra={"sdk": "pydantic-ai", "agent_node": False, "structured_output": True},
-            ),
+        return RawDecomposeText(
+            text=(out.get("answer") or ""),
+            metrics=_metrics_from(out, t),
         )
 
     def _cwd_for_repos(self, repos: list[str] | None) -> Path:

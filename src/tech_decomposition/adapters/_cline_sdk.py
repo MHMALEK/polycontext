@@ -7,17 +7,15 @@ from typing import Any
 
 import httpx
 
-from ..models import Decomposition
-from ._extract_json import extract_json
 from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
     AdapterDecomposeInput,
-    AdapterDecomposeResult,
     AdapterMetrics,
     Capability,
+    RawDecomposeText,
 )
 
 
@@ -77,7 +75,7 @@ class ClineSDKAdapter(Adapter):
             metrics=_metrics_from(out, t),
         )
 
-    async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
+    async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()
         user_prompt = (
             DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
@@ -89,18 +87,8 @@ class ClineSDKAdapter(Adapter):
             timeout_seconds=self.settings.agent_node_timeout_seconds,
             enable_find_code=True,
         )
-        answer = out.get("answer") or ""
-        try:
-            decomp = Decomposition.model_validate(extract_json(answer))
-        except Exception as e:
-            raise RuntimeError(
-                f"cline_sdk decompose did not return parseable JSON: {e}\n"
-                f"--- raw ---\n{answer[:2000]}"
-            ) from e
-        return AdapterDecomposeResult(
-            adapter=self.name,
-            decomposition=decomp,
-            markdown=answer,
+        return RawDecomposeText(
+            text=(out.get("answer") or ""),
             metrics=_metrics_from(out, t),
         )
 

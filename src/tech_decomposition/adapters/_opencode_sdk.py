@@ -13,17 +13,15 @@ from typing import Any
 
 import httpx
 
-from ..models import Decomposition
-from ._extract_json import extract_json
 from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
     AdapterDecomposeInput,
-    AdapterDecomposeResult,
     AdapterMetrics,
     Capability,
+    RawDecomposeText,
 )
 
 _ASK_SYSTEM = (
@@ -89,7 +87,7 @@ class OpencodeSDKAdapter(Adapter):
             metrics=_metrics_from(out, t),
         )
 
-    async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
+    async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()
         user_prompt = (
             DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
@@ -106,23 +104,11 @@ class OpencodeSDKAdapter(Adapter):
             structured_retry=self.settings.opencode_sdk_structured_retry_count,
         )
         if out.get("structuredOutputFailed"):
-            raise RuntimeError(
-                f"opencode structured decomposition failed after retries: {out.get('error')}"
-            )
-        raw = out.get("answer") or ""
-        try:
-            if isinstance(raw, str) and raw.strip().startswith("{") and raw.endswith("}"):
-                decomp = Decomposition.model_validate_json(raw.strip())
-            else:
-                decomp = Decomposition.model_validate(extract_json(raw))
-        except Exception as e:
-            raise RuntimeError(
-                f"opencode decompose did not return usable JSON: {e}\n--- raw ---\n{raw[:2000]}",
-            ) from e
-        return AdapterDecomposeResult(
-            adapter=self.name,
-            decomposition=decomp,
-            markdown=raw,
+            # Let the shared structurer attempt repair with whatever text
+            # OpenCode managed to emit before structured-output retries gave up.
+            pass
+        return RawDecomposeText(
+            text=(out.get("answer") or ""),
             metrics=_metrics_from(out, t),
         )
 

@@ -7,17 +7,15 @@ from typing import Any
 
 import httpx
 
-from ..models import Decomposition
-from ._extract_json import extract_json
 from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
     AdapterDecomposeInput,
-    AdapterDecomposeResult,
     AdapterMetrics,
     Capability,
+    RawDecomposeText,
 )
 
 _ASK_SYSTEM = (
@@ -66,7 +64,7 @@ class CursorSDKAdapter(Adapter):
             metrics=_metrics_from(out, t),
         )
 
-    async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
+    async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()
         prompt = DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
         out = await self._run(
@@ -75,12 +73,8 @@ class CursorSDKAdapter(Adapter):
             cwd=self._cwd_for_repos(inp.repos),
             timeout_seconds=self.settings.agent_node_timeout_seconds,
         )
-        answer = out.get("answer") or ""
-        decomp = Decomposition.model_validate(extract_json(answer))
-        return AdapterDecomposeResult(
-            adapter=self.name,
-            decomposition=decomp,
-            markdown=answer,
+        return RawDecomposeText(
+            text=(out.get("answer") or ""),
             metrics=_metrics_from(out, t),
         )
 

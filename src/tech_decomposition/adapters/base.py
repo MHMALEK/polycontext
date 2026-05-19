@@ -110,6 +110,20 @@ class AdapterDecomposeResult(BaseModel):
     metrics: AdapterMetrics = Field(default_factory=AdapterMetrics)
 
 
+class RawDecomposeText(BaseModel):
+    """What an adapter's ``_decompose_raw_text`` returns.
+
+    The adapter is only responsible for running its LLM and giving back the
+    text it produced. Schema validation lives outside the adapter (in
+    ``core/decomposition_structurer.py``), so individual adapters don't need
+    to repeat the extract_json + model_validate dance and can't 502 from a
+    malformed model response.
+    """
+
+    text: str
+    metrics: AdapterMetrics = Field(default_factory=AdapterMetrics)
+
+
 # ---------------------------------------------------------------------------
 # Adapter base class
 # ---------------------------------------------------------------------------
@@ -147,8 +161,53 @@ class Adapter(ABC):
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         raise NotSupported(self.name, "ask")
 
-    async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
+    async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
+        """Subclasses implement this. Drive the underlying LLM and return its
+        raw text response plus telemetry. No JSON parsing, no schema validation,
+        no Decomposition construction — those happen in ``decompose`` below."""
         raise NotSupported(self.name, "decompose")
+
+    async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
+        """Final orchestration: drive the adapter's LLM, then route the raw
+        text through the shared structurer to get a validated ``Decomposition``.
+
+        Adapters override ``_decompose_raw_text``, not this method. That keeps
+        schema enforcement in one place (``core/decomposition_structurer``)
+        and out of every individual adapter.
+        """
+        # Lazy import to avoid a circular import (core/ imports adapters/base
+        # indirectly through extract_json).
+        from ..core.decomposition_structurer import structure_decomposition
+
+        raw = await self._decompose_raw_text(inp)
+        structured = await structure_decomposition(
+            text=raw.text,
+            query=(inp.query or ""),
+            settings=self.settings,
+            model_tag=self.name,
+        )
+        # Attach structurer telemetry to the adapter's metrics so callers can
+        # see when LLM-repair fired and what it cost.
+        extra = dict(raw.metrics.extra or {})
+        extra["structurer_used_llm_repair"] = structured.used_llm_repair
+        if structured.repair_model:
+            extra["structurer_model"] = structured.repair_model
+        if structured.notes:
+            extra["structurer_notes"] = structured.notes
+        return AdapterDecomposeResult(
+            adapter=self.name,
+            decomposition=structured.decomposition,
+            markdown=raw.text,
+            metrics=AdapterMetrics(
+                duration_ms=raw.metrics.duration_ms,
+                tokens_in=raw.metrics.tokens_in,
+                tokens_out=raw.metrics.tokens_out,
+                cost_usd=raw.metrics.cost_usd,
+                model=raw.metrics.model,
+                tool_calls=raw.metrics.tool_calls,
+                extra=extra,
+            ),
+        )
 
     # ----- introspection ----------------------------------------------------
 

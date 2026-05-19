@@ -10,17 +10,15 @@ from typing import Any
 
 import httpx
 
-from ..models import Decomposition
-from ._extract_json import extract_json
 from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
     AdapterDecomposeInput,
-    AdapterDecomposeResult,
     AdapterMetrics,
     Capability,
+    RawDecomposeText,
 )
 
 _ASK_SYSTEM = (
@@ -81,7 +79,7 @@ class OpenAIAgentsAdapter(Adapter):
         d = (self.settings.decompose_model or "").strip()
         return d if d else "gpt-4.1"
 
-    async def decompose(self, inp: AdapterDecomposeInput) -> AdapterDecomposeResult:
+    async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()
         prompt = DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
         out = await self._run(
@@ -91,12 +89,8 @@ class OpenAIAgentsAdapter(Adapter):
             timeout_seconds=float(self.settings.openai_agents_sdk_timeout_seconds),
             cwd=self._cwd_for_repos(inp.repos),
         )
-        answer = out.get("answer") or ""
-        decomp = Decomposition.model_validate(extract_json(answer))
-        return AdapterDecomposeResult(
-            adapter=self.name,
-            decomposition=decomp,
-            markdown=answer,
+        return RawDecomposeText(
+            text=(out.get("answer") or ""),
             metrics=_metrics_from(out, t),
         )
 
