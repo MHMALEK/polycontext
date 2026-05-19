@@ -42,8 +42,24 @@ _ASK_SYSTEM = (
     "progress narration."
 )
 _DECOMPOSE_SYSTEM = (
-    "You decompose tasks into structured tech work. Output exactly one "
-    "JSON object matching the schema in the user message — no prose, no fences."
+    "You decompose engineering tickets into structured tech work using "
+    "read-only filesystem tools (read_file, list_directory, search_files, "
+    "grep_search) over the workspace at the path mentioned in the user "
+    "message.\n\n"
+    "MANDATORY: Before producing the decomposition, you MUST call these tools "
+    "to verify the repos, files, and symbols exist. Every file path in your "
+    "output must be one you actually opened or saw in a search/list result. "
+    "If you cannot find evidence for a path, omit it — DO NOT invent paths.\n\n"
+    "Workflow:\n"
+    "1. list_directory to map the top-level repos under the workspace root.\n"
+    "2. search_files / grep_search to locate the modules, classes, and "
+    "constants the ticket mentions.\n"
+    "3. read_file on the key files so you can cite real symbols and line "
+    "ranges in subtask descriptions.\n"
+    "4. THEN emit the final JSON object matching the schema in the user "
+    "message — exactly one object, no prose, no fences.\n\n"
+    "A decomposition that cites files we cannot verify is worse than no "
+    "decomposition — a developer will waste time chasing made-up paths."
 )
 
 

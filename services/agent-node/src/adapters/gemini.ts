@@ -191,6 +191,8 @@ export async function runGemini(body: GeminiRunBody): Promise<{
           ...(body.systemPrompt?.trim()
             ? { systemInstruction: body.systemPrompt }
             : {}),
+          thinkingConfig: { thinkingBudget: -1, includeThoughts: false },
+          temperature: 0.2,
           httpOptions: { timeout: timeoutMs },
         },
       });
@@ -215,7 +217,11 @@ export async function runGemini(body: GeminiRunBody): Promise<{
     }
   }
 
-  const maxRemoteCalls = Math.min(32, Math.max(1, body.maxToolRounds ?? 24));
+  // Bumped from 24 → 48 default to give Gemini room to do thorough multi-step
+  // exploration on complex tickets. Cursor's composer-2 routinely makes 25–30
+  // tool calls per question in our eval; capping Gemini at 24 was leaving it
+  // truncated mid-investigation on the harder cases.
+  const maxRemoteCalls = Math.min(80, Math.max(1, body.maxToolRounds ?? 48));
   const ai = new GoogleGenAI({ apiKey });
   const callable = new WorkspaceFsCallableTool(cwd);
 
@@ -235,6 +241,19 @@ export async function runGemini(body: GeminiRunBody): Promise<{
           disable: false,
           maximumRemoteCalls: maxRemoteCalls,
         },
+        // Extended thinking ON with an automatic budget. Gemini 2.5 Pro has
+        // thinking but the default budget is conservative — without explicitly
+        // setting -1 (automatic, model decides) it under-reasons on
+        // multi-step code questions. This matches what gemini-cli and
+        // Sourcebot's Gemini integration do internally.
+        thinkingConfig: {
+          thinkingBudget: -1,
+          includeThoughts: false,
+        },
+        // Lower temperature gives more grounded answers — less inclined to
+        // invent file paths. The forced-tool-use system prompt still does
+        // the heavy lifting; this just trims the variance.
+        temperature: 0.2,
         httpOptions: { timeout: timeoutMs },
       },
     });
