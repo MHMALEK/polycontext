@@ -2,33 +2,36 @@
 
 Every adapter (Cursor, Cline, Claude Code, Gemini, OpenAI Agents, OpenCode)
 runs its own LLM with its own prompts and tools. They each return a chunk of
-text whose shape is *supposed* to be the Decomposition JSON, but in practice:
+text whose shape is *supposed* to be the Decomposition JSON, but in practice
+each model is unreliable about it: markdown fences, bare Subtask objects,
+prose interleaved with JSON, fields renamed, schema drift across model
+versions, etc.
 
-  - Cursor's Composer-2 sometimes wraps the JSON in markdown fences.
-  - Gemini occasionally returns a bare ``Subtask`` object instead of the
-    ``Decomposition`` wrapper.
-  - Cline/OpenCode/Claude Code can interleave reasoning prose around the
-    JSON block.
+We used to try ``extract_json`` + ``Decomposition.model_validate`` first
+and only fall back to an LLM repair on failure. That fast path was a
+constant source of subtle bugs — a brace-balanced JSON walker that handled
+N-deep nesting still couldn't tell "outer Decomposition with one subtask
+in an array" from "the array contains a Subtask that happens to be biggest".
 
-Before this module, every adapter ran its own ``extract_json`` + ``model_validate``
-post-process. When the model produced something the regex couldn't capture or
-the schema couldn't bind, the whole call 502'd — every adapter had to handle
-the same problem its own way.
+The cure: **always** route the upstream text through ``pydantic_ai.Agent``
+with ``output_type=Decomposition``. That uses Gemini's native
+``responseSchema`` feature to *force* schema-valid output from the model
+on the API side — guaranteed by the SDK, not by our parsing. Cost: one
+extra Gemini Flash call per decompose (~$0.0001, ~1-2 s). Reliability:
+100 %, by construction.
 
-This module centralizes the step. The flow becomes:
+Flow:
 
-  1. Adapter produces raw text (its model's best attempt at the schema).
-  2. ``structure_decomposition(text, query, settings)`` returns a validated
-     ``Decomposition`` — always. Fast path tries pure parsing; on failure it
-     escalates to a Gemini Flash call with
-     ``pydantic_ai.Agent(output_type=Decomposition)`` which uses Gemini's
-     ``responseSchema`` to force schema-valid output.
-  3. The orchestration layer (``Adapter.decompose`` or ``api.py``) combines
+  1. Adapter produces raw text via its LLM/tools.
+  2. ``structure_decomposition(text, query, settings)`` ALWAYS calls
+     Gemini (Flash by default) with ``output_type=Decomposition``. The
+     model sees the user query + the upstream text and emits a
+     schema-valid Decomposition. If Gemini is unreachable (no API key,
+     network down), a minimal fallback Decomposition is returned so
+     callers never 502.
+  3. The orchestration layer (``Adapter.decompose`` in base) combines
      the structurer's output with the adapter's metrics and returns the
      final ``AdapterDecomposeResult``.
-
-This keeps every adapter focused on *driving its LLM*. Schema enforcement
-lives in exactly one place.
 """
 from __future__ import annotations
 
@@ -36,7 +39,6 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from ..adapters._extract_json import extract_json
 from ..config import Settings
 from ..models import Decomposition
 
@@ -46,6 +48,9 @@ class StructureResult:
     """What the structurer returns alongside the validated decomposition."""
 
     decomposition: Decomposition
+    # Always True under the new design (every call hits the LLM). Kept for
+    # backward compatibility with code that reads ``metrics.extra`` for this
+    # field; will be removed once callers stop branching on it.
     used_llm_repair: bool
     repair_model: str | None
     repair_tokens_in: int | None
@@ -53,31 +58,30 @@ class StructureResult:
     notes: str  # human-readable summary of which path fired
 
 
-_REPAIR_SYSTEM = """\
-You are repairing the output of an upstream code-decomposition LLM. The
-upstream model was supposed to emit a JSON object matching the
-``Decomposition`` schema (query, overview, affected_repos, risks,
+_STRUCTURER_SYSTEM = """\
+You convert the output of an upstream code-decomposition LLM into a clean
+``Decomposition`` object. The upstream model emits text that is supposed
+to match the schema (query, overview, affected_repos, risks,
 open_questions, subtasks[...], enrichment_model, decomposition_model) but
-its output is unstructured, partial, or wrapped incorrectly.
+in practice it may be:
 
-Your job: return a ``Decomposition`` object that faithfully captures the
-intent of the upstream text. Rules:
+  - already-valid JSON (preserve verbatim — your only job is to reshape
+    into the typed object).
+  - JSON wrapped in ```json fences.
+  - a single bare ``Subtask`` object (wrap it: use it as the only entry
+    in ``subtasks``, set ``overview`` from its description, set
+    ``affected_repos`` from its ``repo``).
+  - JSON with extra/renamed fields (drop unknowns, map renames).
+  - prose paragraphs with subtasks described informally (parse them out).
 
-  - PRESERVE the upstream content verbatim where possible. Do not invent
-    new subtasks, repos, files, or acceptance criteria.
-  - If the upstream output is a single bare ``Subtask`` object (no
-    ``Decomposition`` wrapper), wrap it: use it as the only entry in
-    ``subtasks``, set ``query`` to the user's original question,
-    ``overview`` to the upstream description (or a 2-sentence summary if
-    description was a list), and infer ``affected_repos`` from
-    ``subtask.repo``.
-  - If the upstream output has a partial Decomposition (some top-level
-    fields missing), fill the missing fields from context. Empty arrays /
-    empty strings are fine — do not fabricate.
-  - If the upstream output is free prose (no JSON), parse it into the
-    smallest reasonable Decomposition.
+Rules:
 
-Return ONLY the Decomposition object. No prose around it.
+  - PRESERVE upstream content verbatim where possible. Do not invent new
+    subtasks, repos, files, or acceptance criteria.
+  - Empty arrays / empty strings are fine — do not fabricate to fill them.
+  - ``query`` should echo the USER QUESTION (provided in the input).
+
+Return ONLY the Decomposition object.
 """
 
 
@@ -88,60 +92,17 @@ async def structure_decomposition(
     settings: Settings,
     model_tag: str = "",
 ) -> StructureResult:
-    """Validate or repair the upstream LLM's decompose output.
+    """Always-on schema enforcer.
 
-    Fast path: parse JSON from the text and validate against the schema.
-    Slow path: if fast path fails, call Gemini Flash via pydantic-ai with
-    ``output_type=Decomposition`` to restructure the text. The Flash call
-    sees the original user query + the failing upstream output and is
-    forced (by Gemini's responseSchema) to emit a schema-valid object.
-    """
-    # Fast path — extract + validate. No LLM cost when the upstream output
-    # is already well-shaped (which is the common case).
-    try:
-        obj = extract_json(text)
-    except ValueError:
-        obj = None
+    The upstream text is passed verbatim to Gemini with
+    ``output_type=Decomposition``. Gemini's ``responseSchema`` makes the
+    API itself guarantee a schema-valid response — no extract_json, no
+    regex, no model_validate gambling.
 
-    if isinstance(obj, dict):
-        try:
-            decomp = Decomposition.model_validate(obj)
-            # Backfill query if upstream skipped it (some adapters echo a
-            # different framing or leave it empty).
-            if query and not decomp.query:
-                decomp = decomp.model_copy(update={"query": query})
-            return StructureResult(
-                decomposition=decomp,
-                used_llm_repair=False,
-                repair_model=None,
-                repair_tokens_in=None,
-                repair_tokens_out=None,
-                notes="fast-path: extract_json + model_validate ok",
-            )
-        except Exception:
-            pass  # fall through to LLM repair
-
-    # Slow path — LLM repair.
-    result = await _repair_with_llm(
-        text=text, query=query, settings=settings, model_tag=model_tag,
-    )
-    return result
-
-
-async def _repair_with_llm(
-    *,
-    text: str,
-    query: str,
-    settings: Settings,
-    model_tag: str,
-) -> StructureResult:
-    """Use pydantic-ai with output_type=Decomposition to coerce the upstream
-    text into a valid object. Gemini Flash is the default — fast and cheap
-    (~$0.0001/call). Configurable via ``enrich_model`` setting.
+    Returns a minimal fallback Decomposition if Gemini isn't available
+    so callers never see a 502 because of structurer plumbing.
     """
     if not settings.gemini_api_key:
-        # No repair model available — last resort: synthesize a minimal
-        # decomposition from the query alone so callers don't 502.
         return _fallback_minimal(text=text, query=query, reason="GEMINI_API_KEY not set")
 
     try:
@@ -158,12 +119,15 @@ async def _repair_with_llm(
         agent = Agent(
             model=GeminiModel(model_name),
             output_type=Decomposition,
-            system_prompt=_REPAIR_SYSTEM,
+            system_prompt=_STRUCTURER_SYSTEM,
             model_settings=ModelSettings(temperature=0.0),
         )
+        # Upstream text trimmed to 16 kB — large enough for a fully-formed
+        # Decomposition from any of the adapters, small enough to keep the
+        # structurer call cheap.
         prompt = (
             f"USER QUESTION:\n{query.strip()}\n\n"
-            f"UPSTREAM LLM OUTPUT (may be malformed):\n{text.strip()[:8000]}\n"
+            f"UPSTREAM LLM OUTPUT:\n{text.strip()[:16000]}\n"
         )
         result = await agent.run(prompt)
         decomp = result.output
@@ -175,15 +139,16 @@ async def _repair_with_llm(
         toks_in, toks_out = _usage_from(result)
         return StructureResult(
             decomposition=decomp,
-            used_llm_repair=True,
+            used_llm_repair=True,  # always-on now; see dataclass docstring
             repair_model=model_name,
             repair_tokens_in=toks_in,
             repair_tokens_out=toks_out,
-            notes=f"llm-repair via {model_name}",
+            notes=f"structured via {model_name} + responseSchema",
         )
     except Exception as e:
         return _fallback_minimal(
-            text=text, query=query, reason=f"llm-repair failed: {type(e).__name__}: {e}",
+            text=text, query=query,
+            reason=f"structurer failed: {type(e).__name__}: {e}",
         )
 
 
