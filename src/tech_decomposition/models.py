@@ -84,7 +84,7 @@ class Subtask(BaseModel):
 class Decomposition(BaseModel):
     """Final structured output."""
     query: str
-    
+
     overview: str = Field(description="2-4 sentence engineer-readable framing of what needs to happen.")
     affected_repos: list[str]
     risks: list[str] = Field(default_factory=list)
@@ -94,6 +94,51 @@ class Decomposition(BaseModel):
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     enrichment_model: str = ""
     decomposition_model: str = ""
+
+    def to_markdown(self) -> str:
+        """Render the decomposition as Jira/Linear/GitHub-friendly markdown.
+
+        Used as the ``markdown`` field on ``AdapterDecomposeResult`` so the UI's
+        "Raw markdown" panel and any downstream renderer see a clean,
+        structured document — not the raw upstream LLM output. Mirrors the
+        shape produced by the web UI's ``toJiraMarkdown`` helper so the
+        copy-to-clipboard and the rendered panel emit identical text.
+        """
+        lines: list[str] = []
+        if self.overview.strip():
+            lines.extend(["## Overview", "", self.overview.strip(), ""])
+        if self.affected_repos:
+            repos_inline = ", ".join(f"`{r}`" for r in self.affected_repos)
+            lines.extend([f"**Affected repos:** {repos_inline}", ""])
+        lines.extend([f"## Subtasks ({len(self.subtasks)})", ""])
+        for i, st in enumerate(self.subtasks):
+            tag_bits: list[str] = []
+            if st.repo:
+                tag_bits.append(st.repo)
+            if st.estimated_complexity and st.estimated_complexity != "unknown":
+                tag_bits.append(st.estimated_complexity)
+            tag = f"  *({', '.join(tag_bits)})*" if tag_bits else ""
+            lines.append(f"### {str(i + 1).zfill(2)} — {st.title}{tag}")
+            lines.append("")
+            if st.description.strip():
+                lines.append(st.description.strip())
+                lines.append("")
+            if st.files:
+                files_inline = ", ".join(f"`{f}`" for f in st.files)
+                lines.extend([f"**Files:** {files_inline}", ""])
+            if st.acceptance_criteria:
+                lines.append("**Acceptance criteria:**")
+                lines.extend(f"- {ac}" for ac in st.acceptance_criteria)
+                lines.append("")
+        if self.risks:
+            lines.extend([f"## Risks ({len(self.risks)})", ""])
+            lines.extend(f"- {r}" for r in self.risks)
+            lines.append("")
+        if self.open_questions:
+            lines.extend([f"## Open questions ({len(self.open_questions)})", ""])
+            lines.extend(f"- {q}" for q in self.open_questions)
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
 
 
 class DecomposeRequest(BaseModel):

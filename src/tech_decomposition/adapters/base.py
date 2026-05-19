@@ -186,18 +186,26 @@ class Adapter(ABC):
             settings=self.settings,
             model_tag=self.name,
         )
-        # Attach structurer telemetry to the adapter's metrics so callers can
-        # see when LLM-repair fired and what it cost.
+        # Attach structurer telemetry + the raw upstream text (truncated) to
+        # the adapter's metrics so callers can see when LLM-repair fired and
+        # what the upstream actually emitted. The Decomposition itself is
+        # rendered as the ``markdown`` field below — the upstream raw is for
+        # debugging, not for display.
         extra = dict(raw.metrics.extra or {})
         extra["structurer_used_llm_repair"] = structured.used_llm_repair
         if structured.repair_model:
             extra["structurer_model"] = structured.repair_model
         if structured.notes:
             extra["structurer_notes"] = structured.notes
+        if raw.text:
+            # Keep it bounded so the runstore row doesn't bloat on a chatty
+            # adapter — 4 kB is plenty for triage.
+            extra["upstream_raw_text"] = raw.text[:4000]
+            extra["upstream_raw_text_len"] = len(raw.text)
         return AdapterDecomposeResult(
             adapter=self.name,
             decomposition=structured.decomposition,
-            markdown=raw.text,
+            markdown=structured.decomposition.to_markdown(),
             metrics=AdapterMetrics(
                 duration_ms=raw.metrics.duration_ms,
                 tokens_in=raw.metrics.tokens_in,
