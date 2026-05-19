@@ -51,15 +51,29 @@ _DECOMPOSE_SYSTEM = (
     "output must be one you actually opened or saw in a search/list result. "
     "If you cannot find evidence for a path, omit it — DO NOT invent paths.\n\n"
     "Workflow:\n"
-    "1. list_directory to map the top-level repos under the workspace root.\n"
+    "1. list_directory(\".\") to map the top-level repos. Note any repos "
+    "named like `*-cloud-functions`, `*-cf`, `*-lambdas`, `*-functions`, or "
+    "`services/*` — these typically host NEW serverless/microservice code.\n"
     "2. search_files / grep_search to locate the modules, classes, and "
-    "constants the ticket mentions.\n"
-    "3. read_file on the key files so you can cite real symbols and line "
-    "ranges in subtask descriptions.\n"
-    "4. THEN emit the final JSON object matching the schema in the user "
+    "constants the ticket mentions in the existing code (the source side).\n"
+    "3. When the ticket is about MOVING / PORTING / CREATING new code:\n"
+    "   a. Find the destination repo first by ls'ing each plausible sibling "
+    "(e.g. if the ticket says \"move X to a Cloud Function\", read the "
+    "main.py / entrypoint of EVERY *-cloud-functions or similar repo to "
+    "find existing patterns and placeholders).\n"
+    "   b. Look specifically for stub functions like `def process_X(...): "
+    "pass` or `TODO`/`DEV-` comments — these are explicit extension points.\n"
+    "   c. DO NOT assume the target repo is the one named after the domain "
+    "(e.g. don't put a CF into `traceability/` just because the work is "
+    "about traceability — check if there's a dedicated CF repo first).\n"
+    "4. read_file on the key files (both source AND destination) so you "
+    "can cite real symbols and line ranges in subtask descriptions.\n"
+    "5. THEN emit the final JSON object matching the schema in the user "
     "message — exactly one object, no prose, no fences.\n\n"
-    "A decomposition that cites files we cannot verify is worse than no "
-    "decomposition — a developer will waste time chasing made-up paths."
+    "A decomposition that cites files we cannot verify, or puts new code "
+    "in the wrong repo when a dedicated target repo exists, is worse than "
+    "no decomposition — a developer will waste time chasing made-up paths "
+    "or mis-placing code."
 )
 
 
@@ -159,13 +173,22 @@ class GeminiAdapter(Adapter):
 
 
 def _metrics_from(out: dict[str, Any], start: float) -> AdapterMetrics:
+    extra: dict[str, Any] = {"sdk": "@google/genai", "agent_node": True}
+    if isinstance(out.get("toolTrace"), list):
+        # The adapter records every workspace tool call (name, args, result
+        # preview, latency). Surfacing it through metrics.extra makes
+        # "did gemini actually call list_directory?" answerable without
+        # adding more logging — the runstore row already has it.
+        extra["tool_trace"] = out["toolTrace"]
+    if isinstance(out.get("thoughtsTokens"), int):
+        extra["thoughts_tokens"] = out["thoughtsTokens"]
     return AdapterMetrics(
         duration_ms=int((time.monotonic() - start) * 1000),
         tokens_in=_as_int(out.get("tokensIn")),
         tokens_out=_as_int(out.get("tokensOut")),
         model=_as_str(out.get("model")),
         tool_calls=_as_int(out.get("toolCalls")) or 0,
-        extra={"sdk": "@google/genai", "agent_node": True},
+        extra=extra,
     )
 
 

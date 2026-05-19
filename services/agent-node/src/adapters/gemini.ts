@@ -126,9 +126,25 @@ async function executeToolCall(
   return { error: `unknown tool: ${name}` };
 }
 
-/** Implements {@link CallableTool} so the SDK runs the AFC loop (see js-genai docs). */
+export type ToolCallRecord = {
+  name: string;
+  argsPreview: string;
+  resultPreview: string;
+  durationMs: number;
+};
+
+/** Implements {@link CallableTool} so the SDK runs the AFC loop (see js-genai docs).
+ *
+ * Records every call (name, args summary, result summary, latency) into a
+ * caller-provided array so the bridge can show what the model actually did.
+ * Previously we only counted calls and had no visibility into the sequence —
+ * which made it impossible to tell why a question got the wrong answer.
+ */
 class WorkspaceFsCallableTool implements CallableTool {
-  constructor(private readonly cwd: string) {}
+  constructor(
+    private readonly cwd: string,
+    private readonly trace: ToolCallRecord[],
+  ) {}
 
   async tool(): Promise<Tool> {
     return FILE_TOOLS;
@@ -138,14 +154,36 @@ class WorkspaceFsCallableTool implements CallableTool {
     const parts: Part[] = [];
     let idx = 0;
     for (const fc of functionCalls) {
+      const t0 = Date.now();
       const result = await executeToolCall(this.cwd, fc);
       const id = fc.id?.trim() || `call_${idx++}`;
       parts.push(
         createPartFromFunctionResponse(id, fc.name ?? "unknown", result)
       );
+      this.trace.push({
+        name: fc.name ?? "unknown",
+        argsPreview: JSON.stringify(fc.args ?? {}).slice(0, 200),
+        resultPreview: _summarizeToolResult(result).slice(0, 200),
+        durationMs: Date.now() - t0,
+      });
     }
     return parts;
   }
+}
+
+function _summarizeToolResult(result: Record<string, unknown>): string {
+  if ("error" in result && typeof result.error === "string") {
+    return `ERROR: ${result.error}`;
+  }
+  // Each tool returns one of { content, entries, files, matches } strings.
+  for (const key of ["content", "entries", "files", "matches"]) {
+    const v = result[key];
+    if (typeof v === "string") {
+      const firstLines = v.split("\n").slice(0, 3).join(" / ");
+      return `${key}(${v.length}c): ${firstLines}`;
+    }
+  }
+  return JSON.stringify(result).slice(0, 200);
 }
 
 function countFunctionResponsesInHistory(history: Content[] | undefined): number {
@@ -170,6 +208,8 @@ export async function runGemini(body: GeminiRunBody): Promise<{
   tokensIn?: number;
   tokensOut?: number;
   toolCalls?: number;
+  toolTrace?: ToolCallRecord[];
+  thoughtsTokens?: number;
 }> {
   const started = Date.now();
   const apiKey = body.apiKey;
@@ -223,7 +263,8 @@ export async function runGemini(body: GeminiRunBody): Promise<{
   // truncated mid-investigation on the harder cases.
   const maxRemoteCalls = Math.min(80, Math.max(1, body.maxToolRounds ?? 48));
   const ai = new GoogleGenAI({ apiKey });
-  const callable = new WorkspaceFsCallableTool(cwd);
+  const toolTrace: ToolCallRecord[] = [];
+  const callable = new WorkspaceFsCallableTool(cwd, toolTrace);
 
   const promptText = `${body.prompt}\n\n[Workspace root on server: ${cwd}. Use read_file, list_directory, search_files, and grep_search to inspect code.]`;
 
@@ -259,9 +300,12 @@ export async function runGemini(body: GeminiRunBody): Promise<{
     });
 
     const um = response.usageMetadata;
-    const toolCalls = countFunctionResponsesInHistory(
-      response.automaticFunctionCallingHistory
-    );
+    // Prefer the locally-recorded trace (every callTool() invocation) since
+    // it's authoritative; fall back to history-counting if for some reason
+    // the trace is empty.
+    const toolCalls =
+      toolTrace.length ||
+      countFunctionResponsesInHistory(response.automaticFunctionCallingHistory);
 
     return {
       ok: true,
@@ -270,7 +314,9 @@ export async function runGemini(body: GeminiRunBody): Promise<{
       durationMs: Date.now() - started,
       tokensIn: um?.promptTokenCount,
       tokensOut: um?.candidatesTokenCount,
+      thoughtsTokens: (um as { thoughtsTokenCount?: number } | undefined)?.thoughtsTokenCount,
       toolCalls,
+      toolTrace,
     };
   } catch (err) {
     const e = err as Error;
