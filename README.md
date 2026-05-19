@@ -21,7 +21,8 @@
   <p align="center">
     One JSON API. Seven code-AI backends. Two modes (ask, decompose).<br/>
     Optional grounded retrieval, augmented with LSP-backed semantic search via Serena MCP.<br/>
-    A web UI to drive both, an eval harness to compare them.
+    Schema-bulletproof decompose output. A web UI, an eval harness, and a
+    drop-in Jira integration to file decompositions as comments.
   </p>
 
   <p>
@@ -29,8 +30,10 @@
     <a href="#what-it-is">What it is</a> ·
     <a href="#adapters">Adapters</a> ·
     <a href="#http-api">HTTP API</a> ·
+    <a href="#decompose-pipeline">Decompose pipeline</a> ·
     <a href="#grounded-retrieval-opt-in">Grounding</a> ·
     <a href="#serena-mcp-optional">Serena</a> ·
+    <a href="#jira-bridge">Jira bridge</a> ·
     <a href="#web-ui">UI</a> ·
     <a href="#quick-start">Quick start</a>
   </p>
@@ -41,13 +44,35 @@
 
 ## Results
 
-We don't ship features without measuring them. Every number below is from
-the eval harness in [`eval/`](eval/) running real questions from production
-Slack channels against the actual codebase (5 git repos, ~1.2M LOC), with
-the answers scored by both a deterministic rubric (`must_mention` substrings)
-and a Gemini Flash LLM-judge against a hand-written gold answer.
+Every number below is from the eval harness in [`eval/`](eval/) running real
+questions from production Slack channels against the actual codebase (5 git
+repos, ~1.2M LOC), scored by a deterministic rubric (`must_mention`
+substrings) plus a Gemini Flash LLM-judge against hand-written gold answers.
 
-**Best result, full bake-off (5 hand-curated questions × 5 adapters × 2 modes, scored by rubric + LLM-judge against hand-written gold answers):**
+### Decompose — all 6 adapters round-tripped end-to-end
+
+Verified on a real Jira ticket (SCRUM-18, "Move Traceability Static Validation to Cloud Function") via the [Jira bridge](#jira-bridge). Each adapter fetched the ticket, ran decompose through the [structurer pipeline](#decompose-pipeline), and posted a clean ADF comment back:
+
+| Adapter | Driving model | Subtasks | Wall |
+|---|---|---|---|
+| `cursor` | composer-2 | 4 | 59 s |
+| `gemini` | gemini-2.5-pro | 2 | 59 s |
+| `cline_sdk` | gemini-2.5-pro | 4 | 77 s |
+| `opencode` | google/gemini-2.5-pro | 6 | 35 s |
+| `sourcebot` | gemini-2.5-pro (via /api/chat/blocking) | 4 | 62 s |
+| `openai_agents` | gpt-4o-mini | 1 | 33 s |
+
+Every comment was a fully-rendered Decomposition with overview, affected repos, subtasks with files + acceptance criteria, risks, and open questions — schema-bulletproof, validated by the shared structurer regardless of the adapter's native output shape.
+
+For quality comparison against a hand-grounded reference, see
+[`docs/grounded-eval/scrum18/`](docs/grounded-eval/scrum18/) — same ticket,
+graded against an expert-written gold answer. Spoiler: Cursor leads
+(34/40 vs 7/40 for the original pre-fix Gemini run), but the gap is now
+mostly about depth of exploration, not foundational adapter brokenness.
+
+### Ask — best result, full bake-off
+
+5 hand-curated questions × 5 adapters × 2 modes, scored by rubric + LLM-judge:
 
 | Recommended config | Score |
 |---|---|
@@ -97,19 +122,21 @@ That's the whole project. Nothing else hides under the hood.
 
 ## Adapters
 
-Registered in `src/tech_decomposition/adapters/registry.py`. Most SDK-backed adapters run inside `services/agent-node` (Node, Fastify) — the Python side is a thin HTTP client. `sourcebot` is the exception: it's a Python adapter that talks directly to Sourcebot's chat API.
+Registered in `src/tech_decomposition/adapters/registry.py`. Most SDK-backed adapters run inside `services/agent-node` (Node, Fastify) — the Python side is a thin HTTP client. `sourcebot` is the exception: it's a Python adapter that talks directly to Sourcebot's `/api/chat/blocking` endpoint.
 
-| Adapter | Backend | Runtime | Capabilities | Serena MCP | Default mode |
-|---|---|---|---|---|---|
-| **`cursor`** | [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) | Node | `ask`, `decompose` | per-request* | **ungrounded (0.773)** — recommended |
-| **`gemini`** | [`@google/genai`](https://www.npmjs.com/package/@google/genai) | Node | `ask`, `decompose` | via grounding | ungrounded agentic (0.677) |
-| **`sourcebot`** | Sourcebot `/api/chat/blocking` | Python | `ask` | via grounding | grounded (0.45) — no agent loop |
-| **`opencode`** | [`@opencode-ai/sdk`](https://opencode.ai/) | Node | `ask`, `decompose` | **per-request ✓** | grounded (0.406) |
-| **`cline_sdk`** | [`@cline/sdk`](https://www.npmjs.com/package/@cline/sdk) | Node | `ask`, `decompose` | **per-request ✓** | noisy — judge case-by-case |
-| **`claude_code`** | [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) | Node | `ask`, `decompose` | per-request | (Docker arm64-musl native binary issue — works on host) |
-| **`openai_agents`** | [`@openai/agents`](https://github.com/openai/openai-agents-js) | Node | `ask`, `decompose` | per-request* | tier-1 TPM caps gpt-4.1; gpt-4o-mini works |
+| Adapter | Backend | Runtime | `ask` | `decompose` | Serena MCP |
+|---|---|---|:-:|:-:|---|
+| **`cursor`** | [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) | Node | ✅ | ✅ | per-request* |
+| **`gemini`** | [`@google/genai`](https://www.npmjs.com/package/@google/genai) | Node | ✅ | ✅ | via grounding |
+| **`sourcebot`** | Sourcebot `/api/chat/blocking` | Python | ✅ | ✅ | via grounding |
+| **`cline_sdk`** | [`@cline/sdk`](https://www.npmjs.com/package/@cline/sdk) | Node | ✅ | ✅ | **per-request ✓** |
+| **`opencode`** | [`@opencode-ai/sdk`](https://opencode.ai/) | Node | ✅ | ✅ | **per-request ✓** |
+| **`openai_agents`** | [`@openai/agents`](https://github.com/openai/openai-agents-js) | Node | ✅ | ✅ | per-request* |
+| **`claude_code`** | [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) | Node | ✅ | ✅ | per-request | host-only — Docker arm64-musl native binary doesn't launch |
 
 \* Wired but the underlying model (Composer-2 / gpt-4o-mini) doesn't call MCP tools in measurements so far. Cline (Gemini Pro driving) and OpenCode (Gemini Pro driving) do call them and benefit.
+
+**Verified end-to-end** — all 6 working decompose adapters fanned through the [Jira bridge](#jira-bridge) against the same ticket and posted clean comments back. Browse SCRUM-18 in our internal Jira to see the side-by-side.
 
 Each Node-side adapter exposes the SDK's own workspace tools (`read_file`, `list_directory`, `grep_search`, `search_files`) so its agent can explore your local clones at `REPOS_ROOT`. When `SERENA_URL` is set, Cursor / Claude Code / Cline / OpenCode / OpenAI Agents get Serena's tools registered automatically over MCP; Gemini and Sourcebot (which can't take MCP) get Serena via the grounding step instead.
 
@@ -164,6 +191,58 @@ curl -sS http://localhost:18000/v1/adapters/cursor/ask \
 ```
 
 `result.grounding` is only present when the request set `grounded: true`.
+
+---
+
+## Decompose pipeline
+
+Three layers, one responsibility each. This is what makes decompose
+output schema-bulletproof regardless of which adapter you point it at.
+
+```mermaid
+flowchart LR
+  IN[POST /v1/adapters/{name}/decompose] --> A
+  A[Adapter._decompose_raw_text<br/>drive its LLM, return text + metrics] --> B
+  B[core/decomposition_structurer<br/>validate or repair via pydantic-ai] --> C
+  C[Decomposition.to_markdown<br/>render Jira/Linear-ready markdown] --> OUT[AdapterDecomposeResult]
+```
+
+1. **Adapter** ([`adapters/_*.py`](src/tech_decomposition/adapters/)) — drives its
+   LLM via the SDK (Cursor, Gemini, Cline, OpenCode, Claude Code, OpenAI
+   Agents) or chat endpoint (Sourcebot). Returns just `{ text, metrics }` —
+   no JSON parsing, no schema validation, no Decomposition construction.
+   That's the whole adapter contract for decompose.
+
+2. **Structurer** ([`core/decomposition_structurer.py`](src/tech_decomposition/core/decomposition_structurer.py)) —
+   normalises the upstream text into a validated `Decomposition` object.
+   Two paths:
+   - **Fast path**: `Decomposition.model_validate_json(text)` directly, with
+     ```json fence-stripping. Fires when the adapter's LLM already emitted
+     a schema-valid JSON (Gemini with `responseSchema`, OpenCode with its
+     own structured output, etc.).
+   - **Slow path**: pydantic-ai with `output_type=Decomposition` calls
+     Gemini Flash (configurable via `enrich_model`). Gemini's
+     `responseSchema` API forces the model to emit a schema-valid object
+     — used for free-form upstream (Cursor, Cline, prose-y Sourcebot
+     chat). Cost ~$0.0001, ~1–2s.
+
+3. **Renderer** ([`Decomposition.to_markdown()`](src/tech_decomposition/models.py)) —
+   the validated Decomposition is rendered as Jira/Linear/GitHub-ready
+   markdown for the `result.markdown` field and the UI's "Raw markdown"
+   panel. Mirrors the web UI's `toJiraMarkdown` helper so the rendered
+   panel and the "Copy Markdown" / "Copy Jira body" buttons emit
+   identical text.
+
+**Telemetry** for each call is in `result.metrics.extra`:
+`structurer_used_llm_repair` (which path fired), `structurer_model`,
+`upstream_raw_text` (4 KB cap, for debugging when the upstream emitted
+something weird), and for Gemini specifically `tool_trace` (every
+workspace tool call name + args + result preview + latency).
+
+Why this matters: adapters can ship bare Subtask objects, markdown-fenced
+JSON, free prose, or anything in between — the pipeline normalises every
+shape to a guaranteed-valid `Decomposition` before it leaves the API.
+No 502s on malformed model output.
 
 ---
 
@@ -238,6 +317,43 @@ to its prior behavior.
 
 ---
 
+## Jira bridge
+
+Self-contained sibling service at [`services/jira-bridge/`](services/jira-bridge/) — takes a Jira ticket key, runs it through `/v1/adapters/{name}/decompose`, posts the result back as an ADF-formatted comment on the same ticket. Two interfaces, one shared flow ([`decompose_ticket.ts`](services/jira-bridge/src/decompose_ticket.ts)):
+
+```bash
+# CLI (one-off / scripting):
+cd services/jira-bridge
+cp .env.example .env  # fill JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN
+npm install
+npm run cli -- TRT-123 TRT-456    # one or more ticket keys
+
+# HTTP (for Jira automation rules / Slack shortcuts):
+npm run dev    # tsx watch on :13200
+curl http://localhost:13200/run \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer $JIRA_BRIDGE_SHARED_SECRET" \
+  -d '{"key":"TRT-123"}'
+```
+
+Output per ticket:
+
+```
+→ TRT-123: fetching + decomposing…
+  ok: 5 subtasks across 2 repos, cursor/composer-2, 42.1s
+  comment: https://yourcompany.atlassian.net/browse/TRT-123?focusedCommentId=…
+```
+
+**Adapter selection** is a single env var: `TECH_DECOMP_ADAPTER=cursor` (or any of `gemini`, `cline_sdk`, `opencode`, `sourcebot`, `openai_agents`, `claude_code` if working on your host). All six decompose-capable adapters have been verified end-to-end through the bridge.
+
+**Comment shape** is real ADF (Atlassian Document Format): paragraphs, headings, bullet lists, file paths in monospace, links you can click. No raw-markdown blob. The renderer is [`src/adf.ts`](services/jira-bridge/src/adf.ts).
+
+**No imports from outside** `services/jira-bridge/` — designed to lift into its own repo whenever the integration outgrows being a sibling. The bridge README documents the move.
+
+Slack is intentionally out of scope for now. The flow object in `decompose_ticket.ts` is already shaped to feed a Slack notification step if you add one later.
+
+---
+
 ## Web UI
 
 A React + Tailwind + DaisyUI single-page app under [`web/`](web/). Two tabs:
@@ -262,6 +378,7 @@ flowchart TB
   subgraph clients[Clients]
     UI[Web UI]
     CLI[curl / scripts / eval]
+    JB[Jira bridge<br/>CLI + HTTP]
   end
 
   API[FastAPI<br/>/v1/adapters/.../ask<br/>/v1/adapters/.../decompose]
@@ -291,16 +408,21 @@ flowchart TB
     OAI[OpenAI Agents SDK]
   end
 
+  STRUCT[core/decomposition_structurer<br/>pydantic-ai responseSchema<br/>validate or repair]
   SER2[Serena MCP<br/>find_symbol · find_references<br/>get_symbols_overview · ...]
   RS[(SQLite runstore<br/>history + replay)]
 
   UI --> API
   CLI --> API
+  JB --> API
   API -- if grounded=true --> grounding
   grounding -. snippets prepended .-> API
   API --> AN
   API --> SBA
   AN --> sdks
+  AN -- decompose raw text --> STRUCT
+  SBA -- decompose raw text --> STRUCT
+  STRUCT -. validated Decomposition .-> API
   Cline -. MCP per request .-> SER2
   OC -. MCP per request .-> SER2
   Cur -. MCP per request .-> SER2
@@ -310,13 +432,16 @@ flowchart TB
 
   classDef extra fill:#fef9c3,stroke:#ca8a04;
   class grounding,SER2 extra;
+  classDef core fill:#dbeafe,stroke:#1d4ed8;
+  class STRUCT core;
 ```
 
-The two yellow blocks are optional and gated on env config:
-- **Grounding** runs only when the request has `grounded=true`; degrades to Sourcebot-only when Serena isn't configured.
-- **Serena MCP** is wired into the tool-using adapters only when `SERENA_URL` is set.
+- The **structurer** (blue) is the schema-bulletproof layer for decompose: every adapter just produces text; the structurer guarantees a valid `Decomposition` via pydantic-ai + Gemini's `responseSchema`. See [Decompose pipeline](#decompose-pipeline).
+- **Grounding** (yellow, left) runs only when the request sets `grounded=true`; degrades to Sourcebot-only when Serena isn't configured.
+- **Serena MCP** (yellow, right) is wired into the tool-using adapters only when `SERENA_URL` is set.
+- **Jira bridge** is a sibling Node service that posts a decompose result back as an ADF comment on the same ticket. See [Jira bridge](#jira-bridge).
 
-Without either, the path is straight: API → adapter → SDK → LLM → response → runstore.
+Without grounding/Serena, the path is straight: API → adapter → SDK → LLM → text → structurer → Decomposition → runstore.
 
 ---
 
@@ -324,23 +449,34 @@ Without either, the path is straight: API → adapter → SDK → LLM → respon
 
 ```text
 src/tech_decomposition/
-├── adapters/            # 7 adapters + registry + Decomposition prompt helpers
-├── clients/sourcebot.py # Sourcebot HTTP client (chat/blocking + answer-style suffix)
+├── adapters/                          # 7 adapters + registry + Decomposition prompt helpers
+│   ├── base.py                        #   Adapter contract; decompose() is final + calls structurer
+│   ├── _cursor_sdk.py / _gemini.py / _cline_sdk.py / _opencode_sdk.py
+│   ├── _claude_code_sdk.py / _openai_agents.py / _sourcebot.py
+│   └── _prompts.py                    #   DECOMPOSE_PREAMBLE + query_blob
+├── clients/sourcebot.py               # Sourcebot HTTP client (chat/blocking + answer-style suffix)
 ├── core/
-│   ├── context.py       # RunContext (per-request state)
-│   ├── runstore.py      # SQLite-backed run history + replay
-│   ├── grounding.py     # GroundedContext + retrieve_grounded_context()
-│   ├── llm_registry.py  # model spec → pydantic-ai model (for any in-process LLM use)
-│   └── usage.py         # token-usage extraction
-├── api.py               # FastAPI surface
-├── analyze.py           # log analyzer CLI (entry: tech-decomposition-analyze)
-├── config.py            # Settings (env-driven)
-└── models.py            # Decomposition, Subtask, Snippet, Ticket, EnrichedQuery
+│   ├── decomposition_structurer.py    # ← the schema-bulletproof layer
+│   ├── grounding.py                   # GroundedContext + retrieve_grounded_context()
+│   ├── serena_client.py               # MCP streamable-HTTP client for Serena grounding source
+│   ├── context.py                     # RunContext (per-request state)
+│   ├── runstore.py                    # SQLite-backed run history + replay
+│   ├── llm_registry.py                # model spec → pydantic-ai model
+│   └── usage.py                       # token-usage extraction
+├── api.py                             # FastAPI surface
+├── analyze.py                         # log analyzer CLI (tech-decomposition-analyze)
+├── config.py                          # Settings (env-driven)
+└── models.py                          # Decomposition (+ to_markdown()), Subtask, Snippet, ...
 
-services/agent-node/     # Fastify + JS SDKs for Claude / Cursor / Cline / Gemini / OpenAI Agents / OpenCode
-web/                     # Vite + React + Tailwind + DaisyUI
-eval/                    # Bake-off: TOML/YAML cases, runner, scorer, report (eval/bakeoff)
-config/sourcebot/        # config.json — Sourcebot's models + connectors
+services/
+├── agent-node/                        # Fastify + JS SDKs for Claude / Cursor / Cline / Gemini / OpenAI Agents / OpenCode
+└── jira-bridge/                       # Self-contained — fetch ticket → decompose → ADF comment
+                                       # (designed to lift into its own repo whenever)
+
+web/                                   # Vite + React + Tailwind + DaisyUI
+eval/                                  # Bake-off: TOML/YAML cases, runner, scorer, report (eval/bakeoff)
+config/sourcebot/                      # config.json — Sourcebot's models + connectors
+docs/grounded-eval/scrum18/            # Hand-grounded gold answer + AI-vs-AI scoring on one real ticket
 ```
 
 ---
