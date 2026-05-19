@@ -88,6 +88,16 @@ class OpencodeSDKAdapter(Adapter):
         )
 
     async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
+        """Drive opencode's chat without structured output.
+
+        OpenCode's ``format: { type: json_schema, ... }`` mode was failing
+        unpredictably for some provider+schema combinations ("UnknownError:
+        Unexpected server error"). Since the shared structurer
+        (``core/decomposition_structurer.py``) now normalises every
+        adapter's output, the adapter no longer needs to enforce schema
+        itself — emitting free-text JSON the model wants to write and
+        letting the structurer reshape is more reliable.
+        """
         t = time.monotonic()
         user_prompt = (
             DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
@@ -98,15 +108,11 @@ class OpencodeSDKAdapter(Adapter):
             prompt=user_prompt,
             cwd=self._cwd_for_repos(inp.repos),
             timeout_seconds=self.settings.agent_node_timeout_seconds,
-            structured=True,
+            structured=False,
             provider_id=pid,
             api_key=ak,
             structured_retry=self.settings.opencode_sdk_structured_retry_count,
         )
-        if out.get("structuredOutputFailed"):
-            # Let the shared structurer attempt repair with whatever text
-            # OpenCode managed to emit before structured-output retries gave up.
-            pass
         return RawDecomposeText(
             text=(out.get("answer") or ""),
             metrics=_metrics_from(out, t),

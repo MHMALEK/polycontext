@@ -1,4 +1,4 @@
-"""Sourcebot Q&A via agent-node (blocking chat endpoint only)."""
+"""Sourcebot Q&A + decompose via agent-node (blocking chat endpoint only)."""
 from __future__ import annotations
 
 import time
@@ -6,21 +6,26 @@ import time
 import httpx
 
 from ..clients.sourcebot import ANSWER_STYLE_SUFFIX, effective_sourcebot_repos_for_ask
+from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
     AdapterAskInput,
     AdapterAskResult,
+    AdapterDecomposeInput,
     AdapterMetrics,
     Capability,
+    RawDecomposeText,
 )
 
 
 class SourcebotAdapter(Adapter):
     name = "sourcebot"
-    capabilities: set[Capability] = {"ask"}
+    capabilities: set[Capability] = {"ask", "decompose"}
     description = (
         "Sourcebot ``/api/chat/blocking`` through agent-node — same answers as "
-        "the Sourcebot UI chat."
+        "the Sourcebot UI chat. Decompose goes through the same chat endpoint "
+        "with the Decomposition schema in the prompt; output is normalised by "
+        "the shared structurer (``core/decomposition_structurer.py``)."
     )
 
     def health(self) -> dict:
@@ -43,11 +48,50 @@ class SourcebotAdapter(Adapter):
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         t0 = time.monotonic()
         repos = effective_sourcebot_repos_for_ask(self.settings, inp.repos)
+        data = await self._ask_via_chat(
+            question=inp.query + ANSWER_STYLE_SUFFIX,
+            repos=repos,
+        )
+        answer = (data.get("answer") or "").strip()
+        return AdapterAskResult(
+            adapter=self.name,
+            answer=answer,
+            citations=[],
+            metrics=self._metrics_from(data, t0),
+        )
+
+    async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
+        """Decompose via the same blocking chat endpoint.
+
+        Sourcebot's chat doesn't take a JSON-schema constraint — we just ask
+        for the Decomposition shape inline in the question. The shared
+        structurer then normalises whatever Sourcebot returns (the fast
+        path catches a clean JSON answer; the LLM-repair path covers prose
+        wrap-ups, missing wrappers, etc).
+        """
+        t0 = time.monotonic()
+        repos = effective_sourcebot_repos_for_ask(self.settings, inp.repos)
+        question = DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
+        data = await self._ask_via_chat(
+            question=question,
+            repos=repos,
+        )
+        return RawDecomposeText(
+            text=(data.get("answer") or ""),
+            metrics=self._metrics_from(data, t0),
+        )
+
+    async def _ask_via_chat(
+        self,
+        *,
+        question: str,
+        repos: list[str] | None,
+    ) -> dict:
         sb_base = (self.settings.sourcebot_url_for_agent_node or "").strip() or self.settings.sourcebot_url
         body: dict = {
             "sourcebotUrl": sb_base,
             "sourcebotApiKey": self.settings.sourcebot_api_key,
-            "question": inp.query + ANSWER_STYLE_SUFFIX,
+            "question": question,
             "timeoutSec": int(self.settings.sourcebot_timeout_seconds),
             "maxSteps": 50,
         }
@@ -63,16 +107,16 @@ class SourcebotAdapter(Adapter):
         data = r.json()
         if data.get("ok") is False:
             raise RuntimeError(f"agent-node sourcebot failed: {data.get('error')}")
-        answer = (data.get("answer") or "").strip()
-        wall = data.get("wallSeconds")
-        metrics = AdapterMetrics(
-            duration_ms=int((time.monotonic() - t0) * 1000),
+        return data
+
+    def _metrics_from(self, data: dict, started: float) -> AdapterMetrics:
+        return AdapterMetrics(
+            duration_ms=int((time.monotonic() - started) * 1000),
             model=data.get("model"),
             extra={
                 "agent_node": True,
                 "chat_id": data.get("chatId"),
                 "chat_url": data.get("chatUrl"),
-                "wall_seconds": wall,
+                "wall_seconds": data.get("wallSeconds"),
             },
         )
-        return AdapterAskResult(adapter=self.name, answer=answer, citations=[], metrics=metrics)
