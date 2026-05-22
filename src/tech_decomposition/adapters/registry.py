@@ -26,6 +26,20 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "openai_agents": ("tech_decomposition.adapters._openai_agents", "OpenAIAgentsAdapter"),
     "opencode": ("tech_decomposition.adapters._opencode_sdk", "OpencodeSDKAdapter"),
     "sourcebot": ("tech_decomposition.adapters._sourcebot", "SourcebotAdapter"),
+    # Sourcebot retrieval + local Ollama generation. RAG pattern: free-grade
+    # answers using Sourcebot's strong BM25/Flash-classifier retrieval and a
+    # local model's free generation. Zero LLM cost per call in the common case.
+    "sourcebot_ollama": ("tech_decomposition.adapters._sourcebot_ollama", "SourcebotOllamaAdapter"),
+    # EXPERIMENTAL — max Sourcebot+Serena context → Ollama. Revert: delete this line + module.
+    "sourcebot_ollama_max": (
+        "tech_decomposition.adapters._sourcebot_ollama_max",
+        "SourcebotOllamaMaxContextAdapter",
+    ),
+    # EXPERIMENTAL — Sourcebot+Serena → OpenRouter/Groq/etc. (no local Ollama).
+    "sourcebot_rag_api": (
+        "tech_decomposition.adapters._sourcebot_rag_api",
+        "SourcebotRagApiAdapter",
+    ),
 }
 
 

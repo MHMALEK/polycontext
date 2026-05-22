@@ -30,3 +30,21 @@ expected:
   must_touch_repos: [frontend, traceability]
   must_mention_files:
     - questionnaire
+  gold_decomposition: |
+    Overview: Internal employees can pre-fill supplier questionnaires on behalf of suppliers;
+    suppliers later review and submit. Engineering must cover both frontend UX and traceability
+    persistence, and explicitly answer what happens to pre-filled answers if the internal editor
+    account is later deleted or deactivated.
+
+    Affected repos: frontend, traceability
+
+    Risk: Orphaned or inconsistent questionnaire state if the editing user is removed.
+    Risk: Authorization — only appropriate internal roles may edit on behalf of a supplier.
+
+    - Traceability: locate questionnaire response storage and foreign keys to the editing user;
+      document whether answers are orphaned, reassigned, blocked, or still visible after user deletion.
+    - Frontend: map the on-behalf-of flow (login context, save, supplier review/submit) and which
+      roles can access it.
+    - Traceability + frontend: define product behavior when the internal representative is removed
+      (retain answers vs purge vs lock submission).
+    - Add tests or acceptance criteria for save → supplier review → submit and for user-deletion edge case.

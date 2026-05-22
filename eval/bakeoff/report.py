@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .cases import discover_cases
+
 
 def _fence_block(body: str, lang: str = "markdown") -> str:
     """Use a Markdown fence tall enough so ``body`` cannot break out."""
@@ -136,11 +138,30 @@ def _response_preview(rec: dict[str, Any]) -> str:
     return ""
 
 
-def _render_ask_full_section(recs: list[dict[str, Any]]) -> str:
+def _gold_lookup(eval_dir: Path | None) -> dict[str, str]:
+    """case_id → golden reference text (ask or decompose)."""
+    if eval_dir is None or not eval_dir.is_dir():
+        return {}
+    out: dict[str, str] = {}
+    for c in discover_cases(eval_dir):
+        exp = c.expected or {}
+        gold = exp.get("gold_answer") or exp.get("gold_decomposition") or ""
+        if gold:
+            out[c.id] = gold.strip()
+    return out
+
+
+def _render_ask_full_section(
+    recs: list[dict[str, Any]],
+    *,
+    case_id: str = "",
+    gold_by_case: dict[str, str] | None = None,
+) -> str:
     ask_recs = [r for r in recs if r.get("job") == "ask" and r.get("ok")]
     if not ask_recs:
         return ""
 
+    gold = (gold_by_case or {}).get(case_id, "").strip()
     metrics_rows: list[list[str]] = []
     for rec in sorted(ask_recs, key=lambda r: -(r.get("score") or {}).get("overall", 0.0)):
         o = _flatten_ask_observables(rec)
@@ -162,6 +183,15 @@ def _render_ask_full_section(recs: list[dict[str, Any]]) -> str:
 
     hdr = ["Adapter", "wall ms", "chars", "cites", "tok in", "tok out", "tools", "$", "model", "run_id", "sdk ms"]
     blk = [_markdown_table(hdr, metrics_rows)]
+
+    if gold:
+        blk.append("")
+        blk.append("#### Golden reference answer")
+        blk.append("")
+        blk.append("_Compare each adapter answer below to this reference._")
+        blk.append("")
+        blk.append(_fence_block(gold))
+        blk.append("")
 
     blk.append("")
     blk.append("_Wall ms_: eval harness latency. **sdk ms** is ``metrics.duration_ms`` from the adapter when set._")
@@ -282,11 +312,15 @@ def _leaderboard(summary_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def render_report(run_dir: Path) -> tuple[Path, Path]:
+def render_report(run_dir: Path, *, eval_dir: Path | None = None) -> tuple[Path, Path]:
     """Write ``report.md`` and ``summary.json`` next to the runs/ folder.
 
     Returns ``(report_path, summary_path)``.
     """
+    if eval_dir is None:
+        eval_dir = run_dir.parent.parent if run_dir.parent.name == "outputs" else None
+    gold_by_case = _gold_lookup(eval_dir) if eval_dir else {}
+
     manifest = json.loads((run_dir / "manifest.json").read_text())
     runs_dir = run_dir / "runs"
     if not runs_dir.is_dir():
@@ -340,12 +374,15 @@ def render_report(run_dir: Path) -> tuple[Path, Path]:
     }, indent=2))
 
     report_path = run_dir / "report.md"
-    report_path.write_text(_markdown(manifest, leaderboard, rows_by_case, cases_meta))
+    report_path.write_text(
+        _markdown(manifest, leaderboard, rows_by_case, cases_meta, gold_by_case=gold_by_case)
+    )
     return report_path, summary_path
 
 
 def _markdown(manifest: dict[str, Any], leaderboard: list[dict[str, Any]],
-              rows_by_case: dict[str, list[dict[str, Any]]], cases_meta: dict[str, dict]) -> str:
+              rows_by_case: dict[str, list[dict[str, Any]]], cases_meta: dict[str, dict],
+              *, gold_by_case: dict[str, str] | None = None) -> str:
     lines: list[str] = []
     lines.append("# Adapter bake-off report")
     lines.append("")
@@ -411,7 +448,14 @@ def _markdown(manifest: dict[str, Any], leaderboard: list[dict[str, Any]],
         lines.append("")
 
         # Ask: metrics matrix + verbatim answers live here.
-        lines.append(_render_ask_full_section(recs))
+        lines.append(_render_ask_full_section(recs, case_id=case_id, gold_by_case=gold_by_case))
+        gold = (gold_by_case or {}).get(case_id, "").strip()
+        decompose_recs = [r for r in recs if r.get("job") == "decompose" and r.get("ok")]
+        if gold and decompose_recs:
+            lines.append("#### Golden reference decomposition")
+            lines.append("")
+            lines.append(_fence_block(gold))
+            lines.append("")
 
         for rec in recs:
             if not rec.get("ok"):

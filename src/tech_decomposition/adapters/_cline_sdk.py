@@ -21,10 +21,14 @@ from .base import (
 
 _ASK_SYSTEM = (
     "You are a code Q&A assistant. Before answering, use read_workspace_file, "
-    "grep_workspace, and (when present) find_code to inspect the repository at "
-    "the configured working directory. Ground every claim in real code; cite "
-    "paths with line numbers when possible. Keep the answer concise and "
-    "engineer-oriented."
+    "grep_workspace, and (when present) find_code to inspect the repository.\n\n"
+    "Search strategy: derive terms from the question (class names, enums, "
+    "constants, file stems, Title Case phrases). Try CamelCase and snake_case "
+    "variants when the question uses plain English (e.g. 'farm name' → FarmName, "
+    "farm_name). Prefer primary source files (models, constants, handlers) over "
+    "tests or mocks unless the question is about tests.\n\n"
+    "Answer using exact identifiers from code, structured bullets for lists, "
+    "and file paths with line numbers. If evidence is missing, say so."
 )
 
 _DECOMPOSE_SYSTEM = (
@@ -93,6 +97,12 @@ class ClineSDKAdapter(Adapter):
         )
 
     def _provider_key(self) -> tuple[str | None, str | None, str | None]:
+        # Local Ollama wins when explicitly enabled — used by the Phase-1
+        # bake-off (cline_sdk + qwen2.5-coder:7b). No API key required;
+        # Cline still wants a non-empty string in the apiKey slot.
+        if self.settings.cline_sdk_use_ollama and (self.settings.ollama_base_url or "").strip():
+            model = (self.settings.ollama_model or "qwen2.5-coder:7b").strip()
+            return ("ollama", model, "ollama")
         if self.settings.gemini_api_key:
             return ("gemini", "gemini-2.5-pro", self.settings.gemini_api_key)
         if self.settings.anthropic_api_key:
@@ -100,6 +110,13 @@ class ClineSDKAdapter(Adapter):
         if self.settings.openai_api_key:
             return ("openai-native", "gpt-4o", self.settings.openai_api_key)
         return (None, None, None)
+
+    def _provider_base_url(self) -> str | None:
+        """Optional baseUrl for providers that need it (Ollama). ``None`` lets
+        the Cline SDK pick its built-in default for hosted providers."""
+        if self.settings.cline_sdk_use_ollama and (self.settings.ollama_base_url or "").strip():
+            return self.settings.ollama_base_url.strip()
+        return None
 
     def _cwd_for_repos(self, repos: list[str] | None) -> Path:
         if repos and len(repos) == 1:
@@ -129,6 +146,9 @@ class ClineSDKAdapter(Adapter):
             "timeoutSec": int(timeout_seconds),
             "enableFindCode": enable_find_code,
         }
+        base_url = self._provider_base_url()
+        if base_url:
+            body["baseUrl"] = base_url
         async with httpx.AsyncClient(timeout=timeout_seconds + 30) as c:
             r = await c.post(url, json=body)
         if r.status_code >= 400:

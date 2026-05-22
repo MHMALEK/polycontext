@@ -83,6 +83,43 @@ For **`--verbose`**, invoke the CLI directly (Make does not forward extra flags)
 uv run python -m eval.bakeoff.cli -v run --adapters cursor,cline_sdk --job ask --IDS q7-master-data-upload-e2e
 ```
 
+## Golden-reference comparison (Ollama / Cline / Sourcebot)
+
+Ask cases in `questions.toml` include a **`gold_answer`** — Sentinel’s known-correct
+reply condensed for grading. Decompose cases can include **`gold_decomposition`**
+(reference breakdown text). To run **real** adapter calls and score answers against
+those references (LLM-as-judge via Gemini Flash + rule-based rubric):
+
+```bash
+# Prerequisites: Sourcebot indexed, agent-node up, Ollama for cline_sdk / sourcebot_ollama
+make adapters
+make eval-adapters
+
+# Low-RAM smoke (1 question × 1 adapter — run one adapter at a time)
+make eval-golden-minimal ADAPTER=sourcebot_ollama
+
+# EXPERIMENTAL max Sourcebot+Serena context → Ollama (revert: see docs/experimental-sourcebot-ollama-max.md)
+make eval-golden-max
+# or: make eval-golden-minimal ADAPTER=cline_sdk
+# Tip: use OLLAMA_MODEL=cline-qwen:7b instead of qwen2.5:14b to save RAM
+# Retrieval debug (search terms + snippet paths) prints by default; use --no-debug-grounding to hide.
+
+# One decompose ticket vs gold
+make eval-golden-minimal-decompose ADAPTER=sourcebot_ollama
+
+# Heavier (2 ask × 3 adapters — can saturate RAM)
+make eval-golden-quick
+
+# Full ask set with gold (12 questions) — long; run overnight or filter with IDS=
+make eval-golden JOB=ask ADAPTERS=sourcebot,cline_sdk,sourcebot_ollama,opencode
+
+# Decompose tickets vs gold_decomposition
+make eval-golden JOB=decompose ADAPTERS=cline_sdk,sourcebot_ollama IDS=d2-farm-name-validation
+```
+
+Output: `eval/outputs/eval-<timestamp>/report.md` shows the **golden reference** plus
+each adapter’s full answer and judge scores (`gold_coverage`, `gold_accuracy`).
+
 ## Quick start
 
 ```bash

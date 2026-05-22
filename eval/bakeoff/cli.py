@@ -197,7 +197,7 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--grounded", action="store_true",
                    help="force grounded=true on every ask case (for A/B vs ungrounded)")
     r.add_argument("--use-judge", action="store_true",
-                   help="enable LLM-as-judge scoring against ``gold_answer`` (Gemini Flash, ~1 call per ask case)")
+                   help="LLM-as-judge vs ``gold_answer`` / ``gold_decomposition`` (Gemini Flash)")
     _common_run_filters(r)
 
     rp = sub.add_parser("report", help="regenerate report.md/summary.json for a run dir")

@@ -24,3 +24,13 @@ expected:
   min_subtasks: 2
   max_subtasks: 6
   must_touch_repos: [frontend]
+  gold_decomposition: |
+    Overview: Relax Farm Name and ReferenceID validators in the frontend so Unicode letters
+    (é, ñ, ü, ç) are accepted while keeping the existing blocked special characters unchanged.
+    Engineers should first surface the current validation rules, then update regex/validator logic.
+
+    Affected repos: frontend
+
+    - Frontend: find Farm Name and ReferenceID validator implementations and document current rules.
+    - Frontend: update validation to allow Unicode letters without widening disallowed punctuation.
+    - Frontend: add or update unit tests for accented names and for still-rejected special characters.

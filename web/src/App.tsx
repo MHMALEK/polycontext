@@ -50,7 +50,7 @@ type AskFormState = {
 
 // Initial dropdown selection. Overridden at mount if this adapter isn't
 // installed or isn't healthy — see the adapter list useEffect.
-const DEFAULT_ADAPTER = "cursor";
+const DEFAULT_ADAPTER = "gemini";
 
 type DisplayedRun = {
   question: string;

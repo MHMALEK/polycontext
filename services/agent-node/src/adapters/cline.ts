@@ -21,6 +21,11 @@ export type ClineRunBody = {
   providerId: string;
   modelId: string;
   apiKey: string;
+  // Custom base URL for the LLM provider. Required for ``ollama`` (e.g.
+  // ``http://localhost:11434``); optional for OpenAI-compatible
+  // gateways (LiteLLM, vLLM). Omit for hosted providers — Cline picks
+  // the built-in default.
+  baseUrl?: string;
   maxIterations?: number;
   timeoutSec?: number;
   enableFindCode?: boolean;
@@ -421,6 +426,9 @@ export async function runCline(body: ClineRunBody): Promise<{
       providerId: body.providerId,
       modelId: body.modelId,
       apiKey: body.apiKey,
+      // Only forward baseUrl when caller set one — passing undefined would
+      // override Cline's built-in default URLs for hosted providers.
+      ...(body.baseUrl ? { baseUrl: body.baseUrl } : {}),
       maxIterations: body.maxIterations ?? 30,
       systemPrompt: body.systemPrompt,
       tools,

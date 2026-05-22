@@ -228,6 +228,42 @@ def _extract_search_terms(query: str, *, max_terms: int = 8) -> list[str]:
     return terms[:max_terms]
 
 
+def _extract_question_bigrams(query: str, *, max_pairs: int = 4) -> list[str]:
+    """Adjacent non-stopword word pairs from the raw question.
+
+    Works for any natural-language phrasing ("farm name", "user roles",
+    "data sharing") without domain-specific rules. Variants like
+    ``FarmName`` / ``farm_name`` are generated later by
+    ``_expand_with_variants``.
+    """
+    words = [
+        w
+        for w in re.findall(r"[A-Za-z][A-Za-z0-9]*", query)
+        if len(w) >= 3 and w.lower() not in _STOPWORDS
+    ]
+    seen: set[str] = set()
+    out: list[str] = []
+    for i in range(len(words) - 1):
+        pair = f"{words[i]} {words[i + 1]}"
+        low = pair.lower()
+        if low not in seen:
+            seen.add(low)
+            out.append(pair)
+        if len(out) >= max_pairs:
+            break
+    return out
+
+
+def _terms_for_and_search(terms: list[str], *, max_terms: int = 5) -> list[str]:
+    """Pick terms for strict AND search — prefer symbol-like tokens."""
+    if not terms:
+        return []
+    symbol = [t for t in terms if re.search(r"[A-Z_.]", t)]
+    if len(symbol) >= 2:
+        return symbol[:max_terms]
+    return terms[:max_terms]
+
+
 def _has_strong_terms(terms: list[str]) -> bool:
     """True if the regex produced at least one symbol-class term, OR ≥3 distinct
     terms total. Used to gate the LLM classifier — if regex already has a
@@ -449,6 +485,7 @@ async def retrieve_grounded_context(
     repos: list[str] | None = None,
     top_k: int = 8,
     context_lines: int = 3,
+    aggressive_retrieval: bool = False,
 ) -> GroundedContext:
     """Call Sourcebot's ``/api/search`` and return typed snippets + a grounding block.
 
@@ -511,6 +548,15 @@ async def retrieve_grounded_context(
             classifier_ms=classifier_ms,
         ))
 
+    # English bigrams from the question (e.g. "user roles" → later UserRoles).
+    seen_term_low = {t.lower() for t in terms}
+    for pair in _extract_question_bigrams(query):
+        if pair.lower() not in seen_term_low:
+            seen_term_low.add(pair.lower())
+            terms.append(pair)
+
+    expanded = _expand_with_variants(terms)
+
     url = settings.sourcebot_url.rstrip("/") + "/api/search"
     headers = {
         "X-Sourcebot-Api-Key": _x_sourcebot_api_key_value(settings.sourcebot_api_key),
@@ -540,16 +586,22 @@ async def retrieve_grounded_context(
     def _file_id(f: dict[str, Any]) -> str:
         return f"{f.get('repository','')}::{_file_path_text(f.get('fileName'))}"
 
-    # Two-stage strategy:
-    #   1. Strict implicit-AND search — surfaces the single most-relevant file
-    #      when all terms co-occur. (e.g. "user roles role" → user_model.py)
-    #   2. If AND returns 0, run each term SEPARATELY in parallel and merge.
-    #      Sourcebot's OR operator silently breaks for mixed quoted/unquoted
-    #      multi-term queries (verified empirically); per-term parallel
-    #      searches are more robust and naturally bound the latency cost.
-    and_query = _build_sourcebot_query(terms, mode="and")
+    # Hybrid search (domain-agnostic):
+    #   1. Strict AND on a small set of terms (symbol-like tokens preferred).
+    #   2. When recall is thin, parallel per-term search on code-style variants
+    #      (PascalCase / snake_case from English phrases in the question).
+    and_terms = _terms_for_and_search(terms)
+    and_query = _build_sourcebot_query(and_terms, mode="and")
     final_query = and_query
     total_ms = 0
+    max_variant_queries = (
+        int(getattr(settings, "experimental_ollama_max_variant_searches", 0) or 0)
+        if aggressive_retrieval
+        else 10
+    )
+    if aggressive_retrieval and max_variant_queries < 12:
+        max_variant_queries = 16
+
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
         status, files, dur = await _search(client, and_query)
         total_ms += dur
@@ -566,34 +618,39 @@ async def retrieve_grounded_context(
                 classifier_ms=classifier_ms,
             ))
 
-        if not files and len(terms) > 1:
+        seen_ids: set[str] = {_file_id(f) for f in files}
+        need_supplement = (
+            (len(files) < top_k or aggressive_retrieval)
+            and len(expanded) > 0
+        )
+
+        if need_supplement:
             t_fallback = time.monotonic()
-            # Expand each multi-word term to its code-style variants. A
-            # question saying "Data Sharing" then yields DataSharing,
-            # dataSharing, data_sharing, DATA_SHARING for the search —
-            # files that use any of those naming conventions get found.
-            expanded = _expand_with_variants(terms)
-            quoted_terms = [_quote_if_needed(t) for t in expanded]
+            # Prefer symbol-class variants (UserRoles, data_sharing) over raw English.
+            variant_terms = [
+                t for t in expanded
+                if re.search(r"[A-Z_]", t) or " " in t
+            ] or expanded
+            quoted_terms = [_quote_if_needed(t) for t in variant_terms[:max_variant_queries]]
             per_term = await asyncio.gather(
                 *[_search(client, q) for q in quoted_terms],
                 return_exceptions=False,
             )
             total_ms += int((time.monotonic() - t_fallback) * 1000)
-            seen: set[str] = set()
-            merged: list[dict[str, Any]] = []
             for _status, found, _ms in per_term:
                 for f in found:
                     fid = _file_id(f)
-                    if fid in seen:
+                    if fid in seen_ids:
                         continue
-                    seen.add(fid)
-                    merged.append(f)
-                    if len(merged) >= top_k:
+                    seen_ids.add(fid)
+                    files.append(f)
+                    if len(files) >= top_k:
                         break
-                if len(merged) >= top_k:
+                if len(files) >= top_k:
                     break
-            files = merged
-            final_query = f"per-term ({len(quoted_terms)} variants): " + " | ".join(quoted_terms)
+            final_query = (
+                f"{and_query} + supplement({len(quoted_terms)} variants)"
+            )
 
     snippets = _snippets_from_sourcebot_files(files)
     sources = ["sourcebot"]
@@ -613,7 +670,10 @@ async def retrieve_grounded_context(
                 terms=terms,
                 settings=settings,
                 already_seen=_already_seen_ids(snippets),
-                cap=max(0, top_k - len(snippets)),
+                cap=max(
+                    0,
+                    (top_k * 2 if aggressive_retrieval else top_k) - len(snippets),
+                ),
             )
             if serena_snippets:
                 snippets.extend(serena_snippets)

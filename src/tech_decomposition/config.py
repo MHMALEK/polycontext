@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     # Generic OpenAI-compatible endpoint (LiteLLM proxy, vLLM, Ollama, etc.).
     custom_llm_base_url: str = ""
     custom_llm_api_key: str = ""
+    custom_llm_model: str = ""
+
+    # Hosted RAG generation (``sourcebot_rag_api``) — OpenRouter / Groq / any OpenAI API.
+    # Falls back to CUSTOM_LLM_* and OPENROUTER_API_KEY when unset.
+    rag_openai_base_url: str = ""
+    rag_openai_api_key: str = ""
+    rag_openai_model: str = ""
 
     repos_root: Path = Path("./repos")
     repos: Annotated[list[str], NoDecode] = Field(default_factory=lambda: [
@@ -88,6 +95,24 @@ class Settings(BaseSettings):
     # If empty, decompose uses ``decompose_model``.
     gemini_sdk_decompose_model: str = ""
     gemini_sdk_timeout_seconds: float = 600.0
+
+    # Ollama (local model server) for the cline_sdk adapter. When
+    # ``cline_sdk_use_ollama=True`` and ``ollama_base_url`` is set, the
+    # cline adapter switches its provider from the default
+    # gemini→anthropic→openai chain to a local Ollama server. Used by
+    # the Phase-1 bake-off (`cline_sdk + qwen2.5-coder:7b`).
+    ollama_base_url: str = ""
+    ollama_model: str = ""
+    # Bearer token for ``https://ollama.com`` cloud API (see ollama.com/settings/keys).
+    ollama_api_key: str = ""
+    cline_sdk_use_ollama: bool = False
+
+    # Experimental adapter ``sourcebot_ollama_max`` only — max Sourcebot + Serena
+    # context → local Ollama. Safe to ignore; remove adapter from registry to revert.
+    experimental_ollama_max_top_k: int = 48
+    experimental_ollama_max_snippet_lines: int = 12
+    experimental_ollama_max_variant_searches: int = 16
+    experimental_ollama_max_num_ctx: int = 49152
 
     # OpenAI Agents SDK via agent-node (`@openai/agents` — https://github.com/openai/openai-agents-js).
     openai_agents_sdk_model: str = "gpt-4.1"

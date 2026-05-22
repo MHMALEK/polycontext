@@ -9,10 +9,8 @@ import type {
   Subtask,
 } from "./api";
 
-// Bake-off (eval/outputs/bakeoff-20260518T134739Z) settled the default:
-// cursor scored 0.773 ungrounded and was the only adapter with stable
-// run-to-run results. Sourcebot scored 0.45.
-const DEFAULT_ADAPTER = "cursor";
+// Demo default: Gemini 2.5 Pro via agent-node (ask + decompose).
+const DEFAULT_ADAPTER = "gemini";
 
 const SUGGESTED = [
   "Pre-fill supplier questionnaire on behalf of supplier — what changes across repos?",
@@ -22,8 +20,8 @@ const SUGGESTED = [
 
 // Adapters listed in preference order (matches bake-off ranking).
 const ADAPTER_PRIORITY: Record<string, number> = {
-  cursor: 0,
-  gemini: 1,
+  gemini: 0,
+  cursor: 1,
   claude_code: 2,
   opencode: 3,
   sourcebot: 4,

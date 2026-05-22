@@ -198,5 +198,33 @@ eval-report:  ## eval: regenerate report.md/summary.json for RUN=eval-<ts>
 	@test -n "$(RUN)" || (echo "set RUN=eval-<timestamp>"; exit 1)
 	uv run python -m eval.bakeoff.cli report $(RUN)
 
+# Golden-reference comparison (real adapter runs + LLM judge vs eval/questions.toml gold)
+# Example: make eval-golden ADAPTERS=sourcebot,cline_sdk,sourcebot_ollama JOB=ask
+eval-golden:  ## eval: run cases with gold_answer vs reference (USE_JUDGE=1 by default)
+	uv run python scripts/eval_golden.py \
+	  --adapters $${ADAPTERS:-sourcebot,cline_sdk,sourcebot_ollama} \
+	  --job $${JOB:-ask} \
+	  $(if $(IDS),--ids $(IDS)) \
+	  $(if $(TAGS),--tags $(TAGS)) \
+	  $(if $(filter 0,$(USE_JUDGE)),--no-judge,)
+
+eval-golden-minimal:  ## eval: 1 ask case vs gold — low RAM (ADAPTER=sourcebot_ollama|cline_sdk)
+	uv run python scripts/eval_golden.py --minimal --job ask \
+	  --adapters $${ADAPTER:-sourcebot_ollama} \
+	  --timeout $${TIMEOUT:-420} --debug-grounding
+
+eval-golden-minimal-decompose:  ## eval: 1 decompose ticket vs gold (ADAPTER=sourcebot_ollama|cline_sdk)
+	uv run python scripts/eval_golden.py --minimal --job decompose \
+	  --adapters $${ADAPTER:-sourcebot_ollama} \
+	  --timeout $${TIMEOUT:-420}
+
+eval-golden-max:  ## eval: EXPERIMENTAL sourcebot_ollama_max vs gold (1 ask case)
+	uv run python scripts/eval_golden.py --minimal --job ask \
+	  --adapters sourcebot_ollama_max --timeout $${TIMEOUT:-600} --debug-grounding
+
+eval-golden-quick:  ## eval: 2 ask cases × 3 adapters (heavy — prefer eval-golden-minimal)
+	uv run python scripts/eval_golden.py --quick --job ask \
+	  --adapters $${ADAPTERS:-sourcebot,cline_sdk,sourcebot_ollama}
+
 help:  ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | awk -F':.*##' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'

@@ -1,0 +1,43 @@
+# Cline-tuned Qwen2.5-Coder with bigger context for the bake-off.
+#
+# Why this exists
+# ---------------
+# Stock `qwen2.5-coder:7b` declares the `tools` capability but in practice
+# emits raw JSON instead of the `<tool_call>...</tool_call>` wrapper that
+# Ollama's parser needs. Result: every "tool call" lands in `content`,
+# `tool_calls` stays `null`, and the Cline agent loop bails out after one
+# iteration with no work done (confirmed via direct /api/chat probe).
+# Known issue:
+#   - continuedev/continue#6178 ("Tools stopped working and only respond with json")
+#   - opencode#2728/#7030 (qwen2.5-coder tools "execute" but nothing happens)
+#
+# Cline community fix: use a tool-call-fine-tuned derivative. `hhao/qwen2.5-coder-tools:7b`
+# is the most-used variant — same Qwen2.5-Coder weights, retrained to emit
+# the wrapper reliably.
+#
+# Why 65536 num_ctx
+# -----------------
+# Cline's system prompt + workspace tool defs run ~30-40K tokens before the
+# task even starts. The stock 4096 (or even 32K) silently truncates the tool
+# section, which is another way tool calls quietly disappear.
+# Source: cline/cline#241 — "The prompt of Cline is VERY LONG and 32768 is
+# not enough to read in all the system prompt and your prompt."
+#
+# Lower temperature
+# -----------------
+# Local 7B models drift on long structured outputs at default temp (0.8).
+# 0.2 keeps the tool-wrapper format stable across iterations.
+#
+# Build
+# -----
+#   ollama create cline-qwen:7b -f config/ollama/cline-qwen.Modelfile
+#
+# Use
+# ---
+# In .env:  OLLAMA_MODEL=cline-qwen:7b
+
+FROM hhao/qwen2.5-coder-tools:7b
+
+PARAMETER num_ctx 65536
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9

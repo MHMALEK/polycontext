@@ -108,6 +108,7 @@ fastify.post("/adapters/cline/run", async (request, reply) => {
     providerId: b.providerId as string,
     modelId: b.modelId as string,
     apiKey: b.apiKey as string,
+    baseUrl: b.baseUrl as string | undefined,
     maxIterations: (b.maxIterations as number) ?? 30,
     timeoutSec: (b.timeoutSec as number) ?? 600,
     enableFindCode: Boolean(b.enableFindCode),

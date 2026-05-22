@@ -70,21 +70,36 @@ async def score_response_async(
     gold_accuracy) into the rule-based score before final aggregation.
 
     Falls back to plain rule-based scoring on any judge failure.
+
+    Decompose cases may use ``gold_decomposition`` (reference breakdown text).
     """
     base = score_response(case=case, response=response)
     if not use_judge or settings is None:
         return base
-    if case.job != "ask":
+
+    expected = case.expected or {}
+    if case.job == "ask":
+        gold = expected.get("gold_answer")
+        if not gold or not isinstance(gold, str):
+            return base
+        candidate = (response.get("answer") or "").strip()
+        if not candidate:
+            return base
+        question = case.input.get("query", "")
+    elif case.job == "decompose":
+        gold = expected.get("gold_decomposition") or expected.get("gold_answer")
+        if not gold or not isinstance(gold, str):
+            return base
+        candidate = _decomposition_to_text(response.get("decomposition") or {})
+        if not candidate.strip():
+            return base
+        question = case.input.get("query") or case.input.get("ticket_text") or ""
+    else:
         return base
-    gold = (case.expected or {}).get("gold_answer")
-    if not gold or not isinstance(gold, str):
-        return base
-    candidate = (response.get("answer") or "").strip()
-    if not candidate:
-        return base
+
     try:
         verdict = await _judge_against_gold(
-            question=case.input.get("query", ""),
+            question=question,
             gold=gold.strip(),
             candidate=candidate,
             settings=settings,
@@ -199,6 +214,34 @@ def _build_judge_agent(settings) -> Any | None:
         return agent
     except Exception:
         return None
+
+
+def _decomposition_to_text(decomp: dict[str, Any]) -> str:
+    """Flatten a decomposition object for LLM-judge comparison."""
+    parts: list[str] = []
+    if decomp.get("overview"):
+        parts.append(f"Overview:\n{decomp['overview'].strip()}")
+    repos = decomp.get("affected_repos") or []
+    if repos:
+        parts.append("Affected repos: " + ", ".join(str(r) for r in repos))
+    for risk in decomp.get("risks") or []:
+        parts.append(f"Risk: {risk}")
+    for q in decomp.get("open_questions") or []:
+        parts.append(f"Open question: {q}")
+    for st in decomp.get("subtasks") or []:
+        title = (st.get("title") or "").strip()
+        desc = (st.get("description") or "").strip()
+        repo = st.get("repo") or ""
+        files = ", ".join(st.get("files") or [])
+        line = f"- {title}"
+        if repo:
+            line += f" [{repo}]"
+        if files:
+            line += f" (files: {files})"
+        if desc:
+            line += f": {desc}"
+        parts.append(line)
+    return "\n".join(parts)
 
 
 async def _judge_against_gold(
