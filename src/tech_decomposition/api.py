@@ -466,14 +466,27 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
                 "metrics": result.metrics.model_copy(update={"extra": extra}),
             })
         m = result.metrics
-        # Stash grounding in the payload so /runs/{id} can replay it.
-        payload = {"grounding": grounding.model_dump(mode="json")} if grounding else None
+        # Build the persisted payload so /runs/{id} can replay the full
+        # telemetry. Two sources of telemetry live in different places:
+        #   - grounding   : when the API itself prefetched snippets
+        #                   (skipped for the pipeline adapter, which does
+        #                   its own internal grounding instead)
+        #   - metrics.extra : per-adapter extras — pipeline route, coverage,
+        #                   grounding metrics, grounding_paths, opencode
+        #                   tool_names, etc. Without this in payload, the
+        #                   UI's Telemetry panel renders empty after reload
+        #                   because /runs/{id} responses don't carry it.
+        payload: dict[str, Any] = {}
+        if grounding is not None:
+            payload["grounding"] = grounding.model_dump(mode="json")
+        if m.extra:
+            payload["metrics_extra"] = dict(m.extra)
         store.record(
             run_id=ctx.run_id, mode="ask", status="completed",
             input_ref=ref_for_store, engine=f"{name}:ask",
             answer=result.answer,
             citations=list(result.citations),
-            payload=payload,
+            payload=payload or None,
             model=m.model,
             total_seconds=(m.duration_ms / 1000.0) if m.duration_ms else None,
             total_cost_usd=m.cost_usd,

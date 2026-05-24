@@ -680,9 +680,15 @@ function GroundingPanel({ grounding }: { grounding: RawGrounding }) {
  */
 function TelemetryPanel({ turn }: { turn: RunDetail }) {
   const payload = (turn.payload || {}) as Record<string, unknown>;
-  // payload.metrics is the AdapterMetrics dump; extras live under .extra.
+  // Two shapes for "metrics.extra":
+  //   - Live response (just after submit): payload.metrics.extra
+  //   - Persisted (after /runs/{id} reload): payload.metrics_extra
+  //     — api.py copies metrics.extra into that key so the runstore
+  //     reload sees the same telemetry as the live response.
+  const metricsExtra = (payload.metrics_extra as Record<string, unknown> | undefined) ?? undefined;
   const metrics = (payload.metrics as Record<string, unknown> | undefined) ?? {};
-  const extra = (metrics.extra as Record<string, unknown> | undefined) ?? {};
+  const liveExtra = (metrics.extra as Record<string, unknown> | undefined) ?? undefined;
+  const extra = metricsExtra ?? liveExtra ?? {};
   const grounding =
     (payload.grounding as Record<string, unknown> | undefined) ??
     ((extra.grounding as Record<string, unknown> | undefined) ?? undefined);
