@@ -96,14 +96,36 @@ function askModeToWire(mode: AskMode): { grounded: boolean; tools_enabled: boole
 const DEFAULT_ADAPTER = "cursor";
 
 const ADAPTER_PRIORITY: Record<string, number> = {
-  cursor: 0,
-  gemini: 1,
-  claude_code: 2,
-  opencode: 3,
-  sourcebot: 4,
+  pipeline: 0,    // our custom retrieve-first flow — promote to top
+  opencode: 1,    // best cost-quality agentic option we've measured
+  cursor: 2,
+  gemini: 3,
+  claude_code: 4,
   cline_sdk: 5,
-  openai_agents: 6,
+  sourcebot: 6,
+  openai_agents: 7,
 };
+
+/**
+ * Friendlier UI labels for the raw adapter registry keys. The registry key
+ * (e.g. ``pipeline``) is what the API and eval harness use — don't rename
+ * it. The UI just shows a nicer version. Unknown keys fall back to the
+ * raw name.
+ */
+const ADAPTER_DISPLAY_NAMES: Record<string, string> = {
+  pipeline: "polycontext",
+  opencode: "OpenCode",
+  gemini: "Gemini",
+  cursor: "Cursor",
+  claude_code: "Claude Code",
+  cline_sdk: "Cline",
+  openai_agents: "OpenAI Agents",
+  sourcebot: "Sourcebot",
+};
+
+function displayAdapterName(name: string): string {
+  return ADAPTER_DISPLAY_NAMES[name] ?? name;
+}
 
 type DisplayedRun = {
   question: string;
@@ -304,7 +326,7 @@ function HistoryItem({
               <>
                 <span aria-hidden className="text-base-content/25 text-[10px]">·</span>
                 <span className="font-mono text-[10px] uppercase tracking-wider text-base-content/55">
-                  {adapter}
+                  {displayAdapterName(adapter)}
                 </span>
               </>
             )}
@@ -1628,7 +1650,7 @@ export function App() {
                             value={a.name}
                             title={a.health.ok ? a.description : (a.health.reason ?? "unhealthy")}
                           >
-                            {a.name}
+                            {displayAdapterName(a.name)}
                             {a.health.ok ? "" : " (unhealthy)"}
                           </option>
                         ))

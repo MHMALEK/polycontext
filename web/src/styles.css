@@ -1,7 +1,7 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 @plugin "daisyui" {
-  themes: midnight --default --prefersdark, light;
+  themes: dark --default --prefersdark, light;
 }
 
 /*
@@ -11,29 +11,32 @@
  *  Inspired by Linear's hairlines, Vercel's typographic precision, and the
  *  density of professional engineering tools (Datadog, Grafana, Bloomberg).
  *
- *  Color: deep midnight with a faint cool cast (NOT pure black, NOT generic
- *  grey). One confident accent (green) for primary actions + signal of
- *  health/recall. Amber for cost/cautionary numerics. Calm blue for info.
+ *  Built on top of DaisyUI 5's built-in ``dark`` theme by overriding its
+ *  CSS custom properties via the [data-theme="dark"] selector. We tried
+ *  defining a custom theme via ``@plugin "daisyui/theme"`` but DaisyUI 5
+ *  did not honor it — zero occurrences of our theme name appeared in
+ *  the compiled stylesheet. The token-override pattern is proven and is
+ *  what the original light-theme override (now removed) used.
  *
- *  Typography: IBM Plex Mono for headings + metrics + code; IBM Plex Sans
- *  for narrative copy. Both have real character (not generic Inter/Roboto).
- *  Tabular numerics on every metric chip.
+ *  Color: deep midnight with a faint cool cast (NOT pure black, NOT
+ *  generic grey). One confident accent (green) for primary actions +
+ *  signal of health/recall. Amber for cost/cautionary numerics. Calm
+ *  blue for info.
+ *
+ *  Typography: IBM Plex Mono for headings + metrics + code; IBM Plex
+ *  Sans for narrative copy. Both have real character (not generic
+ *  Inter/Roboto). Tabular numerics on every metric chip.
  *
  *  Rule of thumb: surfaces stay quiet, hairlines do the structuring,
  *  monospace numbers carry the weight.
  * ============================================================================
  */
 
-@plugin "daisyui/theme" {
-  name: "midnight";
-  default: true;
-  prefersdark: true;
-  color-scheme: dark;
-
+[data-theme="dark"] {
   /* Surfaces ------------------------------------------------------ */
   --color-base-100: oklch(13% 0.008 240);   /* page background          */
   --color-base-200: oklch(16% 0.010 240);   /* card / surface           */
-  --color-base-300: oklch(20% 0.012 240);   /* elevated, hover state    */
+  --color-base-300: oklch(22% 0.013 240);   /* elevated, hover state    */
   --color-base-content: oklch(96% 0.004 240); /* primary text           */
 
   /* Accents — used VERY sparingly. One color does most of the work. */
@@ -60,10 +63,17 @@
   --radius-box: 0.75rem;
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
-  --border: 1px;       /* hairline borders everywhere                  */
-  --depth: 0;          /* zero default depth — flat surfaces           */
+  --border: 1px;
+  --depth: 0;
   --noise: 0;
 }
+
+/*
+ * If the user OS prefers dark (most engineers), default <html> attribute
+ * is "dark" in index.html — applies our tokens immediately. We don't
+ * support light right now; ``prefers-color-scheme`` overrides via
+ * DaisyUI's built-in light theme if the user has light explicitly set.
+ */
 
 @layer base {
   html {
@@ -208,11 +218,11 @@
 .segmented {
   display: inline-flex;
   align-items: stretch;
-  padding: 3px;
+  padding: 4px;
   border-radius: 0.5rem;
-  border: 1px solid oklch(24% 0.013 240);
-  background-color: oklch(15% 0.009 240);
-  gap: 1px;
+  border: 1px solid oklch(30% 0.015 240);
+  background-color: oklch(18% 0.010 240);
+  gap: 2px;
 }
 
 .segmented > button {
@@ -220,14 +230,14 @@
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.375rem 0.75rem;
-  height: 1.75rem;
+  padding: 0.4375rem 0.875rem;
+  height: 1.875rem;
   border-radius: 0.375rem;
   background-color: transparent;
   border: 1px solid transparent;
-  color: oklch(64% 0.012 240);
+  color: oklch(72% 0.014 240);
   font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
   white-space: nowrap;
@@ -236,16 +246,16 @@
 }
 
 .segmented > button:hover {
-  color: oklch(92% 0.005 240);
-  background-color: oklch(20% 0.012 240);
+  color: oklch(96% 0.005 240);
+  background-color: oklch(22% 0.013 240);
 }
 
 .segmented > button[aria-pressed="true"] {
-  background-color: oklch(22% 0.014 240);
-  color: oklch(96% 0.005 240);
-  border-color: oklch(30% 0.018 240);
-  box-shadow: 0 0 0 1px oklch(74% 0.16 145 / 0.18) inset,
-              0 1px 0 oklch(0% 0 0 / 0.2);
+  background-color: oklch(26% 0.016 240);
+  color: oklch(98% 0.005 240);
+  border-color: oklch(40% 0.020 240);
+  box-shadow: 0 0 0 1px oklch(74% 0.16 145 / 0.30) inset,
+              0 1px 0 oklch(0% 0 0 / 0.25);
 }
 
 .segmented > button[aria-pressed="true"]::before {
@@ -256,7 +266,7 @@
   transform: translateX(-50%);
   width: 60%;
   height: 1px;
-  background: linear-gradient(90deg, transparent, oklch(74% 0.16 145 / 0.7), transparent);
+  background: linear-gradient(90deg, transparent, oklch(74% 0.16 145 / 0.85), transparent);
 }
 
 /* Picker — the labeled select fields in the composer. ``.picker-label``
@@ -281,36 +291,55 @@
 
 .picker > select {
   appearance: none;
-  background-color: oklch(15% 0.009 240);
-  border: 1px solid oklch(24% 0.013 240);
+  background-color: oklch(18% 0.010 240);
+  border: 1px solid oklch(30% 0.015 240);
   border-radius: 0.5rem;
-  padding: 0.4375rem 1.75rem 0.4375rem 0.625rem;
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
   font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 400;
-  color: oklch(94% 0.005 240);
+  color: oklch(95% 0.005 240);
   cursor: pointer;
   outline: none;
   transition: border-color 80ms ease, background-color 80ms ease;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%237a8694' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2398a3b3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
   background-repeat: no-repeat;
-  background-position: right 0.625rem center;
+  background-position: right 0.75rem center;
   min-width: 0;
 }
 
 .picker > select:hover {
-  border-color: oklch(32% 0.017 240);
-  background-color: oklch(17% 0.010 240);
+  border-color: oklch(40% 0.020 240);
+  background-color: oklch(20% 0.011 240);
 }
 
 .picker > select:focus {
-  border-color: oklch(48% 0.025 240);
-  box-shadow: 0 0 0 3px oklch(74% 0.16 145 / 0.10);
+  border-color: oklch(74% 0.16 145 / 0.6);
+  box-shadow: 0 0 0 3px oklch(74% 0.16 145 / 0.18);
 }
 
 .picker > select:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Native <option> in <select> — most browsers ignore most styling here,
+   but Chrome/Edge honour color + background on the option dropdown.
+   Set them to match the surface so the popped-open list isn't startling
+   white-on-dark contrast. */
+.picker > select option,
+.picker > select optgroup {
+  background-color: oklch(18% 0.010 240);
+  color: oklch(95% 0.005 240);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+.picker > select optgroup {
+  color: oklch(60% 0.014 240);
+  font-style: normal;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 /* Surface — card-style elevated panel with hairline. */

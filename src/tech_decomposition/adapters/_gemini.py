@@ -26,6 +26,25 @@ from .base import (
     RawDecomposeText,
 )
 
+def _strip_gemini_prefix(spec: str | None) -> str | None:
+    """Accept the same per-request model id formats other adapters use.
+
+    The gemini adapter (via @google/genai) wants a bare model id like
+    ``gemini-2.5-flash`` or ``gemini-2.5-pro``. Strip provider prefixes
+    so the UI's Model picker can send ``gemini:gemini-2.5-pro``,
+    ``google/gemini-2.5-flash``, or the bare id — all work."""
+    if not spec:
+        return None
+    s = spec.strip()
+    if not s:
+        return None
+    if s.startswith("gemini:"):
+        return s.split(":", 1)[1].strip() or None
+    if s.startswith("google/"):
+        return s.split("/", 1)[1].strip() or None
+    return s
+
+
 _ASK_SYSTEM = (
     "You are a code Q&A assistant with read-only access to local repositories via "
     "the search_files, grep_search, read_file, and list_directory tools.\n\n"
@@ -151,7 +170,12 @@ class GeminiAdapter(Adapter):
         return {"ok": True}
 
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
-        return await self.ask_configured(inp)
+        # Honor per-request model override (from UI's Model picker or API
+        # caller's inp.model). Falls through to GEMINI_SDK_MODEL otherwise.
+        # The gemini adapter accepts bare Gemini ids (``gemini-2.5-flash``)
+        # — strip ``gemini:`` or ``google/`` provider prefixes if present.
+        override = _strip_gemini_prefix(inp.model)
+        return await self.ask_configured(inp, model_id=override)
 
     async def ask_configured(
         self,
