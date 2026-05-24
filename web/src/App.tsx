@@ -638,13 +638,285 @@ function GroundingPanel({ grounding }: { grounding: RawGrounding }) {
   );
 }
 
+/**
+ * TelemetryPanel — debug-only inspector that decodes the run's metrics.extra
+ * and payload.grounding into a structured "what actually happened" view.
+ *
+ * Surfaces (when present):
+ *  - Operating mode (grounded/agent_only/hybrid/raw) — inferred from the
+ *    request's grounded flag combined with whether the adapter emitted
+ *    tool_use parts
+ *  - Grounding metrics (extractor, terms, search_query, snippet count,
+ *    sources, rerank stats, per-repo-cap drops, expansion stats)
+ *  - Retrieved file paths from metrics.extra.grounding_paths
+ *  - Pipeline routing decision (route tier, coverage, fallback path)
+ *  - Tool calls + tool names (agentic adapters)
+ *  - Raw metrics.extra dump for anything we don't render specially
+ *
+ * Lives under the answer body, collapsible. Driven by the global debug
+ * toggle in the header.
+ */
+function TelemetryPanel({ turn }: { turn: RunDetail }) {
+  const payload = (turn.payload || {}) as Record<string, unknown>;
+  // payload.metrics is the AdapterMetrics dump; extras live under .extra.
+  const metrics = (payload.metrics as Record<string, unknown> | undefined) ?? {};
+  const extra = (metrics.extra as Record<string, unknown> | undefined) ?? {};
+  const grounding =
+    (payload.grounding as Record<string, unknown> | undefined) ??
+    ((extra.grounding as Record<string, unknown> | undefined) ?? undefined);
+  const groundingMetrics =
+    grounding && typeof grounding === "object"
+      ? ((grounding.metrics as Record<string, unknown> | undefined) ?? grounding)
+      : undefined;
+  const groundingPaths = (extra.grounding_paths as string[] | undefined) ?? [];
+  const toolCalls =
+    typeof metrics.tool_calls === "number" ? metrics.tool_calls : undefined;
+  const toolNames = (extra.opencode_tool_names as string[] | undefined) ?? [];
+
+  // Pipeline-specific fields (set by adapters/_pipeline.py).
+  const pipelineRoute = extra.pipeline_route as string | undefined;
+  const pipelineReason = extra.pipeline_reason as string | undefined;
+  const pipelinePath = extra.pipeline_path as string | undefined;
+  const coverage = extra.coverage as
+    | { score?: number; sufficient?: boolean; reason?: string }
+    | undefined;
+  const synthesisModel = extra.synthesis_model as string | undefined;
+  const synthesisInsufficient = extra.synthesis_insufficient as boolean | undefined;
+  const fallbackModel = extra.fallback_model as string | undefined;
+
+  return (
+    <details className="mt-4 group" open={false}>
+      <summary className="cursor-pointer list-none inline-flex items-center gap-2 select-none">
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/45 group-hover:text-base-content/65">
+          ▸ Telemetry
+        </span>
+        <span className="text-base-content/25 text-[10px]">·</span>
+        <span className="font-mono text-[10px] text-base-content/40">
+          {grounding ? "grounded" : "no-grounding"}
+          {pipelineRoute && ` · ${pipelineRoute}`}
+          {toolCalls != null && ` · ${toolCalls} tool calls`}
+        </span>
+      </summary>
+
+      <div className="mt-3 surface-2 p-4 space-y-4 text-[12px] font-mono leading-relaxed">
+        {/* Pipeline routing decision — only when present */}
+        {(pipelineRoute || pipelinePath || coverage) && (
+          <Section title="Pipeline route">
+            <KVRow k="tier" v={pipelineRoute} />
+            <KVRow k="reason" v={pipelineReason} />
+            <KVRow k="path" v={pipelinePath} />
+            {coverage && (
+              <>
+                <KVRow
+                  k="coverage"
+                  v={
+                    typeof coverage.score === "number"
+                      ? `${coverage.score.toFixed(2)}  · ${
+                          coverage.sufficient ? "sufficient" : "INSUFFICIENT"
+                        }`
+                      : undefined
+                  }
+                />
+                <KVRow k="coverage_reason" v={coverage.reason} />
+              </>
+            )}
+            <KVRow k="synthesis_model" v={synthesisModel} />
+            {synthesisInsufficient !== undefined && (
+              <KVRow
+                k="synthesis_insufficient"
+                v={synthesisInsufficient ? "yes (would trigger fallback)" : "no"}
+              />
+            )}
+            {fallbackModel && <KVRow k="fallback_model" v={fallbackModel} />}
+          </Section>
+        )}
+
+        {/* Grounding step */}
+        {groundingMetrics && (
+          <Section title="Grounding retrieval">
+            <KVRow
+              k="extractor"
+              v={groundingMetrics.extractor as string | undefined}
+            />
+            <KVRow
+              k="classifier"
+              v={
+                groundingMetrics.classifier_decision
+                  ? `${groundingMetrics.classifier_decision}${
+                      groundingMetrics.classifier_reason
+                        ? ` — ${groundingMetrics.classifier_reason}`
+                        : ""
+                    }`
+                  : undefined
+              }
+            />
+            <KVRow
+              k="terms"
+              v={
+                Array.isArray(groundingMetrics.extracted_terms)
+                  ? (groundingMetrics.extracted_terms as unknown[]).join(", ")
+                  : undefined
+              }
+            />
+            <KVRow
+              k="search_query"
+              v={groundingMetrics.search_query as string | undefined}
+            />
+            <KVRow
+              k="sources"
+              v={
+                Array.isArray(groundingMetrics.sources)
+                  ? (groundingMetrics.sources as unknown[]).join(", ")
+                  : undefined
+              }
+            />
+            <KVRow
+              k="snippets"
+              v={String(groundingMetrics.snippet_count ?? 0)}
+            />
+            <KVRow
+              k="total_chars"
+              v={String(groundingMetrics.total_chars ?? 0)}
+            />
+            <KVRow
+              k="sourcebot_files_seen"
+              v={String(groundingMetrics.sourcebot_files_seen ?? 0)}
+            />
+            <KVRow
+              k="serena_hits"
+              v={String(groundingMetrics.serena_hits ?? 0)}
+            />
+            <KVRow
+              k="rerank"
+              v={
+                groundingMetrics.rerank_model
+                  ? `${groundingMetrics.rerank_model} · ${
+                      groundingMetrics.rerank_candidates ?? "?"
+                    } cands · ${groundingMetrics.rerank_ms ?? "?"}ms`
+                  : "(not run)"
+              }
+            />
+            <KVRow
+              k="per_repo_cap"
+              v={
+                typeof groundingMetrics.per_repo_cap_applied === "number" &&
+                groundingMetrics.per_repo_cap_applied > 0
+                  ? `cap=${groundingMetrics.per_repo_cap_applied} · dropped=${groundingMetrics.per_repo_cap_dropped ?? 0}`
+                  : "(disabled)"
+              }
+            />
+            <KVRow
+              k="window_expansion"
+              v={
+                typeof groundingMetrics.expanded_snippets === "number" &&
+                groundingMetrics.expanded_snippets > 0
+                  ? `expanded=${groundingMetrics.expanded_snippets} · added=${groundingMetrics.expansion_added_chars ?? 0} chars`
+                  : "(disabled)"
+              }
+            />
+            <KVRow
+              k="serena_symbol_lookup"
+              v={
+                typeof groundingMetrics.serena_symbol_lookups === "number" &&
+                groundingMetrics.serena_symbol_lookups > 0
+                  ? `lookups=${groundingMetrics.serena_symbol_lookups} · hits=${groundingMetrics.serena_symbol_hits ?? 0} · ${groundingMetrics.serena_symbol_ms ?? "?"}ms`
+                  : "(not run)"
+              }
+            />
+            <KVRow
+              k="duration_ms"
+              v={String(groundingMetrics.duration_ms ?? 0)}
+            />
+            {Boolean(groundingMetrics.error) && (
+              <KVRow k="error" v={String(groundingMetrics.error)} variant="danger" />
+            )}
+          </Section>
+        )}
+
+        {/* Tool calls — for agentic adapters */}
+        {toolCalls != null && toolCalls > 0 && (
+          <Section title="Agentic tools">
+            <KVRow k="tool_calls" v={String(toolCalls)} />
+            {toolNames.length > 0 && (
+              <KVRow k="tool_names" v={toolNames.join(", ")} />
+            )}
+          </Section>
+        )}
+
+        {/* Retrieved files — the inputs that fed the model */}
+        {groundingPaths.length > 0 && (
+          <Section title={`Retrieved files (${groundingPaths.length})`}>
+            <ul className="space-y-0.5 text-[11px] text-base-content/75">
+              {groundingPaths.map((p) => (
+                <li key={p} className="truncate" title={p}>
+                  <span className="text-base-content/35">·</span> {p}
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
+
+        {/* Raw extras — the catch-all */}
+        <details className="group/raw">
+          <summary className="cursor-pointer list-none inline-flex items-center gap-2 select-none">
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/35 group-hover/raw:text-base-content/55">
+              ▸ Raw metrics.extra
+            </span>
+          </summary>
+          <pre className="mt-2 text-[10px] leading-snug text-base-content/55 whitespace-pre-wrap break-all max-h-72 overflow-y-auto">
+            {JSON.stringify(extra, null, 2)}
+          </pre>
+        </details>
+      </div>
+    </details>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <h4 className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/55 mb-2">
+        {title}
+      </h4>
+      <div className="space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function KVRow({
+  k,
+  v,
+  variant,
+}: {
+  k: string;
+  v: string | undefined;
+  variant?: "danger";
+}) {
+  if (v == null || v === "") return null;
+  return (
+    <div className="grid grid-cols-[10rem_1fr] gap-3 items-start">
+      <span className="text-base-content/45 text-[11px]">{k}</span>
+      <span
+        className={`text-[11px] break-all ${
+          variant === "danger" ? "text-error" : "text-base-content/90"
+        }`}
+      >
+        {v}
+      </span>
+    </div>
+  );
+}
+
 function ChatTurn({
   turn,
   suppressRunningAssistant,
+  showTelemetry,
 }: {
   turn: RunDetail;
   /** While the user just submitted, ProgressTimeline shows progress — hide duplicate "Thinking…". */
   suppressRunningAssistant?: boolean;
+  /** When true, render the TelemetryPanel under the answer. Driven by header toggle. */
+  showTelemetry?: boolean;
 }) {
   const q = extractQuestion(turn);
   const disp = turnToDisplayed(turn);
@@ -683,6 +955,7 @@ function ChatTurn({
               <AnswerBody text={disp.answer} />
               <Citations citations={disp.citations} />
               {grounding && <GroundingPanel grounding={grounding} />}
+              {showTelemetry && <TelemetryPanel turn={turn} />}
             </div>
           </article>
         </div>
@@ -732,6 +1005,16 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
 
 export function App() {
   const [view, setView] = useState<View>("ask");
+  // Persisted "show telemetry panels under answers" toggle. localStorage
+  // so it survives page reloads. Default off so casual users aren't bombarded.
+  const [debugEnabled, setDebugEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("polycontext.debug") === "1";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("polycontext.debug", debugEnabled ? "1" : "0");
+  }, [debugEnabled]);
   const [form, setForm] = useState<AskFormState>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1165,24 +1448,53 @@ export function App() {
                     : "ticket → subtasks"}
                 </span>
               </div>
-              {/* Mode tabs styled as a segmented control matching the composer. */}
-              <div role="tablist" className="segmented shrink-0" aria-label="View">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-pressed={view === "ask"}
-                  onClick={() => setView("ask")}
+              <div className="flex items-center gap-3 shrink-0">
+                {/* Debug toggle — shows the Telemetry panel under each answer. */}
+                <label
+                  className="inline-flex items-center gap-2 cursor-pointer select-none"
+                  title="Show retrieval + tool-call telemetry under each answer"
                 >
-                  Ask
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-pressed={view === "decompose"}
-                  onClick={() => setView("decompose")}
-                >
-                  Decompose
-                </button>
+                  <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-base-content/45 hidden sm:inline">
+                    Debug
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={debugEnabled}
+                    onClick={() => setDebugEnabled((v) => !v)}
+                    className={`relative inline-flex h-[18px] w-[30px] items-center rounded-full transition-colors ${
+                      debugEnabled
+                        ? "bg-primary/70"
+                        : "bg-base-300 hover:bg-base-200"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3 w-3 rounded-full bg-base-100 shadow-sm transition-transform ${
+                        debugEnabled ? "translate-x-[14px]" : "translate-x-[2px]"
+                      }`}
+                    />
+                  </button>
+                </label>
+
+                {/* Mode tabs styled as a segmented control matching the composer. */}
+                <div role="tablist" className="segmented" aria-label="View">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-pressed={view === "ask"}
+                    onClick={() => setView("ask")}
+                  >
+                    Ask
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-pressed={view === "decompose"}
+                    onClick={() => setView("decompose")}
+                  >
+                    Decompose
+                  </button>
+                </div>
               </div>
             </div>
           </header>
@@ -1243,6 +1555,7 @@ export function App() {
                     key={turn.id}
                     turn={turn}
                     suppressRunningAssistant={submitting && turn.status === "running"}
+                    showTelemetry={debugEnabled}
                   />
                 ))}
 
