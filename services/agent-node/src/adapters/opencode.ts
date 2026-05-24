@@ -29,6 +29,11 @@ export type OpencodeRunBody = {
   /** With apiKey — registers provider credentials via auth.set. */
   providerID?: string;
   apiKey?: string;
+  /** OpenCode agent to run under. Defaults to "build" so the read-side tools
+   * (read, grep, glob, ls) are wired in. Without this OpenCode's prompt API
+   * runs a no-tool path and the model can't iterate beyond the prefetched
+   * grounding block. */
+  agent?: string;
 };
 
 const DECOMPOSITION_JSON_SCHEMA = {
@@ -157,6 +162,16 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
   tokensOut?: number;
   costUsd?: number;
   model?: string;
+  /** Number of tool invocations across the session — non-zero confirms the
+   * agentic loop fired. Counted from the FULL message log (session.messages),
+   * not just the final response message which only contains the summary. */
+  toolCalls?: number;
+  /** Distinct tool names invoked (e.g. ``["read","grep"]``). */
+  toolNames?: string[];
+  /** Repo-relative paths the agent actually read via the ``read`` tool.
+   * Surfaced so the context_recall scorer can compute recall for the
+   * opencode adapter without changes. */
+  groundingPaths?: string[];
 }> {
   const timeoutMs = Math.max(1, (body.timeoutSec ?? 600) * 1000);
   let serverClose: (() => void) | undefined;
@@ -224,9 +239,15 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
       }
     }
 
+    // Pass agent + model at session.create per the CLI's pattern
+    // (cmd/run.ts:370-388 in sst/opencode@dev). The agent registered on the
+    // session governs which tools the loop has access to; without it the
+    // model defaults to whichever agent the server resolves and may not be
+    // able to use read/grep/glob.
     const created = await client.session.create({
       directory: cwd,
       title: "tech-decomposition",
+      agent: (body.agent || "build").trim(),
       model:
         resolvedModel != null &&
         resolvedModel.providerID.trim() !== "" &&
@@ -261,6 +282,17 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
           }
         : undefined;
 
+      // ``agent`` selects which OpenCode agent runs the loop. ``build`` is the
+      // default full-tool agent (read/grep/glob/ls/etc all allowed via its
+      // permission ruleset). We pass it explicitly so this code path is the
+      // same as ``opencode run --agent build``.
+      //
+      // We deliberately do NOT pass ``tools: {...}`` here — per the SDK type
+      // ``Config.tools`` (gen/types.gen.d.ts:927), this map is a DISABLE
+      // filter applied on top of agent permissions, not an enable list. All
+      // tools default to true; passing them as true is a no-op. We mask
+      // writes via the permission ruleset on session.create instead.
+      const agentName = (body.agent || "build").trim();
       const promptRes = await withTimeout(
         client.session.prompt({
           sessionID,
@@ -273,6 +305,7 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
                   modelID: resolvedModel.modelID,
                 }
               : undefined,
+          agent: agentName,
           ...(format ? { format } : {}),
           parts: [{ type: "text", text: body.prompt }],
         }),
@@ -330,6 +363,51 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
       }
 
       const tokens = assistant.tokens;
+      // The SDK's session.prompt returns ONLY the final assistant message in
+      // ``data`` — the agentic loop's intermediate messages (each carrying a
+      // ``type:"tool"`` part) live in the session's message log. Fetch all
+      // messages to get the full tool trace AND the actual file paths the
+      // agent read (used by the recall scorer downstream).
+      const allMessages = await client.session.messages({
+        sessionID,
+        directory: cwd,
+      });
+      const messageList = Array.isArray(allMessages?.data) ? allMessages.data : [];
+      const allParts: unknown[] = [];
+      for (const msg of messageList) {
+        const ps = Array.isArray((msg as { parts?: unknown[] }).parts)
+          ? (msg as { parts: unknown[] }).parts
+          : [];
+        for (const p of ps) allParts.push(p);
+      }
+      const toolCallParts = allParts.filter(
+        (p) => p && typeof p === "object" && (p as { type?: string }).type === "tool",
+      );
+      const toolNames = Array.from(
+        new Set(
+          toolCallParts
+            .map((p) => (p as { tool?: string }).tool)
+            .filter((n): n is string => typeof n === "string" && n.length > 0),
+        ),
+      );
+      // Extract repo-relative paths from ``read`` tool calls so the recall
+      // scorer can compare them against each case's ``expected_files``.
+      const readPaths = new Set<string>();
+      const cwdAbs = cwd ?? "";
+      for (const p of toolCallParts) {
+        const tp = p as {
+          tool?: string;
+          state?: { input?: { filePath?: string } };
+        };
+        if (tp.tool !== "read") continue;
+        const fp = tp.state?.input?.filePath;
+        if (typeof fp !== "string" || !fp) continue;
+        const rel =
+          cwdAbs && fp.startsWith(cwdAbs + "/")
+            ? fp.slice(cwdAbs.length + 1)
+            : fp;
+        readPaths.add(rel.replace(/\\/g, "/"));
+      }
 
       return {
         ok: true,
@@ -338,6 +416,9 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
         tokensOut: typeof tokens?.output === "number" ? tokens.output : undefined,
         costUsd: typeof assistant.cost === "number" ? assistant.cost : undefined,
         model: modelSpec,
+        toolCalls: toolCallParts.length,
+        toolNames,
+        groundingPaths: Array.from(readPaths).sort(),
       };
     } finally {
       await client.session.delete({ sessionID, directory: cwd }).catch(() => undefined);

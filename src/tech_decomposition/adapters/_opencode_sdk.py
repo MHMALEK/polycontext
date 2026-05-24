@@ -188,11 +188,22 @@ def _metrics_from(out: dict[str, Any], start: float) -> AdapterMetrics:
     extra: dict[str, Any] = {"agent_node": True, "opencode_mode": True}
     if out.get("structuredOutputFailed"):
         extra["structured_output_failed"] = True
+    if out.get("toolNames"):
+        extra["opencode_tool_names"] = list(out["toolNames"])
+    # Surface the files the agent actually read so the context_recall scorer
+    # can compute recall against each case's labeled ``expected_files``. The
+    # opencode adapter retrieves on-demand via tools, not via a prefetch
+    # block — without this, recall would be uninformative for it.
+    paths = out.get("groundingPaths")
+    if isinstance(paths, list):
+        extra["grounding_paths"] = sorted(p for p in paths if isinstance(p, str))
+    tc = out.get("toolCalls")
     return AdapterMetrics(
         duration_ms=int((time.monotonic() - start) * 1000),
         tokens_in=out.get("tokensIn"),
         tokens_out=out.get("tokensOut"),
         cost_usd=out.get("costUsd"),
         model=out.get("model"),
+        tool_calls=int(tc) if isinstance(tc, int) else 0,
         extra=extra,
     )
