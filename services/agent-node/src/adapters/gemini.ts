@@ -43,6 +43,14 @@ export type GeminiRunBody = {
    * a separate Flash model.
    */
   responseSchema?: Record<string, unknown>;
+  /**
+   * When false, run the no-tools path even when ``cwd`` is set. The
+   * model answers single-shot from whatever the prompt already contains
+   * (used for the UI's "Grounded only" and "Direct" modes). Defaults
+   * to true — i.e. tools are wired in whenever a workspace cwd is
+   * present, which is the historical behavior.
+   */
+  toolsEnabled?: boolean;
 };
 
 
@@ -232,8 +240,13 @@ export async function runGemini(body: GeminiRunBody): Promise<{
     body.modelId || process.env.GEMINI_SDK_MODEL || "gemini-2.5-pro";
   const timeoutMs = (body.timeoutSec ?? 600) * 1000;
   const cwd = (body.cwd || "").trim();
+  // Honor the per-request tools_enabled flag from the Python adapter. When
+  // false, take the no-tools path even with a valid workspace cwd — the
+  // model answers single-shot from whatever's already in the prompt.
+  // This implements the UI's "Grounded only" / "Direct" modes for gemini.
+  const toolsEnabled = body.toolsEnabled !== false; // default true
 
-  if (!cwd) {
+  if (!cwd || !toolsEnabled) {
     const ai = new GoogleGenAI({ apiKey });
     try {
       const response = await ai.models.generateContent({

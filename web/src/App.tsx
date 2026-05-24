@@ -96,9 +96,11 @@ function askModeShortLabel(m: AskMode): string {
 const ADAPTER_SUPPORTS_TOOLS_TOGGLE: Record<string, boolean> = {
   opencode: true,
   pipeline: true,
-  // gemini, cursor, claude_code, cline_sdk, openai_agents, sourcebot —
-  // all currently treat tools_enabled as advisory. Future work: thread
-  // the flag through agent-node and disable tool registration server-side.
+  gemini: true,  // wired via agent-node — toolsEnabled=false routes to
+                 // the no-tools generateContent path (no AFC, no CallableTool).
+  // cursor, claude_code, cline_sdk, openai_agents, sourcebot —
+  // still treat tools_enabled as advisory. Same threading pattern would
+  // work for them; not yet wired.
 };
 
 function modeIsSupported(mode: AskMode, adapter: string): boolean {

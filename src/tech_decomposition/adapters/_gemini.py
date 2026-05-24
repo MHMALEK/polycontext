@@ -175,7 +175,9 @@ class GeminiAdapter(Adapter):
         # The gemini adapter accepts bare Gemini ids (``gemini-2.5-flash``)
         # — strip ``gemini:`` or ``google/`` provider prefixes if present.
         override = _strip_gemini_prefix(inp.model)
-        return await self.ask_configured(inp, model_id=override)
+        return await self.ask_configured(
+            inp, model_id=override, tools_enabled=inp.tools_enabled,
+        )
 
     async def ask_configured(
         self,
@@ -183,6 +185,7 @@ class GeminiAdapter(Adapter):
         *,
         model_id: str | None = None,
         max_tool_rounds: int | None = None,
+        tools_enabled: bool = True,
     ) -> AdapterAskResult:
         t = time.monotonic()
         out = await self._run(
@@ -192,6 +195,7 @@ class GeminiAdapter(Adapter):
             timeout_seconds=float(self.settings.gemini_sdk_timeout_seconds),
             cwd=self._cwd_for_repos(inp.repos),
             max_tool_rounds=max_tool_rounds,
+            tools_enabled=tools_enabled,
         )
         return AdapterAskResult(
             adapter=self.name,
@@ -248,6 +252,7 @@ class GeminiAdapter(Adapter):
         cwd: Path | str | None = None,
         response_schema: dict[str, Any] | None = None,
         max_tool_rounds: int | None = None,
+        tools_enabled: bool = True,
     ) -> dict[str, Any]:
         url = self.settings.agent_node_url.rstrip("/") + "/adapters/gemini/run"
         body: dict[str, Any] = {
@@ -263,6 +268,10 @@ class GeminiAdapter(Adapter):
             body["responseSchema"] = response_schema
         if max_tool_rounds is not None:
             body["maxToolRounds"] = max_tool_rounds
+        # Forward the per-request tools-mask. agent-node's gemini handler
+        # routes to the no-tools generateContent path when this is false.
+        if not tools_enabled:
+            body["toolsEnabled"] = False
         async with httpx.AsyncClient(timeout=timeout_seconds + 30) as c:
             r = await c.post(url, json=body)
         if r.status_code >= 400:
