@@ -55,6 +55,64 @@ def score_response(*, case: Case, response: dict[str, Any]) -> Score:
     return Score(notes=f"no scorer for job={case.job}")
 
 
+def _grounding_paths_from_response(response: dict[str, Any]) -> list[str]:
+    """Pull the retrieved-snippet paths from adapter metrics. Returns [] when
+    the adapter doesn't surface them (only the pipeline adapter does today)."""
+    metrics = response.get("metrics") or {}
+    extra = metrics.get("extra") or {}
+    paths = extra.get("grounding_paths") or []
+    return [str(p) for p in paths if isinstance(p, str)]
+
+
+def _context_recall_check(case: Case, response: dict[str, Any]) -> Check | None:
+    """Compute context_recall = |expected ∩ retrieved| / |expected|.
+
+    Drives a single Check with weight 3.0 so it dominates the rule-based
+    substring checks but doesn't override the LLM judge when that fires.
+    Treats each entry in ``expected.expected_files`` as a substring matched
+    against ``metrics.extra.grounding_paths``. Returns None when the case has
+    no labels or the adapter didn't surface retrieved paths (no signal).
+    """
+    expected = case.expected or {}
+    needles = expected.get("expected_files") or []
+    if not needles:
+        return None
+    retrieved = _grounding_paths_from_response(response)
+    if not retrieved:
+        return Check(
+            name="context_recall",
+            ok=False,
+            detail="adapter surfaced no grounding_paths in metrics.extra",
+            weight=3.0,
+        )
+
+    def _norm(s: str) -> str:
+        return str(s).replace("\\", "/").lstrip("/")
+
+    paths_norm = [_norm(p) for p in retrieved]
+    matched = 0
+    missing: list[str] = []
+    for n in needles:
+        target = _norm(n)
+        if any(target in p for p in paths_norm):
+            matched += 1
+        else:
+            missing.append(target)
+    total = len(needles)
+    recall = matched / total if total > 0 else 0.0
+    detail = f"{recall:.2f} ({matched}/{total} expected paths in retrieval)"
+    if missing:
+        detail += f"; missing: {', '.join(missing[:3])}"
+        if len(missing) > 3:
+            detail += f" (+{len(missing) - 3} more)"
+    return Check(
+        name="context_recall",
+        ok=recall >= float(expected.get("min_context_recall", 0.7)),
+        detail=detail,
+        weight=3.0,
+    )
+
+
 async def score_response_async(
     *,
     case: Case,
@@ -273,6 +331,9 @@ def _score_ask(case: Case, resp: dict[str, Any]) -> Score:
             detail=needle,
             weight=0.5,
         ))
+    cr = _context_recall_check(case, resp)
+    if cr is not None:
+        checks.append(cr)
 
     return _aggregate(checks)
 
@@ -344,6 +405,9 @@ def _score_decompose(case: Case, resp: dict[str, Any]) -> Score:
             detail=substr,
             weight=1.5,
         ))
+    cr = _context_recall_check(case, resp)
+    if cr is not None:
+        checks.append(cr)
 
     return _aggregate(checks)
 

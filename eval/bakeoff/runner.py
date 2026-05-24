@@ -65,6 +65,7 @@ def _case_input_for_adapter(case: Case, *, grounded: bool = False) -> dict[str, 
             "top_k": case.input.get("top_k", 8),
             "branch": case.input.get("branch"),
             "starting_ref": case.input.get("starting_ref"),
+            "tags": case.tags or case.input.get("tags"),
             "grounded": bool(grounded or case.input.get("grounded", False)),
         }
     if case.job == "decompose":
@@ -72,6 +73,7 @@ def _case_input_for_adapter(case: Case, *, grounded: bool = False) -> dict[str, 
             "query": case.input.get("query"),
             "repos": case.input.get("repos"),
             "mode": case.input.get("mode", "auto"),
+            "tags": case.tags or case.input.get("tags"),
         }
     raise ValueError(f"unsupported job: {case.job!r}")
 

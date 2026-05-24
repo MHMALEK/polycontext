@@ -136,6 +136,69 @@ def _response_preview(rec: dict[str, Any]) -> str:
     return ""
 
 
+def _render_quality_matrix(
+    rows_by_case: dict[str, list[dict[str, Any]]],
+    adapter_order: list[str],
+) -> str:
+    """Per-case retrieval-vs-synthesis split.
+
+    Each cell shows: ``<diag> R=<recall> C=<coverage> A=<accuracy>`` where
+    diag ∈ {✓, R, S, RS, ?}. R/C/A are dropped when that dimension didn't
+    run on that case. Returns "" when no case has any quality data.
+    """
+    has_any = False
+    case_rows: dict[str, dict[str, dict[str, float]]] = {}
+    case_diag: dict[str, dict[str, str]] = {}
+    for case_id, recs in rows_by_case.items():
+        for rec in recs:
+            checks = (rec.get("score") or {}).get("checks") or []
+            q = _quality_values_from_checks(checks)
+            if not q:
+                continue
+            has_any = True
+            case_rows.setdefault(case_id, {})[rec.get("adapter", "?")] = q
+            case_diag.setdefault(case_id, {})[rec.get("adapter", "?")] = _diagnose(q)
+    if not has_any:
+        return ""
+
+    adapters = [a for a in adapter_order if any(a in case_rows.get(c, {}) for c in case_rows)]
+    if not adapters:
+        return ""
+
+    lines: list[str] = []
+    lines.append("## Quality matrix — retrieval vs synthesis")
+    lines.append("")
+    lines.append(
+        "_Diagnosis: **✓** good · **R** retrieval missed the labeled files · "
+        "**S** synthesis didn't carry the gold facts even though retrieval got them · "
+        "**RS** both failed · **?** insufficient labels for this case._",
+    )
+    lines.append("")
+    headers = ["Case", *adapters]
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("| " + " | ".join("---" for _ in headers) + " |")
+    for case_id in sorted(case_rows.keys()):
+        per = case_rows[case_id]
+        diag = case_diag[case_id]
+        cells = [f"`{case_id}`"]
+        for a in adapters:
+            q = per.get(a)
+            if q is None:
+                cells.append("—")
+                continue
+            d = diag.get(a, "?")
+            parts: list[str] = [f"**{d}**"]
+            if "context_recall" in q:
+                parts.append(f"R={q['context_recall']:.2f}")
+            if "gold_coverage" in q:
+                parts.append(f"C={q['gold_coverage']:.2f}")
+            if "gold_accuracy" in q:
+                parts.append(f"A={q['gold_accuracy']:.2f}")
+            cells.append(" ".join(parts))
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 def _render_ask_full_section(recs: list[dict[str, Any]]) -> str:
     ask_recs = [r for r in recs if r.get("job") == "ask" and r.get("ok")]
     if not ask_recs:
@@ -218,6 +281,58 @@ class _Totals:
     tok_out_n: int = 0
     tool_calls_sum: int = 0
     tool_calls_n: int = 0
+    # Quality dimensions: each adapter's mean for the metric across cases
+    # where the check actually ran.
+    recall_sum: float = 0.0
+    recall_n: int = 0
+    gold_cov_sum: float = 0.0
+    gold_cov_n: int = 0
+    gold_acc_sum: float = 0.0
+    gold_acc_n: int = 0
+
+
+_QUALITY_CHECK_NAMES = {"context_recall", "gold_coverage", "gold_accuracy"}
+
+
+def _quality_values_from_checks(checks: list[dict[str, Any]]) -> dict[str, float]:
+    """Pull numeric values for the three quality dimensions out of a record's
+    score.checks. Each writer encodes the numeric in ``detail`` as a leading
+    ``"0.NN"`` (see _context_recall_check + _judge_against_gold). Returns a
+    partial dict — only keys whose check actually ran are present.
+    """
+    out: dict[str, float] = {}
+    for c in checks or []:
+        name = c.get("name")
+        if name not in _QUALITY_CHECK_NAMES:
+            continue
+        detail = c.get("detail") or ""
+        head = detail.strip().split()[0] if detail.strip() else ""
+        try:
+            out[name] = float(head)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _diagnose(q: dict[str, float]) -> str:
+    """Tag the failure mode at-a-glance: ✓ good, R retrieval miss, S synthesis
+    miss, RS both, ? insufficient data.
+
+    Thresholds match the Check pass thresholds: recall>=0.7, coverage>=0.7.
+    """
+    recall = q.get("context_recall")
+    cov = q.get("gold_coverage")
+    if recall is None and cov is None:
+        return "?"
+    r_ok = recall is None or recall >= 0.7
+    s_ok = cov is None or cov >= 0.7
+    if r_ok and s_ok:
+        return "✓"
+    if not r_ok and not s_ok:
+        return "RS"
+    if not r_ok:
+        return "R"
+    return "S"
 
 
 def _leaderboard(summary_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -237,6 +352,16 @@ def _leaderboard(summary_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if sc is None:
                 sc = 0.0
             t.score_sum += float(sc)
+            q = row.get("quality") or {}
+            if "context_recall" in q:
+                t.recall_sum += float(q["context_recall"])
+                t.recall_n += 1
+            if "gold_coverage" in q:
+                t.gold_cov_sum += float(q["gold_coverage"])
+                t.gold_cov_n += 1
+            if "gold_accuracy" in q:
+                t.gold_acc_sum += float(q["gold_accuracy"])
+                t.gold_acc_n += 1
 
         if row.get("ok") and row.get("job") == "ask":
             obs = row.get("ask_observed") or {}
@@ -275,6 +400,14 @@ def _leaderboard(summary_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "avg_tokens_in": round(t.tok_in_sum / t.tok_in_n, 1) if t.tok_in_n else None,
             "avg_tokens_out": round(t.tok_out_sum / t.tok_out_n, 1) if t.tok_out_n else None,
             "avg_tool_calls": round(t.tool_calls_sum / t.tool_calls_n, 2) if t.tool_calls_n else None,
+            "avg_context_recall": round(t.recall_sum / t.recall_n, 3) if t.recall_n else None,
+            "avg_gold_coverage": round(t.gold_cov_sum / t.gold_cov_n, 3) if t.gold_cov_n else None,
+            "avg_gold_accuracy": round(t.gold_acc_sum / t.gold_acc_n, 3) if t.gold_acc_n else None,
+            "quality_n": {
+                "context_recall": t.recall_n,
+                "gold_coverage": t.gold_cov_n,
+                "gold_accuracy": t.gold_acc_n,
+            },
         }
         out.append(row)
 
@@ -310,6 +443,8 @@ def render_report(run_dir: Path) -> tuple[Path, Path]:
             cost = _safe_float(m.get("cost_usd"))
             ask_observed = _flatten_ask_observables(rec)
 
+            checks = (rec.get("score") or {}).get("checks") or []
+            quality = _quality_values_from_checks(checks)
             row = {
                 "case_id": case_id,
                 "adapter": adapter,
@@ -326,6 +461,8 @@ def render_report(run_dir: Path) -> tuple[Path, Path]:
                 "run_id": rec.get("run_id"),
                 "error": rec.get("error"),
                 "ask_observed": {k: v for k, v in ask_observed.items() if v is not None},
+                "quality": quality,
+                "diagnosis": _diagnose(quality),
             }
             summary.append(row)
             rows_by_case[case_id].append(rec)
@@ -363,31 +500,53 @@ def _markdown(manifest: dict[str, Any], leaderboard: list[dict[str, Any]],
 
     lines.append("## Leaderboard")
     lines.append("")
-    lines.append("| Adapter | runs | succ | avg score | avg wall ms | total $ | avg chars¹ | avg cites¹ | avg tok in² | avg tok out² | avg tools² |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append(
+        "| Adapter | runs | succ | avg score | recall³ | gold cov³ | gold acc³ | "
+        "avg wall ms | total $ | avg chars¹ | avg cites¹ | avg tok in² | avg tok out² | avg tools² |",
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for row in leaderboard:
         chars = row.get("avg_answer_chars")
         cites = row.get("avg_citations")
         tin = row.get("avg_tokens_in")
         tout = row.get("avg_tokens_out")
         tools = row.get("avg_tool_calls")
+        recall = row.get("avg_context_recall")
+        gcov = row.get("avg_gold_coverage")
+        gacc = row.get("avg_gold_accuracy")
+        qn = row.get("quality_n") or {}
+        recall_cell = f"{recall:.2f} (n={qn.get('context_recall', 0)})" if recall is not None else "—"
+        gcov_cell = f"{gcov:.2f} (n={qn.get('gold_coverage', 0)})" if gcov is not None else "—"
+        gacc_cell = f"{gacc:.2f} (n={qn.get('gold_accuracy', 0)})" if gacc is not None else "—"
         lines.append(
             f"| `{row['adapter']}` | {row['runs']} | "
             f"{row['successes']}/{row['runs']} ({int(row['success_rate']*100)}%) | "
-            f"{row['avg_score']:.2f} | {row['avg_duration_ms']} | "
+            f"{row['avg_score']:.2f} | {recall_cell} | {gcov_cell} | {gacc_cell} | "
+            f"{row['avg_duration_ms']} | "
             f"${row['total_cost_usd']:.4f} | "
             f"{chars if chars is not None else '—'} | "
             f"{cites if cites is not None else '—'} | "
             f"{tin if tin is not None else '—'} | "
             f"{tout if tout is not None else '—'} | "
-            f"{tools if tools is not None else '—'} |"
+            f"{tools if tools is not None else '—'} |",
         )
     lines.append("")
     lines.append(
         "¹ **`ask`** successes only · ² averages include only runs where "
-        "**that** metric key was populated by the adapter."
+        "**that** metric key was populated by the adapter · "
+        "³ **recall** = context_recall (labeled `expected_files` retrieved); "
+        "**gold cov** = LLM-judge coverage vs `gold_answer`; "
+        "**gold acc** = LLM-judge accuracy (no contradictions). "
+        "Each `n=` is how many cases supplied that dimension.",
     )
     lines.append("")
+
+    # Quality matrix: per-case retrieval vs synthesis split. Only emitted when
+    # at least one case has either dimension — otherwise it's noise.
+    quality_section = _render_quality_matrix(rows_by_case, sorted(manifest.get("adapters", [])))
+    if quality_section:
+        lines.append(quality_section)
+        lines.append("")
 
     lines.append("## Per-case overview")
     lines.append("")
