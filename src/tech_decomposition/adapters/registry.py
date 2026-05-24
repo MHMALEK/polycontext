@@ -26,6 +26,7 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "openai_agents": ("tech_decomposition.adapters._openai_agents", "OpenAIAgentsAdapter"),
     "opencode": ("tech_decomposition.adapters._opencode_sdk", "OpencodeSDKAdapter"),
     "sourcebot": ("tech_decomposition.adapters._sourcebot", "SourcebotAdapter"),
+    "pipeline": ("tech_decomposition.adapters._pipeline", "PipelineAdapter"),
 }
 
 

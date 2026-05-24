@@ -55,8 +55,15 @@ class Settings(BaseSettings):
     retrieval_snippet_lines: int = 8
     decompose_max_context_chars: int = 80_000
     # Optional open-source cross-encoder reranker for grounding snippets.
-    grounding_reranker_model: str = ""
+    grounding_reranker_model: str = "BAAI/bge-reranker-v2-m3"
     grounding_reranker_max_candidates: int = 48
+    # Cap per-repo snippets before rerank to prevent one noisy repo crowding out
+    # cross-repo evidence. 0 = disabled (preserve legacy behavior).
+    grounding_per_repo_cap: int = 5
+    # Re-read source files to expand each retained snippet by ±N lines so the
+    # model sees complete functions instead of fragments. 0 = disabled.
+    grounding_expand_context_lines: int = 30
+    grounding_expand_max_lines: int = 120
 
     output_dir: Path = Path("./outputs")
 
@@ -108,6 +115,20 @@ class Settings(BaseSettings):
     serena_url: str = ""
     serena_api_key: str = ""
     serena_timeout_seconds: float = 20.0
+
+    # ----- tiered pipeline adapter (adapters/_pipeline.py) --------------------
+    # Cheap synthesis model for prefetch-only path (Flash recommended).
+    pipeline_synthesis_model: str = "gemini-2.5-flash"
+    # Agent adapter when retrieval coverage is insufficient.
+    pipeline_fallback_adapter: str = "gemini"
+    pipeline_fallback_model: str = "gemini-2.5-flash"
+    # Pro model for validation / e2e / low-coverage agent fallback.
+    pipeline_escalation_model: str = "gemini-2.5-pro"
+    pipeline_max_tool_rounds: int = 8
+    pipeline_min_snippets: int = 3
+    pipeline_min_chars: int = 800
+    # Structurer model for decompose JSON coercion (Flash keeps cost low).
+    pipeline_structurer_model: str = "gemini-2.5-flash"
 
     @field_validator("enabled_adapters", mode="before")
     @classmethod
