@@ -30,3 +30,8 @@ expected:
   must_touch_repos: [frontend, traceability]
   must_mention_files:
     - questionnaire
+  expected_files:
+    - frontend/src/components/Suppliers/Questionnaire/components/QuestionnaireForm.tsx
+    - traceability/src/services/questionnaire_service.py
+    - traceability/src/sqlalchemy_pg/repositories/questionnaire_response_repository.py
+    - traceability/src/models/questionnaire_model.py

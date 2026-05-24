@@ -20,6 +20,14 @@ text = "what are the current user roles we have in the platform and describe wha
 min_chars = 200
 must_mention = ["DATA_VIEWER", "DATA_UPLOADER", "DATA_ADMIN", "DATA_SUBMITTER"]
 should_mention = ["RolesChecker", "deprecated", "supplier"]
+# Files that, if retrieved, give the model the answer. Recall = fraction of these
+# that appear in metrics.extra.grounding_paths.
+expected_files = [
+    "traceability/src/common/constants.py",
+    "traceability/src/models/user_model.py",
+    "traceability/src/common/keycloak_auth/rbac.py",
+    "frontend/src/state/user.state.constants.ts",
+]
 gold_answer = """
 The platform uses role-based access control via Keycloak. Five roles exist:
 
@@ -40,6 +48,10 @@ text = "can DATA_VIEWER_ROLE access the Settings area at all? Find where Setting
 min_chars = 150
 must_mention = ["DATA_VIEWER", "uploader", "admin"]
 should_mention = ["Settings", "route"]
+expected_files = [
+    "frontend/src/routes/Layout.tsx",
+    "frontend/src/state/user.state.constants.ts",
+]
 gold_answer = """
 No. DATA_VIEWER_ROLE cannot access the Settings area in the UI.
 
@@ -59,6 +71,10 @@ text = "do I need to have DATA_VIEWER_ROLE on my account in order to access what
 min_chars = 150
 must_mention = ["DATA_VIEWER", "DATA_UPLOADER", "RolesChecker"]
 should_mention = ["OR", "independent"]
+expected_files = [
+    "traceability/src/common/keycloak_auth/rbac.py",
+    "traceability/src/common/constants.py",
+]
 gold_answer = """
 No, DATA_VIEWER_ROLE is not a prerequisite for DATA_UPLOADER_ROLE. They are independent roles.
 
@@ -78,6 +94,10 @@ text = "can one user have more than one role, for example data viewer and data u
 min_chars = 100
 must_mention = ["multiple", "roles"]
 should_mention = ["realm_access", "Keycloak", "RolesChecker"]
+expected_files = [
+    "traceability/src/common/keycloak_auth/rbac.py",
+    "frontend/src/state/user.state.constants.ts",
+]
 gold_answer = """
 Yes. The system is designed for multi-role users.
 
@@ -100,6 +120,11 @@ min_chars = 120
 min_citations = 1
 must_mention = ["regex"]
 should_mention = ["unicode", "validator", "template"]
+expected_files = [
+    "frontend/src/components/settings/master-data/master-record-form/validationRules.ts",
+    "traceability/src/common/constants.py",
+    "traceability/src/models/master_data_model.py",
+]
 gold_answer = """
 Non-English characters (é, ñ, etc.) are accepted by the TEMPLATE-UPLOAD path but NOT by the UI or (for Farm Name) the API.
 
@@ -123,6 +148,11 @@ min_chars = 150
 min_citations = 1
 must_mention = ["regex"]
 should_mention = ["NODE_NAME_PATTERN", "IDENTIFIER_STRING_PATTERN"]
+expected_files = [
+    "traceability/src/common/constants.py",
+    "traceability/src/models/master_data_model.py",
+    "frontend/src/components/settings/master-data/master-record-form/validationRules.ts",
+]
 gold_answer = """
 Farm Name (NODE_NAME_PATTERN):
 - Allowed: alphanumeric, space, and these specials: - _ , . ' ( ) & % # /
@@ -143,6 +173,10 @@ text = "when a supplier uploads the traceability template, do we check if the St
 min_chars = 150
 must_mention = ["StartNodeID", "StartNodeName"]
 should_mention = ["master data", "overwrite"]
+expected_files = [
+    "traceability/src/models/template_configuration.py",
+    "traceability/src/excel_generator/schema_config.py",
+]
 gold_answer = """
 No — the system does not check that StartNodeName matches StartNodeID. Instead, the StartNodeID is used to look up the node from master data and the system overwrites the supplied name with the official one.
 
@@ -160,6 +194,10 @@ text = "on geojson upload, in static check, how is the country being checked?"
 min_chars = 150
 must_mention = ["NodeID", "country"]
 should_mention = ["static", "SQL", "master data"]
+expected_files = [
+    "data-cloud-functions/src/cloud_functions/composer_dag_trigger/geolocation/geo_validator.py",
+    "data-cloud-functions/src/cloud_functions/composer_dag_trigger/geolocation/validators.py",
+]
 gold_answer = """
 During the static check, the country is NOT validated in the GeoJSON file itself. The GeoJSON doesn't carry a Country property — instead it must carry a NodeID, and country is resolved later.
 
@@ -182,6 +220,11 @@ text = "On Data Sharing, if I do not select anything aside from Geolocation, wha
 min_chars = 150
 must_mention = ["deforestation", "geolocation"]
 should_mention = ["includeGeolocation", "includeDeforestation", "GeoSpatialDumpStrategy"]
+expected_files = [
+    "traceability/src/utils/data_sharing/dump_strategies.py",
+    "traceability/src/utils/data_sharing/builder.py",
+    "traceability/src/models/data_sharing.py",
+]
 gold_answer = """
 No — selecting only Geolocation does NOT include Deforestation status on import.
 
@@ -198,6 +241,11 @@ text = "on data sharing to another environment, if I share deforestation status,
 min_chars = 200
 must_mention = ["sender", "TCL"]
 should_mention = ["import", "merge", "recalculation"]
+expected_files = [
+    "data/src/composer/dag/import_package.py",
+    "traceability/src/utils/data_sharing/dump_strategies.py",
+    "traceability/src/sqlalchemy_pg/repositories/deforestation_thresholds_repository.py",
+]
 gold_answer = """
 The sender's deforestation status is used in the receiver environment. Receiver's TCL thresholds are NOT automatically applied during import.
 
@@ -215,6 +263,11 @@ text = "In the dashboard, what number is the 'Suppliers' number? It does not fit
 min_chars = 200
 must_mention = ["BigQuery", "PostgreSQL"]
 should_mention = ["SupplyChainSourcingFarms", "Organization"]
+expected_files = [
+    "traceability/src/services/analytics_service.py",
+    "traceability/src/sqlalchemy_pg/repositories/organizations_repository.py",
+    "frontend/src/components/Dashboard/GeneralMetricTiles/GeneralMetricTiles.tsx",
+]
 gold_answer = """
 The dashboard's "Suppliers" number ≠ the Suppliers page count because they come from different sources and apply different filters.
 
@@ -244,6 +297,10 @@ text = "how does user authorization work currently with JWT? Do we use it as a s
 min_chars = 200
 must_mention = ["stateless", "JWT"]
 should_mention = ["JWKS", "RolesChecker", "Keycloak"]
+expected_files = [
+    "traceability/src/common/keycloak_auth/auth.py",
+    "traceability/src/common/keycloak_auth/rbac.py",
+]
 gold_answer = """
 Stateless. The system does NOT call Keycloak for introspection on every REST call — it validates the JWT locally.
 
@@ -271,4 +328,12 @@ Trace the end-to-end flow across repos, including:
 min_chars = 400
 must_mention = ["frontend", "traceability", "data-cloud-functions", "data"]
 should_mention = ["validation", "status", "error"]
+# Trace question — at least one file per repo must appear in retrieval.
+expected_files = [
+    "frontend/src/components/settings/master-data/SettingsMasterData.component.tsx",
+    "traceability/src/services/master_data_service.py",
+    "traceability/src/api/v2/controllers/master_data_controller.py",
+    "data/src/composer/dag/master_data_parser.py",
+    "data/src/composer/dag/master_data_manager.py",
+]
 # No gold_answer — this is a synthesis question, no Sentinel reference available.

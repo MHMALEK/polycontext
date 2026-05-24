@@ -24,3 +24,7 @@ expected:
   min_subtasks: 2
   max_subtasks: 6
   must_touch_repos: [frontend]
+  # Recall labels — fraction of these paths that should appear in
+  # metrics.extra.grounding_paths for the decompose adapter.
+  expected_files:
+    - frontend/src/components/settings/master-data/master-record-form/validationRules.ts
