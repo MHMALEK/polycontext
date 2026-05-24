@@ -59,9 +59,19 @@ class SerenaMcpClient:
 
     async def call(self, tool: str, args: dict[str, Any]) -> str:
         """Call ``tool`` with ``args`` and return its text content (joined)."""
+        results = await self.batch_calls([(tool, args)])
+        return results[0]
+
+    async def batch_calls(self, calls: list[tuple[str, dict[str, Any]]]) -> list[str]:
+        """Run multiple tool calls on one MCP session (required for activate_project)."""
+        if not calls:
+            return []
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             session_id = await self._init(client)
-            return await self._tool_call(client, session_id, tool, args)
+            out: list[str] = []
+            for tool, args in calls:
+                out.append(await self._tool_call(client, session_id, tool, args))
+            return out
 
     async def _post(
         self, client: httpx.AsyncClient, payload: dict[str, Any], *, session_id: str | None,

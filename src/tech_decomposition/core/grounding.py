@@ -26,11 +26,12 @@ Callers:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json as _json
 import os
 import re
 import time
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, Field
@@ -85,6 +86,16 @@ class GroundingMetrics(BaseModel):
         description="Brief reasoning from the classifier — visible in the UI/logs.",
     )
     classifier_ms: int = 0
+    rerank_ms: int = 0
+    rerank_model: str = ""
+    rerank_candidates: int = 0
+    per_repo_cap_applied: int = 0
+    per_repo_cap_dropped: int = 0
+    expanded_snippets: int = 0
+    expansion_added_chars: int = 0
+    serena_symbol_lookups: int = 0
+    serena_symbol_hits: int = 0
+    serena_symbol_ms: int = 0
 
 
 class GroundingDecision(BaseModel):
@@ -332,8 +343,334 @@ def _quote_if_needed(t: str) -> str:
     return f'"{t}"' if (" " in t or any(c in t for c in '()')) else t
 
 
+async def _merge_per_term_files(
+    client: httpx.AsyncClient,
+    search_fn,
+    terms: list[str],
+    *,
+    top_k: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Run per-term (with variants) searches in parallel; merge unique files."""
+    t_fallback = time.monotonic()
+    expanded = _expand_with_variants(terms)
+    # Apply the same noise filters as the AND-mode query — the per-term
+    # fallback is where most noise sneaks in because each lone term matches
+    # broadly. Without filters, "user" alone returns 100s of test files.
+    quoted_terms = [f"{_quote_if_needed(t)} {_ZOEKT_NOISE_FILTERS}" for t in expanded]
+    per_term = await asyncio.gather(
+        *[search_fn(client, q) for q in quoted_terms],
+        return_exceptions=False,
+    )
+    extra_ms = int((time.monotonic() - t_fallback) * 1000)
+
+    def _file_id(f: dict[str, Any]) -> str:
+        return f"{f.get('repository','')}::{_file_path_text(f.get('fileName'))}"
+
+    seen: set[str] = set()
+    merged: list[dict[str, Any]] = []
+    for _status, found, _ms in per_term:
+        for f in found:
+            fid = _file_id(f)
+            if fid in seen:
+                continue
+            seen.add(fid)
+            merged.append(f)
+            if len(merged) >= top_k:
+                break
+        if len(merged) >= top_k:
+            break
+    return merged, extra_ms
+
+
+@dataclass
+class _SourcebotFetchResult:
+    snippets: list[GroundingSnippet]
+    files: list[dict[str, Any]]
+    duration_ms: int
+    final_query: str
+    error: str | None = None
+    early_context: GroundedContext | None = None
+
+
+async def _sourcebot_fetch(
+    *,
+    url: str,
+    headers: dict[str, str],
+    terms: list[str],
+    top_k: int,
+    context_lines: int,
+    broad: bool,
+    extractor: str,
+    classifier_decision: str,
+    classifier_reason: str,
+    classifier_ms: int,
+) -> _SourcebotFetchResult:
+    async def _search(client: httpx.AsyncClient, q: str) -> tuple[int, list[dict[str, Any]], int]:
+        t0 = time.monotonic()
+        try:
+            r = await client.post(
+                url,
+                json={"query": q, "matches": top_k, "contextLines": context_lines},
+                headers=headers,
+            )
+        except httpx.HTTPError:
+            return 0, [], int((time.monotonic() - t0) * 1000)
+        ms = int((time.monotonic() - t0) * 1000)
+        if r.status_code != 200:
+            return r.status_code, [], ms
+        body = r.json() if r.content else {}
+        return r.status_code, (body.get("files") or []), ms
+
+    def _file_id(f: dict[str, Any]) -> str:
+        return f"{f.get('repository','')}::{_file_path_text(f.get('fileName'))}"
+
+    and_query = _build_sourcebot_query(terms, mode="and")
+    final_query = and_query
+    total_ms = 0
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+        status, files, dur = await _search(client, and_query)
+        total_ms += dur
+        if status != 200:
+            return _SourcebotFetchResult(
+                snippets=[],
+                files=[],
+                duration_ms=total_ms,
+                final_query=and_query,
+                error=f"HTTP {status}",
+                early_context=GroundedContext(metrics=GroundingMetrics(
+                    duration_ms=total_ms,
+                    sources=["sourcebot"],
+                    error=f"HTTP {status}",
+                    extracted_terms=terms,
+                    search_query=and_query,
+                    extractor=extractor,
+                    classifier_decision=classifier_decision,
+                    classifier_reason=classifier_reason,
+                    classifier_ms=classifier_ms,
+                )),
+            )
+
+        if not files and len(terms) > 1:
+            merged, extra = await _merge_per_term_files(client, _search, terms, top_k=top_k)
+            total_ms += extra
+            files = merged
+            final_query = f"per-term fallback ({len(terms)} terms)"
+        elif broad and terms:
+            and_files = list(files)
+            merged, extra = await _merge_per_term_files(client, _search, terms, top_k=top_k)
+            total_ms += extra
+            seen: set[str] = set()
+            files = []
+            for f in and_files + merged:
+                fid = _file_id(f)
+                if fid in seen:
+                    continue
+                seen.add(fid)
+                files.append(f)
+                if len(files) >= top_k:
+                    break
+            final_query = f"broad: AND + per-term ({len(terms)} terms)"
+
+    return _SourcebotFetchResult(
+        snippets=_snippets_from_sourcebot_files(files),
+        files=files,
+        duration_ms=total_ms,
+        final_query=final_query,
+    )
+
+
+async def _serena_fetch(
+    *,
+    terms: list[str],
+    settings: Settings,
+    cap: int,
+) -> tuple[list[GroundingSnippet], int, str | None]:
+    t0 = time.monotonic()
+    try:
+        snippets = await _serena_search_terms(terms=terms, settings=settings, cap=cap)
+        return snippets, int((time.monotonic() - t0) * 1000), None
+    except SerenaError as e:
+        return [], int((time.monotonic() - t0) * 1000), str(e)[:300]
+    except Exception as e:
+        return [], int((time.monotonic() - t0) * 1000), f"{type(e).__name__}: {e}"[:300]
+
+
+def _snippet_dedup_key(snippet: GroundingSnippet) -> str:
+    return f"{snippet.repo}::{snippet.path}"
+
+
+def normalize_repo_name(raw: str, *, known_repos: list[str]) -> str:
+    """Map Sourcebot's URL-style repo ('gitlab.com/<org>/<group>/<name>') to
+    the trailing segment that matches one of ``known_repos`` on disk.
+
+    Sourcebot indexes by the full GitLab path; but our local clones, the
+    Serena project layout, and the ``expected_files`` recall labels all use
+    just the leaf repo name (``traceability``, ``frontend``). Without this
+    normalization snippet.repo doesn't match anything downstream — window
+    expansion can't find the file on disk and the recall metric can't
+    substring-match against the labels.
+
+    Strategy: prefer the longest known_repos entry that ``raw`` ends with;
+    fall back to ``raw``'s last path segment so unconfigured repos still
+    render sanely.
+    """
+    if not raw:
+        return ""
+    cleaned = raw.replace("\\", "/").strip("/")
+    for r in sorted(known_repos or [], key=len, reverse=True):
+        if not r:
+            continue
+        if cleaned == r or cleaned.endswith(f"/{r}"):
+            return r
+    return cleaned.rsplit("/", 1)[-1]
+
+
+def normalize_sourcebot_snippets(
+    snippets: list[GroundingSnippet],
+    *,
+    known_repos: list[str],
+) -> list[GroundingSnippet]:
+    """Rewrite ``snippet.repo`` on Sourcebot results to match the local repo
+    layout. Returns a new list; inputs are not mutated."""
+    out: list[GroundingSnippet] = []
+    for s in snippets:
+        if not s.repo:
+            out.append(s)
+            continue
+        norm = normalize_repo_name(s.repo, known_repos=known_repos)
+        if norm == s.repo:
+            out.append(s)
+        else:
+            out.append(s.model_copy(update={"repo": norm}))
+    return out
+
+
+def _merge_snippets(
+    primary: list[GroundingSnippet],
+    secondary: list[GroundingSnippet],
+) -> list[GroundingSnippet]:
+    seen = {_snippet_dedup_key(s) for s in primary}
+    out = list(primary)
+    for s in secondary:
+        key = _snippet_dedup_key(s)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
+
+
+def apply_per_repo_cap(
+    snippets: list[GroundingSnippet],
+    *,
+    cap: int,
+) -> list[GroundingSnippet]:
+    """Trim ``snippets`` so each ``repo`` contributes at most ``cap`` entries.
+
+    Order-preserving: keeps the first ``cap`` snippets per repo as ranked by
+    the upstream caller. Snippets with empty ``repo`` are kept un-capped (rare,
+    and the bound is unknowable). ``cap <= 0`` disables the cap.
+    """
+    if cap <= 0:
+        return snippets
+    counts: dict[str, int] = {}
+    out: list[GroundingSnippet] = []
+    for s in snippets:
+        key = s.repo or ""
+        if key and counts.get(key, 0) >= cap:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        out.append(s)
+    return out
+
+
+def expand_snippets_from_disk(
+    snippets: list[GroundingSnippet],
+    *,
+    repos_root: Any,
+    context_lines: int,
+    max_lines: int,
+) -> list[GroundingSnippet]:
+    """Re-read each snippet's source file and widen the window by ``context_lines``
+    above and below, capped at ``max_lines`` total.
+
+    Skips snippets without ``start_line`` or whose source can't be opened. Any
+    I/O error on a single snippet falls back to the original — the caller
+    never raises. Returns a new list; inputs are not mutated.
+    """
+    if context_lines <= 0:
+        return snippets
+    from pathlib import Path
+
+    root = Path(str(repos_root))
+    out: list[GroundingSnippet] = []
+    for s in snippets:
+        if not s.start_line or not s.path:
+            out.append(s)
+            continue
+        rel = s.path.lstrip("/")
+        candidate = (root / s.repo / rel) if s.repo else (root / rel)
+        try:
+            if not candidate.is_file():
+                out.append(s)
+                continue
+            text = candidate.read_text(errors="replace")
+        except OSError:
+            out.append(s)
+            continue
+        lines = text.splitlines()
+        n = len(lines)
+        if n == 0:
+            out.append(s)
+            continue
+        hit_start = max(1, s.start_line)
+        hit_end = s.end_line if (s.end_line and s.end_line >= hit_start) else hit_start
+        hit_end = min(hit_end, n)
+        new_start = max(1, hit_start - context_lines)
+        new_end = min(n, hit_end + context_lines)
+        if max_lines > 0:
+            span = new_end - new_start + 1
+            if span > max_lines:
+                # Shrink each wing toward the hit until we fit ``max_lines``.
+                # The hit interval [hit_start, hit_end] is preserved verbatim;
+                # if it alone exceeds max_lines we don't truncate it.
+                excess = span - max_lines
+                top_wing = hit_start - new_start
+                bot_wing = new_end - hit_end
+                trim_top = min(top_wing, excess // 2)
+                trim_bot = min(bot_wing, excess - trim_top)
+                leftover = excess - trim_top - trim_bot
+                if leftover > 0 and top_wing > trim_top:
+                    trim_top += min(top_wing - trim_top, leftover)
+                new_start += trim_top
+                new_end -= trim_bot
+        content = "\n".join(lines[new_start - 1:new_end])
+        out.append(s.model_copy(update={
+            "content": content,
+            "start_line": new_start,
+            "end_line": new_end,
+        }))
+    return out
+
+
+def _repo_and_path_from_serena(path: str, settings: Settings) -> tuple[str, str]:
+    """Map Serena workspace-relative paths to (repo, path-within-repo)."""
+    p = path.lstrip("/").replace("\\", "/")
+    known = list(settings.repos or [])
+    for repo in sorted(known, key=len, reverse=True):
+        prefix = f"{repo}/"
+        if p.startswith(prefix):
+            return repo, p[len(prefix):]
+        if p == repo:
+            return repo, ""
+    parts = p.split("/", 1)
+    if parts and (settings.repos_root / parts[0]).is_dir():
+        return parts[0], parts[1] if len(parts) > 1 else ""
+    return "", p
+
+
 # ---------------------------------------------------------------------------
-# LLM classifier — Gemini Flash decides "needs grounding?" + extracts terms
+# Public entry point
 # ---------------------------------------------------------------------------
 
 _CLASSIFIER_SYSTEM = """\
@@ -403,21 +740,79 @@ def _build_classifier_agent(settings: Settings) -> Any | None:
         return None
 
 
+_RX_JUNK_TERM = re.compile(
+    r"[=:;{}]"                       # code-statement punctuation
+    r"|^\s*(class|def|import|from)\s"  # Python statements
+    r"|\\n|^\s*\d+:"                 # multi-line or line-prefixed grep output
+)
+_RX_TEST_TERM = re.compile(
+    r"\b(test_|Test[A-Z]|conftest|pytest|fixture|mock_|Mock[A-Z])",
+)
+
+
+def _sanitize_llm_terms(raw_terms: list[str]) -> list[str]:
+    """Filter junk out of LLM-produced search terms.
+
+    The classifier sometimes emits code statements ("class Foo(StrEnum):"),
+    test-fixture symbols ("test_client_data_uploader"), template strings
+    ("{TEST_RATE_LIMIT}/minute"), or runaway phrases (>40 chars). Sourcebot
+    treats each term as a phrase OR-search, so a handful of noise terms
+    dominates the retrieved candidate pool and drowns the real answer files.
+    """
+    out: list[str] = []
+    for t in raw_terms or []:
+        t = (t or "").strip()
+        if not t:
+            continue
+        if len(t) > 40:
+            continue
+        if "\n" in t or "\\n" in t:
+            continue
+        if _RX_JUNK_TERM.search(t):
+            continue
+        if _RX_TEST_TERM.search(t):
+            continue
+        out.append(t)
+    return out
+
+
 async def _classify_with_llm(query: str, settings: Settings) -> GroundingDecision | None:
     """Run the Gemini Flash classifier. Returns None on any failure (caller
-    falls back to regex extractor)."""
+    falls back to regex extractor). Output terms are passed through
+    ``_sanitize_llm_terms`` so downstream search isn't drowned by noise."""
     agent = _build_classifier_agent(settings)
     if agent is None:
         return None
     try:
         result = await agent.run(query.strip())
-        return result.output
+        decision = result.output
+        if decision is not None and decision.search_terms:
+            decision = decision.model_copy(update={
+                "search_terms": _sanitize_llm_terms(decision.search_terms),
+            })
+        return decision
     except Exception:
         return None
 
 
+# Zoekt-style negative filters appended to every Sourcebot search to suppress
+# the noise that dominates our pre-rerank pool. From bakeoff observation:
+# .specify/ docs (Tract's planning markdown), tests, mocks, and translation
+# JSON were taking 8 of every 10 retrieved slots — burying the real code.
+# These filters apply to every query (AND-mode and per-term fallback).
+_ZOEKT_NOISE_FILTERS = (
+    "-lang:markdown "
+    "-f:test "          # tests/, *_test.py, *.test.tsx — anything with "test" in path
+    "-f:specify "       # .specify/ — Tract's planning markdown directory
+    "-f:fixtures "
+    "-f:mocks "
+    "-f:locales "       # frontend/public/locales/ — translation JSON
+    "-f:openapi"        # generated OpenAPI dumps that mention every domain word
+)
+
+
 def _build_sourcebot_query(terms: list[str], *, mode: str = "and") -> str:
-    """Compose a zoekt-style query.
+    """Compose a zoekt-style query, with noise filters appended.
 
     ``mode='and'`` joins terms with spaces (implicit AND — strictest match,
     surfaces the most relevant file when terms co-occur).
@@ -433,13 +828,13 @@ def _build_sourcebot_query(terms: list[str], *, mode: str = "and") -> str:
         return ""
     parts = [_quote_if_needed(t) for t in terms]
     if mode == "or":
-        return " OR ".join(parts)
-    return " ".join(parts)
+        body = " OR ".join(parts)
+    else:
+        body = " ".join(parts)
+    return f"{body} {_ZOEKT_NOISE_FILTERS}"
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
+RetrievalMode = Literal["default", "broad"]
 
 
 async def retrieve_grounded_context(
@@ -449,6 +844,8 @@ async def retrieve_grounded_context(
     repos: list[str] | None = None,
     top_k: int = 8,
     context_lines: int = 3,
+    retrieval_mode: RetrievalMode = "default",
+    extra_terms: list[str] | None = None,
 ) -> GroundedContext:
     """Call Sourcebot's ``/api/search`` and return typed snippets + a grounding block.
 
@@ -474,14 +871,26 @@ async def retrieve_grounded_context(
     extractor = "regex"
     terms = regex_terms
 
-    if not _has_strong_terms(regex_terms):
+    broad = retrieval_mode == "broad"
+    # The LLM hallucinates symbols that don't exist ("WCAG", "L126") — those
+    # are *harmless* for symbol lookup (Serena.find_symbol returns empty for
+    # non-existent symbols) but they'd corrupt keyword search if merged into
+    # ``terms``. Hence we split: regex terms go to Sourcebot keyword search;
+    # symbol-shaped LLM suggestions go to Serena.find_symbol where bad guesses
+    # are silently dropped. We get the upside (real symbol guesses like
+    # ``JwtService``, ``UserModel``) without the downside.
+    llm_symbol_suggestions: list[str] = []
+    # Run the LLM whenever we'd benefit: broad mode (extra coverage from
+    # symbol hints) OR when regex itself is weak (need help producing any
+    # plan). Skip otherwise to save the ~500ms Flash call.
+    if broad or not _has_strong_terms(regex_terms):
         cls_t0 = time.monotonic()
         decision = await _classify_with_llm(query, settings)
         classifier_ms = int((time.monotonic() - cls_t0) * 1000) if decision is not None else 0
         if decision is not None:
             classifier_decision = "needs_grounding" if decision.needs_grounding else "skip"
             classifier_reason = decision.reasoning
-            if not decision.needs_grounding:
+            if not decision.needs_grounding and not extra_terms and retrieval_mode != "broad":
                 return GroundedContext(metrics=GroundingMetrics(
                     sources=["sourcebot"],
                     error="classifier: question does not need grounding",
@@ -490,16 +899,44 @@ async def retrieve_grounded_context(
                     classifier_reason=classifier_reason,
                     classifier_ms=classifier_ms,
                 ))
-            # Merge LLM + regex terms (LLM first for priority, dedupe case-insensitive).
-            seen_low: set[str] = set()
-            merged: list[str] = []
-            for t in list(decision.search_terms) + regex_terms:
-                low = t.strip().lower()
-                if low and low not in seen_low:
-                    seen_low.add(low)
-                    merged.append(t.strip())
-            terms = merged
-            extractor = "llm+regex"
+            # Set aside LLM symbol suggestions for the symbol-graph step.
+            # Do NOT merge into keyword terms — that's what created the
+            # hallucination noise in past runs.
+            llm_symbol_suggestions = [
+                t for t in decision.search_terms if _RX_SYMBOL_LIKE.match(t.strip())
+            ]
+            if regex_terms:
+                extractor = "regex+llm_symbols"
+            elif decision.search_terms:
+                # Fall back to LLM keyword terms only if regex was empty —
+                # better a noisy plan than no plan.
+                seen_low: set[str] = set()
+                merged: list[str] = []
+                for t in decision.search_terms:
+                    low = t.strip().lower()
+                    if low and low not in seen_low:
+                        seen_low.add(low)
+                        merged.append(t.strip())
+                terms = merged
+                extractor = "llm"
+
+    if extra_terms:
+        seen_low = {t.lower() for t in terms}
+        for t in extra_terms:
+            tt = t.strip()
+            if tt and tt.lower() not in seen_low:
+                seen_low.add(tt.lower())
+                terms.append(tt)
+        if extra_terms:
+            extractor = f"{extractor}+boost"
+
+    # Hard cap on the term list before variant-expansion. Each term becomes its
+    # own Sourcebot OR-search in the per-term fallback path; a dozen+ terms
+    # produces a low-precision union dominated by markdown/spec/test matches
+    # that out-rank the real answer files. 8 is empirically the sweet spot.
+    MAX_TERMS_TOTAL = 8
+    if len(terms) > MAX_TERMS_TOTAL:
+        terms = terms[:MAX_TERMS_TOTAL]
 
     if not terms:
         return GroundedContext(metrics=GroundingMetrics(
@@ -516,114 +953,140 @@ async def retrieve_grounded_context(
         "X-Sourcebot-Api-Key": _x_sourcebot_api_key_value(settings.sourcebot_api_key),
         "Content-Type": "application/json",
     }
-    # effective_sourcebot_repos_for_ask is called for side-effect-free reference
-    # in the metrics; we do NOT pass repo: filters into the query because
-    # Sourcebot AND-joins multiple repo: clauses (returning 0).
     _ = effective_sourcebot_repos_for_ask(settings, repos)
 
-    async def _search(client: httpx.AsyncClient, q: str) -> tuple[int, list[dict[str, Any]], int]:
-        t0 = time.monotonic()
-        try:
-            r = await client.post(
-                url,
-                json={"query": q, "matches": top_k, "contextLines": context_lines},
-                headers=headers,
-            )
-        except httpx.HTTPError:
-            return 0, [], int((time.monotonic() - t0) * 1000)
-        ms = int((time.monotonic() - t0) * 1000)
-        if r.status_code != 200:
-            return r.status_code, [], ms
-        body = r.json() if r.content else {}
-        return r.status_code, (body.get("files") or []), ms
+    serena_enabled = bool((settings.serena_url or "").strip())
 
-    def _file_id(f: dict[str, Any]) -> str:
-        return f"{f.get('repository','')}::{_file_path_text(f.get('fileName'))}"
-
-    # Two-stage strategy:
-    #   1. Strict implicit-AND search — surfaces the single most-relevant file
-    #      when all terms co-occur. (e.g. "user roles role" → user_model.py)
-    #   2. If AND returns 0, run each term SEPARATELY in parallel and merge.
-    #      Sourcebot's OR operator silently breaks for mixed quoted/unquoted
-    #      multi-term queries (verified empirically); per-term parallel
-    #      searches are more robust and naturally bound the latency cost.
-    and_query = _build_sourcebot_query(terms, mode="and")
-    final_query = and_query
-    total_ms = 0
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-        status, files, dur = await _search(client, and_query)
-        total_ms += dur
-        if status != 200:
-            return GroundedContext(metrics=GroundingMetrics(
-                duration_ms=total_ms,
-                sources=["sourcebot"],
-                error=f"HTTP {status}",
-                extracted_terms=terms,
-                search_query=and_query,
-                extractor=extractor,
-                classifier_decision=classifier_decision,
-                classifier_reason=classifier_reason,
-                classifier_ms=classifier_ms,
-            ))
-
-        if not files and len(terms) > 1:
-            t_fallback = time.monotonic()
-            # Expand each multi-word term to its code-style variants. A
-            # question saying "Data Sharing" then yields DataSharing,
-            # dataSharing, data_sharing, DATA_SHARING for the search —
-            # files that use any of those naming conventions get found.
-            expanded = _expand_with_variants(terms)
-            quoted_terms = [_quote_if_needed(t) for t in expanded]
-            per_term = await asyncio.gather(
-                *[_search(client, q) for q in quoted_terms],
-                return_exceptions=False,
-            )
-            total_ms += int((time.monotonic() - t_fallback) * 1000)
-            seen: set[str] = set()
-            merged: list[dict[str, Any]] = []
-            for _status, found, _ms in per_term:
-                for f in found:
-                    fid = _file_id(f)
-                    if fid in seen:
-                        continue
-                    seen.add(fid)
-                    merged.append(f)
-                    if len(merged) >= top_k:
-                        break
-                if len(merged) >= top_k:
-                    break
-            files = merged
-            final_query = f"per-term ({len(quoted_terms)} variants): " + " | ".join(quoted_terms)
-
-    snippets = _snippets_from_sourcebot_files(files)
-    sources = ["sourcebot"]
-
-    # When SERENA_URL is configured, run Serena.search_for_pattern per term in
-    # parallel and append any hits Sourcebot missed. Serena's LSP-aware results
-    # complement zoekt's regex hits — e.g. for "what are the user roles" the
-    # regex term ``UserRoles`` lands on the enum file but Sourcebot caps at
-    # one chunk; Serena returns the whole class body with surrounding context.
-    serena_hits = 0
-    serena_ms = 0
-    serena_error: str | None = None
-    if (settings.serena_url or "").strip() and terms:
-        s_t0 = time.monotonic()
-        try:
-            serena_snippets = await _serena_search_terms(
+    sb_task = asyncio.create_task(
+        _sourcebot_fetch(
+            url=url,
+            headers=headers,
+            terms=terms,
+            top_k=top_k,
+            context_lines=context_lines,
+            broad=broad,
+            extractor=extractor,
+            classifier_decision=classifier_decision,
+            classifier_reason=classifier_reason,
+            classifier_ms=classifier_ms,
+        ),
+    )
+    serena_task = (
+        asyncio.create_task(
+            _serena_fetch(
                 terms=terms,
                 settings=settings,
-                already_seen=_already_seen_ids(snippets),
-                cap=max(0, top_k - len(snippets)),
+                cap=top_k,
+            ),
+        )
+        if serena_enabled
+        else None
+    )
+
+    sb = await sb_task
+    if sb.error and sb.early_context is not None:
+        if serena_task is not None:
+            serena_task.cancel()
+        return sb.early_context
+
+    serena_snippets: list[GroundingSnippet] = []
+    serena_ms = 0
+    serena_error: str | None = None
+    if serena_task is not None:
+        serena_snippets, serena_ms, serena_error = await serena_task
+
+    # Sourcebot returns 'gitlab.com/<org>/.../traceability' as the repo name;
+    # rewrite to the local repo leaf so downstream consumers (window expansion,
+    # recall scoring, per-repo cap) see consistent identifiers.
+    sb_snippets_norm = normalize_sourcebot_snippets(
+        sb.snippets, known_repos=list(settings.repos or []),
+    )
+
+    # Symbol-graph expansion via Serena's LSP find_symbol: for symbol-shaped
+    # query terms (UserRoles, NODE_NAME_PATTERN, RolesChecker, get_identity),
+    # add the file containing each symbol's *definition*. Text search often
+    # misses these — the file may not contain the user's vocabulary even
+    # though it carries the answer.
+    sym_snippets: list[GroundingSnippet] = []
+    sym_lookups = 0
+    sym_hits = 0
+    sym_ms = 0
+    if serena_enabled:
+        # Pool: query-derived symbol-shaped terms + LLM symbol suggestions.
+        # Cap at 6 total; LLM suggestions go first because they're the most
+        # likely to find a definition the user couldn't name from their
+        # query alone (e.g. "JWT" the user types vs. "get_identity" the
+        # LLM guesses).
+        symbol_pool = list(llm_symbol_suggestions) + _symbol_candidates(terms, cap=6)
+        symbol_candidates = _symbol_candidates(symbol_pool, cap=6)
+        if symbol_candidates:
+            sym_lookups = len(symbol_candidates)
+            sym_snippets, sym_ms = await _serena_symbol_lookup(
+                symbols=symbol_candidates, settings=settings,
             )
-            if serena_snippets:
-                snippets.extend(serena_snippets)
-                serena_hits = len(serena_snippets)
-                sources.append("serena")
-        except SerenaError as e:
-            serena_error = str(e)[:300]
-        except Exception as e:
-            serena_error = f"{type(e).__name__}: {e}"[:300]
-        serena_ms = int((time.monotonic() - s_t0) * 1000)
+            sym_hits = len(sym_snippets)
+
+    snippets = _merge_snippets(sb_snippets_norm, serena_snippets)
+    sources = ["sourcebot"]
+    serena_hits = len(serena_snippets)
+    if serena_hits:
+        sources.append("serena")
+    if sym_snippets:
+        snippets = _merge_snippets(snippets, sym_snippets)
+        sources.append("serena_lsp")
+
+    total_ms = sb.duration_ms
+
+    # Per-repo cap BEFORE rerank: keeps cross-repo diversity in the candidate
+    # pool so a single noisy repo can't dominate the top-k after reranking.
+    per_repo_cap_applied = 0
+    per_repo_cap_dropped = 0
+    per_repo_cap = int(getattr(settings, "grounding_per_repo_cap", 0) or 0)
+    if per_repo_cap > 0 and snippets:
+        before = len(snippets)
+        snippets = apply_per_repo_cap(snippets, cap=per_repo_cap)
+        per_repo_cap_applied = per_repo_cap
+        per_repo_cap_dropped = before - len(snippets)
+
+    rerank_ms = 0
+    rerank_model = ""
+    rerank_candidates = len(snippets)
+    rerank_name = (settings.grounding_reranker_model or "").strip()
+    if rerank_name and snippets:
+        from .reranker import rerank_snippets
+
+        cap = min(len(snippets), max(top_k, settings.grounding_reranker_max_candidates))
+        rr = await rerank_snippets(
+            query,
+            snippets,
+            model=rerank_name,
+            top_k=min(top_k, cap),
+        )
+        snippets = rr.snippets
+        rerank_ms = rr.duration_ms
+        rerank_model = rr.model
+        rerank_candidates = rr.candidates
+
+    # Window-expand the final selection — done AFTER rerank so we only pay file
+    # I/O on snippets we'll actually send to the model.
+    expanded_count = 0
+    expansion_added_chars = 0
+    expand_lines = int(getattr(settings, "grounding_expand_context_lines", 0) or 0)
+    if expand_lines > 0 and snippets:
+        before_chars = sum(len(s.content or "") for s in snippets)
+        expanded = expand_snippets_from_disk(
+            snippets,
+            repos_root=settings.repos_root,
+            context_lines=expand_lines,
+            max_lines=int(getattr(settings, "grounding_expand_max_lines", 0) or 0),
+        )
+        after_chars = sum(len(s.content or "") for s in expanded)
+        expanded_count = sum(
+            1 for o, e in zip(snippets, expanded, strict=True)
+            if (o.content or "") != (e.content or "")
+        )
+        expansion_added_chars = max(0, after_chars - before_chars)
+        snippets = expanded
 
     return GroundedContext(
         snippets=snippets,
@@ -633,71 +1096,208 @@ async def retrieve_grounded_context(
             snippet_count=len(snippets),
             total_chars=sum(len(s.content) for s in snippets),
             sources=sources,
-            sourcebot_files_seen=len(files),
+            sourcebot_files_seen=len(sb.files),
             serena_hits=serena_hits,
             serena_ms=serena_ms,
             serena_error=serena_error,
             extracted_terms=terms,
-            search_query=final_query,
+            search_query=sb.final_query,
             extractor=extractor,
             classifier_decision=classifier_decision,
             classifier_reason=classifier_reason,
             classifier_ms=classifier_ms,
+            rerank_ms=rerank_ms,
+            rerank_model=rerank_model,
+            rerank_candidates=rerank_candidates,
+            per_repo_cap_applied=per_repo_cap_applied,
+            per_repo_cap_dropped=per_repo_cap_dropped,
+            expanded_snippets=expanded_count,
+            expansion_added_chars=expansion_added_chars,
+            serena_symbol_lookups=sym_lookups,
+            serena_symbol_hits=sym_hits,
+            serena_symbol_ms=sym_ms,
         ),
     )
 
 
 def _already_seen_ids(snippets: list[GroundingSnippet]) -> set[str]:
     """File-level dedup keys (repo + path) for snippets already in the result."""
-    return {f"{s.repo}::{s.path}" for s in snippets if s.path}
+    return {_snippet_dedup_key(s) for s in snippets if s.path}
+
+
+# Symbol-shaped terms: PascalCase / UPPER_SNAKE / dotted / snake_case_with_2plus_segments.
+# Plain English words are excluded — they aren't valid LSP name_path patterns.
+_RX_SYMBOL_LIKE = re.compile(
+    r"^("
+    r"[A-Z][a-zA-Z0-9]*[a-z][A-Z][a-zA-Z0-9]*"          # PascalCase ≥ 2 segments (UserRoles)
+    r"|[A-Z][A-Z0-9_]{2,}[A-Z0-9]"                       # UPPER_SNAKE
+    r"|[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}"                 # snake_case_with_2_plus
+    r"|[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z][a-zA-Z0-9_.]+"    # dotted (foo.bar)
+    r")$",
+)
+
+
+def _symbol_candidates(terms: list[str], *, cap: int = 6) -> list[str]:
+    """Pick terms shaped like code symbols, in priority order, capped."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in terms:
+        if not _RX_SYMBOL_LIKE.match(t):
+            continue
+        low = t.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(t)
+        if len(out) >= cap:
+            break
+    return out
+
+
+async def _serena_symbol_lookup(
+    *,
+    symbols: list[str],
+    settings: Settings,
+    cap_per_symbol: int = 3,
+    total_cap: int = 10,
+) -> tuple[list[GroundingSnippet], int]:
+    """Use Serena's LSP find_symbol to surface definition files for symbol-
+    shaped query terms. Returns (snippets, duration_ms).
+
+    For each symbol we get the relative_path of its definition site —
+    *exactly* the file the model needs. Text search can miss this when the
+    user's vocabulary doesn't appear in the code (e.g. asking "what regex
+    validates farm name" surfaces ``NODE_NAME_PATTERN`` only because the
+    regex extracted "NODE_NAME_PATTERN"; LSP finds its definition file
+    deterministically).
+    """
+    if not symbols:
+        return [], 0
+    t0 = time.monotonic()
+    client = SerenaMcpClient(
+        url=settings.serena_url,
+        api_key=settings.serena_api_key,
+        timeout=settings.serena_timeout_seconds,
+    )
+    project = str(settings.repos_root)
+    calls: list[tuple[str, dict[str, Any]]] = [
+        ("activate_project", {"project": project}),
+    ]
+    for sym in symbols:
+        calls.append((
+            "find_symbol",
+            {
+                "name_path_pattern": sym,
+                # Substring matching lets "UserRole" match the real "UserRoles"
+                # symbol; without this Serena requires exact name_path equality
+                # and most query-derived terms miss by a character.
+                "substring_matching": True,
+                "include_body": False,
+                "depth": 0,
+                # LSP SymbolKinds: 5=Class, 6=Method, 11=Interface, 12=Function,
+                # 14=Constant. Excludes Variable (13), Property (7), String,
+                # Number, etc. — those hit on incidental occurrences of the
+                # name in unrelated code rather than real definitions.
+                "include_kinds": [5, 6, 11, 12, 14],
+            },
+        ))
+
+    try:
+        raw_results = await client.batch_calls(calls)
+    except Exception:
+        return [], int((time.monotonic() - t0) * 1000)
+
+    seen_paths: set[str] = set()
+    out: list[GroundingSnippet] = []
+    for sym, raw in zip(symbols, raw_results[1:], strict=True):
+        if len(out) >= total_cap:
+            break
+        try:
+            matches = _json.loads(raw or "[]")
+        except Exception:
+            continue
+        if not isinstance(matches, list):
+            continue
+        per_symbol = 0
+        # Real LSP kinds (Class/Function/Method/Constant/Variable) point at
+        # actual definitions in code; "Package" is Serena's filesystem-walk
+        # fallback (directory paths) which never carries the answer body.
+        # Sort so real kinds come first; keep the rest only if budget allows.
+        sorted_matches = sorted(
+            (m for m in matches if isinstance(m, dict)),
+            key=lambda m: 0 if m.get("kind") in {"Class", "Function", "Method", "Constant", "Variable"} else 1,
+        )
+        for m in sorted_matches:
+            rel = m.get("relative_path")
+            if not isinstance(rel, str) or not rel:
+                continue
+            rel = rel.replace("\\", "/").lstrip("/")
+            if rel in seen_paths:
+                continue
+            seen_paths.add(rel)
+            # Pull repo/path apart against settings.repos so window expansion
+            # can find the file on disk.
+            repo, rel_path = _repo_and_path_from_serena(rel, settings)
+            # Start_line=1; the post-rerank expand_snippets_from_disk widens
+            # to ±N lines so the model sees enough of the definition.
+            out.append(GroundingSnippet(
+                repo=repo,
+                path=rel_path or rel,
+                start_line=1,
+                end_line=None,
+                content=f"<symbol {sym} defined here — body via window expansion>",
+                language=_language_from_path(rel),
+            ))
+            per_symbol += 1
+            if per_symbol >= cap_per_symbol or len(out) >= total_cap:
+                break
+    return out, int((time.monotonic() - t0) * 1000)
 
 
 async def _serena_search_terms(
     *,
     terms: list[str],
     settings: Settings,
-    already_seen: set[str],
     cap: int,
 ) -> list[GroundingSnippet]:
-    """Call Serena.search_for_pattern once per term in parallel; turn results
-    into GroundingSnippets, dedupe against ``already_seen``, cap at ``cap``."""
-    if cap <= 0:
+    """Call Serena.search_for_pattern once per term in one MCP session."""
+    if cap <= 0 or not terms:
         return []
     client = SerenaMcpClient(
         url=settings.serena_url,
         api_key=settings.serena_api_key,
         timeout=settings.serena_timeout_seconds,
     )
-    results = await asyncio.gather(
-        *[
-            client.call(
+    project = str(settings.repos_root)
+    calls: list[tuple[str, dict[str, Any]]] = [
+        ("activate_project", {"project": project}),
+    ]
+    for t in terms:
+        calls.append(
+            (
                 "search_for_pattern",
                 {
                     "substring_pattern": t,
                     "context_lines_before": 1,
                     "context_lines_after": 6,
                 },
-            )
-            for t in terms
-        ],
-        return_exceptions=True,
-    )
+            ),
+        )
+    raw_results = await client.batch_calls(calls)
     out: list[GroundingSnippet] = []
-    for term, raw in zip(terms, results, strict=True):
-        if isinstance(raw, BaseException) or not raw:
+    for term, raw in zip(terms, raw_results[1:], strict=True):
+        if not raw or raw.strip().startswith("Error:"):
             continue
-        for snippet in _parse_serena_search_result(raw, term=term):
-            file_id = f"::{snippet.path}"
-            if file_id in already_seen:
-                continue
-            already_seen.add(file_id)
+        for snippet in _parse_serena_search_result(raw, term=term, settings=settings):
             out.append(snippet)
             if len(out) >= cap:
                 return out
     return out
 
 
-def _parse_serena_search_result(raw: str, *, term: str) -> list[GroundingSnippet]:
+def _parse_serena_search_result(
+    raw: str, *, term: str, settings: Settings,
+) -> list[GroundingSnippet]:
     """Serena.search_for_pattern returns a JSON-stringified
     ``{path: [block, ...]}`` mapping. Convert to GroundingSnippets.
 
@@ -718,9 +1318,10 @@ def _parse_serena_search_result(raw: str, *, term: str) -> list[GroundingSnippet
         if not isinstance(first, str):
             continue
         start_line = _serena_first_lineno(first)
+        repo, rel_path = _repo_and_path_from_serena(path, settings)
         out.append(GroundingSnippet(
-            repo="",
-            path=path,
+            repo=repo,
+            path=rel_path or path,
             start_line=start_line,
             end_line=None,
             content=first,
@@ -774,21 +1375,32 @@ def _chunk_start_line(chunk: dict[str, Any]) -> int | None:
 
 
 def _snippets_from_sourcebot_files(files: list[dict[str, Any]]) -> list[GroundingSnippet]:
-    """Flatten Sourcebot's ``files[].chunks[]`` into a flat snippet list."""
+    """Flatten Sourcebot's ``files[].chunks[]`` into a flat snippet list.
+
+    Keep only the FIRST chunk per file. Sourcebot returns up to N chunks per
+    file matched, and multiple chunks of the same file occupy multiple
+    snippet slots — which (a) starves the candidate pool of cross-repo
+    diversity and (b) is redundant once window expansion widens the kept
+    chunk by ±30 lines (the additional chunks likely fall inside that
+    window anyway). Mirrors the Serena parser's "first hit per file" rule.
+    """
     out: list[GroundingSnippet] = []
     for f in files:
         repo = f.get("repository") or ""
         path = _file_path_text(f.get("fileName"))
         url = f.get("webUrl")
         lang = f.get("language")
-        for ch in (f.get("chunks") or []):
-            content = ch.get("content") or ""
-            start = _chunk_start_line(ch)
-            end = start + len(content.splitlines()) - 1 if start else None
-            out.append(GroundingSnippet(
-                repo=repo, path=path, start_line=start, end_line=end,
-                content=content, url=url, language=lang,
-            ))
+        chunks = f.get("chunks") or []
+        if not chunks:
+            continue
+        ch = chunks[0]
+        content = ch.get("content") or ""
+        start = _chunk_start_line(ch)
+        end = start + len(content.splitlines()) - 1 if start else None
+        out.append(GroundingSnippet(
+            repo=repo, path=path, start_line=start, end_line=end,
+            content=content, url=url, language=lang,
+        ))
     return out
 
 
