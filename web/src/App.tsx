@@ -742,6 +742,9 @@ export function App() {
   /** Curated model catalog for the currently-selected adapter, fetched
    * lazily on adapter change. Empty list ⇒ model picker is hidden. */
   const [adapterModels, setAdapterModels] = useState<AdapterModelInfo[]>([]);
+  /** Live OpenRouter model catalog (~350 models) for adapters that accept
+   * OpenRouter-format ids (opencode, pipeline). Cached 1h server-side. */
+  const [openrouterModels, setOpenrouterModels] = useState<AdapterModelInfo[]>([]);
   const progressTimer = useRef<number | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   /** Invalidate stale thread / detail fetches when starting a new action. */
@@ -796,11 +799,14 @@ export function App() {
       .then((r) => {
         if (cancelled) return;
         setAdapterModels(r.models);
-        // If the currently-picked model isn't in the new adapter's catalog,
-        // reset to the adapter default (empty string).
+        setOpenrouterModels(r.openrouter_live || []);
+        // If the currently-picked model isn't in either section, reset to
+        // the adapter default (empty string).
         setForm((f) => {
           if (!f.model) return f;
-          const stillValid = r.models.some((m) => m.id === f.model);
+          const stillValid =
+            r.models.some((m) => m.id === f.model) ||
+            (r.openrouter_live || []).some((m) => m.id === f.model);
           return stillValid ? f : { ...f, model: "" };
         });
       })
@@ -808,6 +814,7 @@ export function App() {
         if (cancelled) return;
         console.warn(`models fetch failed for ${form.adapter}`, e);
         setAdapterModels([]);
+        setOpenrouterModels([]);
       });
     return () => { cancelled = true; };
   }, [form.adapter]);
@@ -1320,9 +1327,9 @@ export function App() {
                     ))}
                   </select>
                 </label>
-                {/* Model picker — populated per-adapter from
-                    GET /v1/adapters/{name}/models. Empty list ⇒ hidden. */}
-                {adapterModels.length > 0 && (
+                {/* Model picker — curated (recommended) + live OpenRouter
+                    catalog when the adapter accepts OpenRouter ids. */}
+                {(adapterModels.length > 0 || openrouterModels.length > 0) && (
                   <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
                     <span>Model</span>
                     <select
@@ -1334,14 +1341,30 @@ export function App() {
                       title="Per-request model override. Provider credentials must be set in .env."
                     >
                       <option value="">(adapter default)</option>
-                      {adapterModels.map((m) => (
-                        <option key={m.id} value={m.id} title={m.note ?? ""}>
-                          {m.name}
-                          {typeof m.in_per_m_usd === "number"
-                            ? `  · $${m.in_per_m_usd}/${m.out_per_m_usd}/M`
-                            : ""}
-                        </option>
-                      ))}
+                      {adapterModels.length > 0 && (
+                        <optgroup label="Recommended">
+                          {adapterModels.map((m) => (
+                            <option key={m.id} value={m.id} title={m.note ?? ""}>
+                              {m.name}
+                              {typeof m.in_per_m_usd === "number"
+                                ? `  · $${m.in_per_m_usd}/${m.out_per_m_usd}/M`
+                                : ""}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {openrouterModels.length > 0 && (
+                        <optgroup label={`OpenRouter live (${openrouterModels.length})`}>
+                          {openrouterModels.map((m) => (
+                            <option key={m.id} value={m.id} title={m.note ?? ""}>
+                              {m.name}
+                              {typeof m.in_per_m_usd === "number"
+                                ? `  · $${m.in_per_m_usd}/${m.out_per_m_usd}/M`
+                                : ""}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
                   </label>
                 )}

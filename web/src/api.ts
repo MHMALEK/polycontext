@@ -292,11 +292,16 @@ export const api = {
   // --- adapter bake-off ---
   listAdapters: () => jsonReq<{ adapters: AdapterInfo[] }>("/v1/adapters"),
 
-  /** Curated model catalog per adapter — drives the Ask form's model picker. */
+  /** Combined model catalog per adapter — curated + live OpenRouter list.
+   * ``openrouter_live`` carries ~350 OpenRouter models fetched live (cached
+   * 1h server-side), deduped against the curated section. Pass
+   * ``include_openrouter=false`` in a query string to skip the live fetch. */
   listAdapterModels: (name: string) =>
-    jsonReq<{ adapter: string; models: AdapterModelInfo[] }>(
-      `/v1/adapters/${encodeURIComponent(name)}/models`,
-    ),
+    jsonReq<{
+      adapter: string;
+      models: AdapterModelInfo[];
+      openrouter_live: AdapterModelInfo[];
+    }>(`/v1/adapters/${encodeURIComponent(name)}/models`),
 
   bakeoff: (
     job: "ask" | "decompose",
