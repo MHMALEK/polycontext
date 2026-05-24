@@ -26,6 +26,7 @@
   </p>
 
   <p>
+    <a href="docs/ARCHITECTURE.md">📐 Architecture</a> ·
     <a href="#-latest--open-source-agentic-at-the-cost-of-flash">🚀 Latest</a> ·
     <a href="#results">Results</a> ·
     <a href="#what-it-is">What it is</a> ·
