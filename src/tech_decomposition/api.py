@@ -306,17 +306,58 @@ def list_adapters_endpoint() -> dict[str, Any]:
 
 
 @app.get("/v1/adapters/{name}/models")
-def list_adapter_models_endpoint(name: str) -> dict[str, Any]:
-    """Curated model catalog for the named adapter.
+def list_adapter_models_endpoint(
+    name: str,
+    include_openrouter: bool = True,
+) -> dict[str, Any]:
+    """Combined model catalog for the named adapter.
 
-    Powers the UI's model picker. Returns the friendly list defined in
-    ``adapters/_models_catalog.py`` — *not* a live provider call (that would
-    blow up the page load with provider-side rate limits / auth). Edit the
-    catalog file to add or deprecate models for a given adapter.
+    Returns two sections:
+    - **curated**: hand-maintained list from ``adapters/_models_catalog.py``
+      with annotations (price, caveats, eval notes).
+    - **openrouter_live**: ALL ~350 OpenRouter models fetched live, deduped
+      against the curated list. Only included when the adapter accepts
+      OpenRouter-format ids (currently ``opencode`` and ``pipeline``) and
+      ``include_openrouter=true`` (default).
+
+    The OpenRouter fetch is cached for 1h in-process — repeated UI page
+    loads don't slam the provider. Set ``include_openrouter=false`` to
+    skip the live fetch (e.g. when offline).
     """
     from .adapters._models_catalog import models_for_adapter
+    from .adapters._openrouter_models import fetch_openrouter_models
 
-    return {"adapter": name, "models": models_for_adapter(name)}
+    curated = models_for_adapter(name)
+    openrouter_live: list[dict[str, Any]] = []
+    # opencode uses ``openrouter/<id>`` ids natively. pipeline uses
+    # ``openrouter:<id>``; we still surface the same live list but the UI
+    # rewrites ``openrouter/foo`` -> ``openrouter:foo`` before sending.
+    if include_openrouter and name in {"opencode", "pipeline"}:
+        live = fetch_openrouter_models()
+        # Dedup: skip ids that already appear in curated.
+        curated_ids = {m["id"] for m in curated}
+        openrouter_live = [m for m in live if m["id"] not in curated_ids]
+    return {
+        "adapter": name,
+        "models": curated,
+        "openrouter_live": openrouter_live,
+    }
+
+
+@app.post("/v1/providers/openrouter/models/refresh")
+def refresh_openrouter_models() -> dict[str, Any]:
+    """Force a cache bust on the OpenRouter live model list. Useful when
+    OpenRouter ships a new model and the in-process TTL hasn't expired."""
+    from .adapters._openrouter_models import fetch_openrouter_models
+
+    models = fetch_openrouter_models(force_refresh=True)
+    return {"count": len(models), "refreshed_at": _utcnow_iso()}
+
+
+def _utcnow_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 class GroundingRequest(BaseModel):
