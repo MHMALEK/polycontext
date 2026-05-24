@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "./api";
-import type { AdapterInfo, RunDetail, RunListItem } from "./api";
+import type { AdapterInfo, AdapterModelInfo, RunDetail, RunListItem } from "./api";
 import { Decompose } from "./Decompose";
 
 type View = "ask" | "decompose";
@@ -44,9 +44,41 @@ type AskFormState = {
   // {adapter}/ask. Defaulted to ``DEFAULT_ADAPTER`` and reconciled against
   // the live adapter list once it loads — see the useEffect below.
   adapter: string;
-  // Opt-in: prepend a Sourcebot-retrieval block to the prompt.
-  grounded: boolean;
+  // Per-request model override (empty string = adapter default). Populated
+  // from GET /v1/adapters/{adapter}/models on adapter change.
+  model: string;
+  // Operating mode. Maps to (grounded, tools_enabled) on the wire:
+  //   "hybrid"        → grounded=true,  tools_enabled=true   (default)
+  //   "grounded_only" → grounded=true,  tools_enabled=false  (snippets only)
+  //   "agent_only"    → grounded=false, tools_enabled=true   (no prefetch)
+  //   "raw"           → grounded=false, tools_enabled=false  (single-shot)
+  mode: "hybrid" | "grounded_only" | "agent_only" | "raw";
 };
+
+type AskMode = AskFormState["mode"];
+
+const ASK_MODE_LABELS: Record<AskMode, string> = {
+  hybrid: "Hybrid (grounded + tools)",
+  grounded_only: "Grounded only",
+  agent_only: "Agent only (no grounding)",
+  raw: "Single-shot (no grounding, no tools)",
+};
+
+const ASK_MODE_DESCRIPTIONS: Record<AskMode, string> = {
+  hybrid: "Prefetch Sourcebot+Serena snippets AND let the adapter call its own tools if it wants to. Default.",
+  grounded_only: "Prefetch snippets and force the adapter to answer single-shot from them (no read/grep/glob).",
+  agent_only: "Skip prefetch; the agent navigates the repo from scratch using its own tools.",
+  raw: "No grounding, no tools — the raw query goes to the model directly.",
+};
+
+function askModeToWire(mode: AskMode): { grounded: boolean; tools_enabled: boolean } {
+  switch (mode) {
+    case "hybrid": return { grounded: true, tools_enabled: true };
+    case "grounded_only": return { grounded: true, tools_enabled: false };
+    case "agent_only": return { grounded: false, tools_enabled: true };
+    case "raw": return { grounded: false, tools_enabled: false };
+  }
+}
 
 // Initial dropdown selection. Overridden at mount if this adapter isn't
 // installed or isn't healthy — see the adapter list useEffect.
@@ -77,7 +109,8 @@ type DisplayedRun = {
 const INITIAL_FORM: AskFormState = {
   question: "",
   adapter: DEFAULT_ADAPTER,
-  grounded: false,
+  model: "",
+  mode: "hybrid",
 };
 
 const SUGGESTED_PROMPTS = [
@@ -706,6 +739,9 @@ export function App() {
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapterListHydrated, setAdapterListHydrated] = useState(false);
   const [adapterListError, setAdapterListError] = useState<string | null>(null);
+  /** Curated model catalog for the currently-selected adapter, fetched
+   * lazily on adapter change. Empty list ⇒ model picker is hidden. */
+  const [adapterModels, setAdapterModels] = useState<AdapterModelInfo[]>([]);
   const progressTimer = useRef<number | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   /** Invalidate stale thread / detail fetches when starting a new action. */
@@ -747,6 +783,34 @@ export function App() {
       })
       .finally(() => setAdapterListHydrated(true));
   }, [loadHistory]);
+
+  // Refresh the model catalog whenever the selected adapter changes.
+  // Cancels stale responses if the user switches adapters before fetch returns.
+  useEffect(() => {
+    if (!form.adapter) {
+      setAdapterModels([]);
+      return;
+    }
+    let cancelled = false;
+    api.listAdapterModels(form.adapter)
+      .then((r) => {
+        if (cancelled) return;
+        setAdapterModels(r.models);
+        // If the currently-picked model isn't in the new adapter's catalog,
+        // reset to the adapter default (empty string).
+        setForm((f) => {
+          if (!f.model) return f;
+          const stillValid = r.models.some((m) => m.id === f.model);
+          return stillValid ? f : { ...f, model: "" };
+        });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.warn(`models fetch failed for ${form.adapter}`, e);
+        setAdapterModels([]);
+      });
+    return () => { cancelled = true; };
+  }, [form.adapter]);
 
   /** Auto-refresh sidebar history while the tab is visible; also refresh when returning to the tab. */
   useEffect(() => {
@@ -892,9 +956,12 @@ export function App() {
         if (!form.adapter) {
           throw new Error("pick an adapter from the dropdown before submitting");
         }
+        const wireMode = askModeToWire(form.mode);
         const askPromise = api.adapterAsk(form.adapter, {
           query: question,
-          grounded: form.grounded,
+          grounded: wireMode.grounded,
+          tools_enabled: wireMode.tools_enabled,
+          ...(form.model ? { model: form.model } : {}),
           ...(activeThreadId ? { thread_id: activeThreadId } : {}),
         });
         void loadHistory();
@@ -1235,33 +1302,49 @@ export function App() {
                   visible checkbox to an Advanced disclosure so we don't
                   push casual users toward a worse default.
                 */}
-                <details className="relative">
-                  <summary className="list-none cursor-pointer text-[11px] text-base-content/65 font-medium hover:text-base-content flex items-center gap-1 select-none">
-                    Advanced
-                    {form.grounded && (
-                      <span className="badge badge-xs badge-outline badge-primary">grounded</span>
-                    )}
-                  </summary>
-                  <div className="absolute z-10 mt-2 p-3 rounded-lg bg-base-100 border border-base-300 shadow-lg w-72 text-[11px] space-y-2">
-                    <label className="flex items-start gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        className="checkbox checkbox-xs mt-0.5"
-                        checked={form.grounded}
-                        onChange={(e) => setForm((f) => ({ ...f, grounded: e.target.checked }))}
-                      />
-                      <span>
-                        <span className="font-medium">Grounded retrieval</span>
-                        <br />
-                        <span className="text-base-content/65">
-                          Prepend Sourcebot + Serena snippets before the adapter
-                          runs. Helps enumeration questions ("list all X") and
-                          OpenCode; hurts most other cases.
-                        </span>
-                      </span>
-                    </label>
-                  </div>
-                </details>
+                {/* Mode picker — Hybrid / Grounded-only / Agent-only / Raw. */}
+                <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
+                  <span>Mode</span>
+                  <select
+                    className="select select-bordered select-xs rounded-lg min-w-[11rem]"
+                    value={form.mode}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, mode: e.target.value as AskMode }))
+                    }
+                    title={ASK_MODE_DESCRIPTIONS[form.mode]}
+                  >
+                    {(Object.keys(ASK_MODE_LABELS) as AskMode[]).map((m) => (
+                      <option key={m} value={m} title={ASK_MODE_DESCRIPTIONS[m]}>
+                        {ASK_MODE_LABELS[m]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {/* Model picker — populated per-adapter from
+                    GET /v1/adapters/{name}/models. Empty list ⇒ hidden. */}
+                {adapterModels.length > 0 && (
+                  <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
+                    <span>Model</span>
+                    <select
+                      className="select select-bordered select-xs rounded-lg min-w-[12rem]"
+                      value={form.model}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, model: e.target.value }))
+                      }
+                      title="Per-request model override. Provider credentials must be set in .env."
+                    >
+                      <option value="">(adapter default)</option>
+                      {adapterModels.map((m) => (
+                        <option key={m.id} value={m.id} title={m.note ?? ""}>
+                          {m.name}
+                          {typeof m.in_per_m_usd === "number"
+                            ? `  · $${m.in_per_m_usd}/${m.out_per_m_usd}/M`
+                            : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <span className="text-[10px] text-base-content/65 hidden sm:inline ml-auto sm:ml-0">
                   ⌘↵ send
                 </span>

@@ -128,6 +128,25 @@ export interface AdapterAskBody {
   repos?: string[];
   top_k?: number;
   grounded?: boolean;
+  /** Per-request model override. Format is adapter-specific —
+   * "openrouter/deepseek/deepseek-v3.2" for opencode,
+   * "openrouter:deepseek/deepseek-v3.2" for pipeline,
+   * "gemini-2.5-pro" for gemini. */
+  model?: string;
+  /** When false, disable the adapter's tool use so the model answers
+   * single-shot from prefetched context. Defaults to true. */
+  tools_enabled?: boolean;
+}
+
+/** Curated per-adapter model entry from GET /v1/adapters/{name}/models. */
+export interface AdapterModelInfo {
+  id: string;
+  name: string;
+  provider?: string;
+  in_per_m_usd?: number;
+  out_per_m_usd?: number;
+  context_k?: number;
+  note?: string;
 }
 
 // Grounding — mirrors core/grounding.py types
@@ -272,6 +291,12 @@ export const api = {
 
   // --- adapter bake-off ---
   listAdapters: () => jsonReq<{ adapters: AdapterInfo[] }>("/v1/adapters"),
+
+  /** Curated model catalog per adapter — drives the Ask form's model picker. */
+  listAdapterModels: (name: string) =>
+    jsonReq<{ adapter: string; models: AdapterModelInfo[] }>(
+      `/v1/adapters/${encodeURIComponent(name)}/models`,
+    ),
 
   bakeoff: (
     job: "ask" | "decompose",
