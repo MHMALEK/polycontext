@@ -497,7 +497,7 @@ export function Decompose() {
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <div>
               <label className="text-xs text-base-content/60 mr-2">
-                Adapter
+                SDK
               </label>
               <select
                 value={adapter}

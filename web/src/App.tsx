@@ -52,6 +52,16 @@ type AskFormState = {
 // installed or isn't healthy — see the adapter list useEffect.
 const DEFAULT_ADAPTER = "cursor";
 
+const ADAPTER_PRIORITY: Record<string, number> = {
+  cursor: 0,
+  gemini: 1,
+  claude_code: 2,
+  opencode: 3,
+  sourcebot: 4,
+  cline_sdk: 5,
+  openai_agents: 6,
+};
+
 type DisplayedRun = {
   question: string;
   answer: string;
@@ -717,7 +727,12 @@ export function App() {
     api.listAdapters()
       .then((r) => {
         setAdapterListError(null);
-        const askables = r.adapters.filter((a) => a.capabilities.includes("ask"));
+        const askables = r.adapters
+          .filter((a) => a.capabilities.includes("ask"))
+          .sort(
+            (a, b) =>
+              (ADAPTER_PRIORITY[a.name] ?? 99) - (ADAPTER_PRIORITY[b.name] ?? 99),
+          );
         setAdapters(askables);
         setForm((f) => {
           const current = askables.find((a) => a.name === f.adapter);
@@ -1186,28 +1201,33 @@ export function App() {
                 className="w-full p-4 bg-transparent text-sm resize-y min-h-18 focus:outline-none placeholder:text-base-content/52"
               />
               <div className="flex items-center gap-3 flex-wrap px-3 py-2.5 border-t border-base-200/90 bg-base-200/20 rounded-b-2xl">
-                {adapters.length > 1 && (
-                  <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
-                    <span>Adapter</span>
-                    <select
-                      className="select select-bordered select-xs rounded-lg"
-                      value={form.adapter}
-                      onChange={(e) => setForm((f) => ({ ...f, adapter: e.target.value }))}
-                      title="POST /v1/adapters/{name}/ask"
-                    >
-                      {adapters.map((a) => (
+                <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
+                  <span>SDK</span>
+                  <select
+                    className="select select-bordered select-xs rounded-lg min-w-[8.5rem]"
+                    value={form.adapter}
+                    onChange={(e) => setForm((f) => ({ ...f, adapter: e.target.value }))}
+                    disabled={!adapterListHydrated || adapters.length === 0}
+                    title="POST /v1/adapters/{name}/ask"
+                  >
+                    {!adapterListHydrated ? (
+                      <option value={form.adapter}>Loading…</option>
+                    ) : adapters.length === 0 ? (
+                      <option value="">No SDKs</option>
+                    ) : (
+                      adapters.map((a) => (
                         <option
                           key={a.name}
                           value={a.name}
                           title={a.health.ok ? a.description : (a.health.reason ?? "unhealthy")}
                         >
                           {a.name}
-                          {a.health.ok ? "" : " ⚠"}
+                          {a.health.ok ? "" : " (unhealthy)"}
                         </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
+                      ))
+                    )}
+                  </select>
+                </label>
                 {/*
                   Grounding is opt-in and off by default — the bake-off
                   (eval/outputs/bakeoff-20260518T134739Z) showed grounding
