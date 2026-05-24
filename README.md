@@ -26,6 +26,7 @@
   </p>
 
   <p>
+    <a href="#-latest--open-source-agentic-at-the-cost-of-flash">🚀 Latest</a> ·
     <a href="#results">Results</a> ·
     <a href="#what-it-is">What it is</a> ·
     <a href="#adapters">Adapters</a> ·
@@ -35,10 +36,81 @@
     <a href="#serena-mcp-optional">Serena</a> ·
     <a href="#jira-bridge">Jira bridge</a> ·
     <a href="#web-ui">UI</a> ·
-    <a href="#quick-start">Quick start</a>
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#production-readiness">Production readiness</a>
   </p>
 
 </div>
+
+---
+
+## 🚀 Latest — open-source agentic at the cost of Flash
+
+The May 2026 iteration landed three architectural changes that materially moved the eval numbers, with full A/B data behind each. The headline:
+
+> **OpenCode + DeepSeek V3.2 (via OpenRouter): gold_accuracy 0.82 at $0.002/query.**
+> That's **94% of Gemini Pro's accuracy at 6.7% of Pro's price.**
+> Across 7 measured iterations, retrieval recall went **0.125 → 0.30** (+136%) on the same eval set.
+
+Three things landed:
+
+### 1️⃣ New "tiered pipeline" adapter — retrieve-first, cheap-synth, agentic fallback
+
+A single adapter that runs `router → Sourcebot+Serena prefetch → optional cross-encoder rerank → coverage scoring → Flash-class single-shot synthesis → file-path verifier → conditional agent fallback`. Keeps the hot path on cheap inference and only escalates when retrieval coverage is insufficient. See [`src/tech_decomposition/adapters/_pipeline.py`](src/tech_decomposition/adapters/_pipeline.py).
+
+### 2️⃣ Retrieval-quality stack — 8 measured wins, all data-driven
+
+| Fix | Why it mattered |
+|---|---|
+| Stop double-grounding the pipeline adapter | Single biggest bug — API + adapter were both running grounding on the *prefetched-grounded query*, polluting search terms with test-fixture tokens |
+| Zoekt noise filters (`-lang:markdown -f:test -f:specify ...`) | Markdown spec docs were taking 8 of every 10 retrieved slots |
+| Sourcebot repo-name normalization | Window expansion was silently no-op'ing because of `gitlab.com/<org>/.../repo` prefix mismatch |
+| Per-repo cap before rerank | Cross-repo diversity — one noisy repo could crowd out the rest |
+| Sourcebot chunk dedup (one chunk per file) | Same file dominating multiple snippet slots |
+| LLM-classifier term sanitization + 8-term cap | Hallucinated symbols (`L126`, `{TEST_RATE_LIMIT}/minute`) were poisoning OR-search |
+| Window expansion (re-read files, widen ±30 lines) | Model was seeing line-level fragments instead of complete functions |
+| Serena LSP `find_symbol` for symbol-shaped query terms | Deterministic file-of-definition lookup for `UserRoles`, `NODE_NAME_PATTERN`, `RolesChecker`, `get_identity` |
+
+### 3️⃣ Quality matrix — retrieval vs synthesis bottleneck, at a glance
+
+Three independent signals replace the single avg_score blur:
+
+- **context_recall** (new) — substring-match each labeled `expected_files` path against `metrics.extra.grounding_paths`. Tells you whether retrieval surfaced the right files BEFORE the model runs.
+- **gold_coverage** — LLM-judge: fraction of reference facts in the answer
+- **gold_accuracy** — LLM-judge: 1 − contradictions/answer
+
+The bake-off report now prints a per-case diagnosis grid:
+
+```
+| Case                          | opencode                       |
+| q-dashboard-suppliers-count   |  ✓  R=1.00 C=0.80 A=1.00       |
+| q-user-roles                  |  S  R=—    C=0.50 A=1.00       |  ← retrieval ok, half-answer
+| q-master-data-upload-e2e      |  R  R=0.00                     |  ← retrieval miss
+```
+
+Symbol legend: **✓** good · **R** retrieval missed · **S** synthesis incomplete · **RS** both failed · **?** unlabeled.
+
+41 hand-labeled `expected_files` across 15 cases make recall scorable, not vibes-based. See [`eval/questions.toml`](eval/questions.toml) and [`eval/cases/decompose/`](eval/cases/decompose/).
+
+### Cost-quality frontier — measured
+
+| Adapter | gold_acc | gold_cov | recall | $/query | wall |
+|---|---|---|---|---|---|
+| `pipeline` + Flash (baseline) | 0.57 | 0.24 | 0.30 | ~$0.002 | 39s |
+| `pipeline` + DeepSeek V3.2 (5-case subset) | 0.68 | 0.40 | 0.37 | ~$0.002 | 50s |
+| **`opencode` + DeepSeek V3.2 agentic** | **0.82** | 0.38 | (sparse, agentic decides) | **$0.002** | 72s |
+| Gemini Pro agentic (reference) | 0.87 | 0.44 | 0.19 | ~$0.030 | 34s |
+
+Open-source agentic is on the cost-quality frontier. **Caveat: not enterprise-ready for code privacy** — DeepSeek via OpenRouter routes through Chinese-hosted inference. For production, swap to self-hosted Qwen3 or Bedrock-hosted models — 5-10× the cost but the only compliant path.
+
+### What we learned about agentic + grounding (the philosophy)
+
+Across the 12 successful OpenCode runs:
+- **10 cases** answered from the prefetched grounding block with **zero tool calls** ("snippets are enough")
+- **2 cases** the model called tools (35 and 4 respectively) when grounding was insufficient
+- The hardest case in the eval (`q-dashboard-suppliers-count`, R=0 across every prior run) went R=1.00 C=0.80 A=1.00 once OpenCode could explore on its own
+
+The "pre-fetch then let the model decide" philosophy validates empirically: the model doesn't waste tool calls when retrieval was good. Downside: in the 10 zero-tool cases, gold_coverage was only ~50% — the model could have explored more but chose not to. Fixing that ("force tool use when answer is incomplete") is the next 0.38 → 0.6+ lever.
 
 ---
 
@@ -565,6 +637,33 @@ LLM-judge verdicts inline.
 
 - **Run history:** every API call is persisted in `outputs/runstore.db` (SQLite). The UI sidebar reads from `/runs`; full detail at `/runs/{id}`.
 - **Metrics digest:** `uv run tech-decomposition-analyze --since 24h` summarizes recent runs by adapter / cost / wall.
+
+---
+
+## Production readiness
+
+This project is honest-to-good for **Tract internal use** (cheap, fast enough for batch / async workflows, eval-instrumented). It is **NOT yet shippable as a SaaS to external paying customers**. The structural blockers, in order:
+
+1. **Privacy / compliance.** DeepSeek via OpenRouter routes through Chinese-hosted inference. No enterprise will allow source code through that path. Production option: self-host Qwen3-235B on US/EU GPUs, or switch to Bedrock + Mistral / Azure OpenAI. 5-10× the cost — the privacy tax.
+2. **Latency.** 72s p50 for the agentic loop is archive/batch territory. Interactive Q&A needs ≤30s p95. Mitigations: streaming answers, parallel tool execution, tighter tool budgets. ~2 weeks of infra work.
+3. **Reliability.** Across the eval runs we hit OpenCode `"No user message found in stream"` failures, Docker 302s network timeouts, opencode-serve mid-prompt crashes. Production needs structured retries, dead-session detection, circuit breakers.
+4. **Cost predictability.** Agentic loops can spiral — one case used 35 tool calls. Adversarial queries could rack up real money. Need hard per-query tool budget caps enforced server-side.
+5. **Quality floor.** gold_coverage 0.38 means users get half-answers on average. Customer-facing target should be ≥0.7. Next levers: Chain-of-Verification, HyDE for vocabulary-mismatch queries, RAPTOR for cross-repo trace questions, larger eval sets (100+ cases per domain).
+
+What an MVP would actually need:
+
+| Layer | Today | MVP requirement |
+|---|---|---|
+| Inference | OpenRouter / Gemini | Bedrock or self-hosted (privacy) |
+| Latency | 72s | ≤30s p95 with streaming |
+| Reliability | manual restarts | retry + monitoring + SLO |
+| Cost cap | none | hard $X/query enforced |
+| Auth | shared env vars | per-customer JWT + secret rotation |
+| Multi-tenancy | none | repo isolation per tenant |
+| Eval | 15 cases | 100+ customer-specific labeled |
+| Indexing | manual | incremental on git push |
+
+Realistic timeline to GA with 2-3 engineers: **2-3 months**. The AI/retrieval architecture is correct — what's missing is the production engineering wrapper, not the brain.
 
 ---
 
