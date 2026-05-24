@@ -187,10 +187,19 @@ class GeminiAdapter(Adapter):
         max_tool_rounds: int | None = None,
         tools_enabled: bool = True,
     ) -> AdapterAskResult:
+        from ..core.explore_directive import wrap_with_explore_directive
         t = time.monotonic()
+        # Wrap query with the "must-explore" directive when tools are on
+        # and grounding wasn't already prepended at the API level. The
+        # SDK's system parameter is unreliably honored by cheap models,
+        # so we put the directive in the user message where the model
+        # can't miss it.
+        prompt = wrap_with_explore_directive(
+            inp.query, tools_on=tools_enabled and not inp.grounded,
+        )
         out = await self._run(
             system=_ASK_SYSTEM,
-            prompt=inp.query,
+            prompt=prompt,
             model_id=model_id or self.settings.gemini_sdk_model,
             timeout_seconds=float(self.settings.gemini_sdk_timeout_seconds),
             cwd=self._cwd_for_repos(inp.repos),

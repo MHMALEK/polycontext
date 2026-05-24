@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from ..core.explore_directive import wrap_with_explore_directive as _wrap_with_explore_directive
 from ._prompts import DECOMPOSE_PREAMBLE, query_blob
 from .base import (
     Adapter,
@@ -96,9 +97,17 @@ class OpencodeSDKAdapter(Adapter):
         # provider="openrouter" → uses OPENROUTER_API_KEY.
         model_override = (inp.model or "").strip() or None
         pid, ak = self._credentials_for_model(model_override=model_override)
+        # OpenCode's session.prompt(system=...) parameter is unreliable —
+        # the "build" agent's baked-in system prompt overrides our directive
+        # in practice (verified empirically: input tokens=6 for "what is
+        # roles?" means even our 200-token system prompt isn't reaching the
+        # model). Inject the directive INTO the user message itself, where
+        # the model can't ignore it. Only when tools are enabled — there's
+        # no point telling a no-tools model to explore.
+        prompt = _wrap_with_explore_directive(inp.query, tools_on=bool(inp.tools_enabled))
         out = await self._run(
             system=_ASK_SYSTEM,
-            prompt=inp.query,
+            prompt=prompt,
             cwd=self._cwd_for_repos(inp.repos),
             timeout_seconds=self.settings.agent_node_timeout_seconds,
             structured=False,

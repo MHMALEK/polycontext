@@ -50,10 +50,17 @@ class CursorSDKAdapter(Adapter):
         return {"ok": True}
 
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
+        from ..core.explore_directive import wrap_with_explore_directive
         t = time.monotonic()
+        # Inject the must-explore directive into the user message so cheap
+        # models don't punt with "could you clarify?". See
+        # core/explore_directive.py for why this goes here vs system prompt.
+        prompt = wrap_with_explore_directive(
+            inp.query, tools_on=inp.tools_enabled and not inp.grounded,
+        )
         out = await self._run(
             system=_ASK_SYSTEM,
-            prompt=inp.query,
+            prompt=prompt,
             cwd=self._cwd_for_repos(inp.repos),
             timeout_seconds=self.settings.agent_node_timeout_seconds,
         )

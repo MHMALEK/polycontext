@@ -57,10 +57,14 @@ class OpenAIAgentsAdapter(Adapter):
         return {"ok": True}
 
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
+        from ..core.explore_directive import wrap_with_explore_directive
         t = time.monotonic()
+        prompt = wrap_with_explore_directive(
+            inp.query, tools_on=inp.tools_enabled and not inp.grounded,
+        )
         out = await self._run(
             system=_ASK_SYSTEM,
-            prompt=inp.query,
+            prompt=prompt,
             model_id=self.settings.openai_agents_sdk_model,
             timeout_seconds=float(self.settings.openai_agents_sdk_timeout_seconds),
             cwd=self._cwd_for_repos(inp.repos),
