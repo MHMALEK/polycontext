@@ -38,3 +38,4 @@ services/agent-node/node_modules/
 # User repositories (for local experimentation, ignored to prevent pushing proprietary code)
 repos/
 company-repos/
+.playwright-mcp/

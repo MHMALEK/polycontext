@@ -74,6 +74,10 @@ class AdapterAskInput(BaseModel):
     top_k: int = Field(default=8, ge=1, le=50)
     branch: str | None = None
     starting_ref: str | None = None
+    tags: list[str] | None = Field(
+        default=None,
+        description="Optional case tags (eval / UI) — used by the pipeline adapter for routing.",
+    )
     grounded: bool = Field(
         default=False,
         description=(
@@ -99,6 +103,10 @@ class AdapterAskResult(BaseModel):
 class AdapterDecomposeInput(BaseModel):
     query: str | None = None
     repos: list[str] | None = None
+    tags: list[str] | None = Field(
+        default=None,
+        description="Optional case tags (eval / UI) — used by the pipeline adapter for routing.",
+    )
     # Ignored by the in-repo pipeline (Sourcebot + structure). Remote adapters may interpret it.
     mode: Literal["cheap", "deep", "auto"] = "auto"
 

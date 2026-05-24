@@ -345,8 +345,13 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
         q_preview = inp.query[:160].strip()
 
         # 1) Optional grounded pre-fetch — runs alone, has its own metrics.
+        #    Skipped for the pipeline adapter, which does retrieval internally.
+        #    Without this guard, the pipeline adapter would receive a query that
+        #    already contains a grounding block and re-extract terms FROM that
+        #    block — pulling things like {TEST_RATE_LIMIT}/minute out of the
+        #    embedded test snippets and using them as search terms.
         grounding: GroundedContext | None = None
-        if inp.grounded:
+        if inp.grounded and name != "pipeline":
             grounding = await retrieve_grounded_context(
                 query=inp.query, settings=settings, repos=inp.repos, top_k=inp.top_k,
             )
@@ -395,6 +400,16 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
             )
             raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
         _adapter_progress_finishing(store, ctx.run_id, decompose=False)
+        # When grounding ran, surface the retrieved paths into the adapter's
+        # metrics so the recall scorer can compute context_recall for ANY
+        # adapter — not just the pipeline adapter that builds them itself.
+        if grounding is not None:
+            from .core.coverage import snippet_paths
+            extra = dict(result.metrics.extra or {})
+            extra.setdefault("grounding_paths", sorted(snippet_paths(grounding.snippets)))
+            result = result.model_copy(update={
+                "metrics": result.metrics.model_copy(update={"extra": extra}),
+            })
         m = result.metrics
         # Stash grounding in the payload so /runs/{id} can replay it.
         payload = {"grounding": grounding.model_dump(mode="json")} if grounding else None

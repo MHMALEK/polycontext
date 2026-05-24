@@ -151,13 +151,23 @@ class GeminiAdapter(Adapter):
         return {"ok": True}
 
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
+        return await self.ask_configured(inp)
+
+    async def ask_configured(
+        self,
+        inp: AdapterAskInput,
+        *,
+        model_id: str | None = None,
+        max_tool_rounds: int | None = None,
+    ) -> AdapterAskResult:
         t = time.monotonic()
         out = await self._run(
             system=_ASK_SYSTEM,
             prompt=inp.query,
-            model_id=self.settings.gemini_sdk_model,
+            model_id=model_id or self.settings.gemini_sdk_model,
             timeout_seconds=float(self.settings.gemini_sdk_timeout_seconds),
             cwd=self._cwd_for_repos(inp.repos),
+            max_tool_rounds=max_tool_rounds,
         )
         return AdapterAskResult(
             adapter=self.name,
@@ -174,20 +184,25 @@ class GeminiAdapter(Adapter):
         return d if d else "gemini-2.5-pro"
 
     async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
+        return await self.decompose_raw_configured(inp)
+
+    async def decompose_raw_configured(
+        self,
+        inp: AdapterDecomposeInput,
+        *,
+        model_id: str | None = None,
+        max_tool_rounds: int | None = None,
+    ) -> RawDecomposeText:
         t = time.monotonic()
         prompt = DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)
-        # Pass the Decomposition JSON schema so Gemini's API forces
-        # schema-valid output for the terminal response. Tool calls during
-        # AFC iterations are unconstrained. Downstream structurer then takes
-        # the fast path (direct JSON validation) instead of re-running a
-        # Flash repair call — saving ~1-2 s per decompose.
         out = await self._run(
             system=_DECOMPOSE_SYSTEM,
             prompt=prompt,
-            model_id=self._decompose_model_id(),
+            model_id=model_id or self._decompose_model_id(),
             timeout_seconds=float(self.settings.gemini_sdk_timeout_seconds),
             cwd=self._cwd_for_repos(inp.repos),
             response_schema=_gemini_decomposition_schema(),
+            max_tool_rounds=max_tool_rounds,
         )
         return RawDecomposeText(
             text=(out.get("answer") or ""),
@@ -208,6 +223,7 @@ class GeminiAdapter(Adapter):
         timeout_seconds: float,
         cwd: Path | str | None = None,
         response_schema: dict[str, Any] | None = None,
+        max_tool_rounds: int | None = None,
     ) -> dict[str, Any]:
         url = self.settings.agent_node_url.rstrip("/") + "/adapters/gemini/run"
         body: dict[str, Any] = {
@@ -221,6 +237,8 @@ class GeminiAdapter(Adapter):
             body["cwd"] = str(cwd)
         if response_schema is not None:
             body["responseSchema"] = response_schema
+        if max_tool_rounds is not None:
+            body["maxToolRounds"] = max_tool_rounds
         async with httpx.AsyncClient(timeout=timeout_seconds + 30) as c:
             r = await c.post(url, json=body)
         if r.status_code >= 400:

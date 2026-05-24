@@ -152,7 +152,10 @@ async def structure_decomposition(
         return _fallback_minimal(text=text, query=query, reason="pydantic-ai not installed")
 
     os.environ.setdefault("GEMINI_API_KEY", settings.gemini_api_key)
-    model_name = (settings.enrich_model or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    raw = (settings.pipeline_structurer_model or settings.enrich_model or "gemini-2.5-flash").strip()
+    model_name = raw.split(":", 1)[-1].strip() if ":" in raw else raw
+    if not model_name:
+        model_name = "gemini-2.5-flash"
 
     try:
         agent = Agent(
