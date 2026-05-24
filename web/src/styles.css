@@ -387,7 +387,7 @@
   @apply prose-pre:bg-base-100 prose-pre:border prose-pre:border-base-300/60 prose-pre:rounded-md;
   @apply prose-code:before:content-none prose-code:after:content-none;
   @apply prose-code:bg-base-300/60 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[0.85em];
-  @apply prose-headings:font-display prose-headings:text-base-content;
+  @apply prose-headings:text-base-content;
   @apply prose-strong:text-base-content prose-strong:font-medium;
   @apply prose-a:text-secondary prose-a:no-underline hover:prose-a:underline;
   @apply prose-blockquote:border-l-primary/40 prose-blockquote:text-base-content/75;
@@ -395,6 +395,12 @@
   @apply prose-li:marker:text-base-content/40;
   color: oklch(86% 0.008 240);
 }
+
+/* Heading font is set on the explicit element selectors below rather than
+   via ``prose-headings:font-display`` — ``font-display`` is a CUSTOM
+   class (defined in @layer base) and Tailwind v4 rejects custom classes
+   inside the ``prose-*:`` variant prefix with "unknown utility class",
+   which silently broke the whole stylesheet compile. */
 
 .conversation-prose :where(h1, h2, h3, h4) {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
