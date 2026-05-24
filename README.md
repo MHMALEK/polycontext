@@ -227,12 +227,31 @@ GET /v1/adapters
 |---|---|---|
 | `GET` | `/health` | Liveness |
 | `GET` | `/v1/adapters` | List adapters, capabilities, health |
+| `GET` | `/v1/adapters/{name}/models` | Curated + live OpenRouter model catalog for one adapter |
 | `POST` | `/v1/adapters/{name}/ask` | Code Q&A through one adapter |
 | `POST` | `/v1/adapters/{name}/decompose` | Ticket → `Decomposition` |
 | `POST` | `/v1/grounding/retrieve` | Sourcebot search alone — see snippets + metrics |
 | `POST` | `/v1/bakeoff/{job}` | `ask`\|`decompose` — fan one input across N adapters |
+| `POST` | `/v1/providers/openrouter/models/refresh` | Force-refresh the cached OpenRouter live model list |
 | `GET` | `/runs`, `/runs/{id}` | History list / detail |
 | `POST` | `/runs/{id}/replay` | Re-run a saved request |
+
+The ask body accepts these per-request overrides (all optional):
+
+```jsonc
+{
+  "query": "...",
+  "grounded": true,         // prepend Sourcebot+Serena snippets
+  "tools_enabled": true,    // let the adapter call its own tools (default true)
+  "model": "openrouter/deepseek/deepseek-v3.2",  // override adapter's default
+  "thread_id": "...",       // continue a prior thread
+  "repos": ["traceability"],
+  "top_k": 8,
+  "tags": ["enumeration"]   // used by pipeline adapter routing
+}
+```
+
+`(grounded, tools_enabled)` together expresses the [4 operating modes](#operating-modes). The model id format is adapter-specific (slash for `opencode`, colon for `pipeline`, bare for `gemini`) — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#models-providers-and-credentials).
 
 **Request example (ask, grounded):**
 
@@ -429,10 +448,23 @@ Slack is intentionally out of scope for now. The flow object in `decompose_ticke
 
 ## Web UI
 
-A React + Tailwind + DaisyUI single-page app under [`web/`](web/). Two tabs:
+A React + Tailwind + DaisyUI single-page app under [`web/`](web/). Two tabs.
 
-- **Ask** — chat-style threaded conversation. Pick adapter, optionally toggle **Grounded**, send. The answer card shows the meta strip (model, wall, tokens, cost), the markdown answer, citations, and (when grounded) a collapsible grounding panel that lists each injected snippet inline.
-- **Decompose** — single-shot ticket → structured `Decomposition`. Renders subtasks as cards (title, repo, complexity badge, files with optional Sourcebot URLs, acceptance criteria) plus collapsible risks / open questions, with raw markdown tucked at the bottom.
+### Ask — chat-style threaded conversation
+
+Three selectors above the composer:
+
+1. **SDK** — pick the adapter (cursor, gemini, claude_code, opencode, sourcebot, cline_sdk, openai_agents, pipeline). Sorted by priority; unhealthy adapters greyed with reason on hover.
+2. **Model** — per-request model override. Two `<optgroup>`s in the dropdown:
+   - **Recommended** — curated list per adapter with our eval notes + price/M tokens. Lives in [`adapters/_models_catalog.py`](src/tech_decomposition/adapters/_models_catalog.py).
+   - **OpenRouter live (~358)** — every OpenRouter model fetched live from `/api/v1/models`, sorted, deduped against the curated section. Cached 1h server-side. Pick anything; the credential auto-routes based on the prefix (`openrouter/...` → `OPENROUTER_API_KEY`, `anthropic/...` → `ANTHROPIC_API_KEY`, etc.).
+3. **Mode** — 4 operating modes, see [Operating modes](#operating-modes) below.
+
+The answer card shows the meta strip (model, wall, tokens, cost, tool calls), the markdown answer, citations, and (when grounded) a collapsible grounding panel that lists each injected snippet inline.
+
+### Decompose
+
+Single-shot ticket → structured `Decomposition`. Renders subtasks as cards (title, repo, complexity badge, files with optional Sourcebot URLs, acceptance criteria) plus collapsible risks / open questions, with raw markdown tucked at the bottom.
 
 History sidebar covers both modes. Click any prior run to see its details (including its grounding payload if it had one).
 
@@ -441,6 +473,27 @@ cd web && npm install && npm run dev   # → http://localhost:15173, vite proxie
 ```
 
 For prod the UI is bundled with `npm run build`; FastAPI serves `web/dist/` at `/ui` when present.
+
+### Operating modes
+
+| Mode | grounded | tools | When to use | Latency |
+|---|---|---|---|---|
+| **Hybrid** (default) | ✅ | ✅ | Default. Prefetch snippets AND let adapter call its own tools if needed. Best quality. | 30s–2min |
+| **Grounded only** | ✅ | ❌ | You trust retrieval. Single-shot from snippets, no tool calls. **Fastest.** | 5–15s |
+| **Agent only** | ❌ | ✅ | Codebase has poor retrieval signal. Model navigates from scratch via tools. | 1–3min |
+| **Single-shot** | ❌ | ❌ | General questions answerable from training. No retrieval, no tools. | 3–10s |
+
+Maps to `(grounded, tools_enabled)` on the wire. Per-request via `POST /v1/adapters/{name}/ask`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#the-4-modes-ui-facing) for full request walks.
+
+### Example: cheap open-source agentic via OpenCode + DeepSeek
+
+The empirically-best cost-quality configuration from our eval:
+
+1. SDK → `opencode`
+2. Model → **DeepSeek V3.2** (under Recommended) — or any other OpenRouter model the live section exposes
+3. Mode → **Hybrid** (default) — prefetch + agentic on demand
+
+At ~$0.002/query and 0.82 gold_accuracy. See the [Latest](#-latest--open-source-agentic-at-the-cost-of-flash) section for full numbers.
 
 ---
 
