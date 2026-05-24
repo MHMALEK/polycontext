@@ -64,6 +64,17 @@ const ASK_MODE_LABELS: Record<AskMode, string> = {
   raw: "Single-shot (no grounding, no tools)",
 };
 
+// Short labels for the segmented control — needs to fit horizontally in
+// 4 pills, so we drop the parentheticals and use terse names.
+function askModeShortLabel(m: AskMode): string {
+  switch (m) {
+    case "hybrid": return "Hybrid";
+    case "grounded_only": return "Grounded";
+    case "agent_only": return "Agent";
+    case "raw": return "Direct";
+  }
+}
+
 const ASK_MODE_DESCRIPTIONS: Record<AskMode, string> = {
   hybrid: "Prefetch Sourcebot+Serena snippets AND let the adapter call its own tools if it wants to. Default.",
   grounded_only: "Prefetch snippets and force the adapter to answer single-shot from them (no read/grep/glob).",
@@ -204,19 +215,6 @@ function groupHistoryByDay(rows: RunListItem[]): { label: string; items: RunList
     .filter((g) => g.items.length > 0);
 }
 
-function statusDotClass(status: string): string {
-  switch (status) {
-    case "completed":
-      return "bg-success";
-    case "failed":
-      return "bg-error";
-    case "running":
-      return "bg-warning animate-pulse";
-    default:
-      return "bg-base-content/45";
-  }
-}
-
 function extractQuestion(detail: RunDetail | null): string {
   if (!detail) return "";
   const ref = detail.input_ref;
@@ -279,45 +277,54 @@ function HistoryItem({
     <button
       type="button"
       onClick={() => onSelect(threadKey(run))}
-      className={`group relative w-full text-left rounded-2xl px-3 py-3 transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-primary/35 focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 ${
+      className={`group relative w-full text-left rounded-lg px-3 py-2.5 transition-colors outline-none focus-visible:ring-1 focus-visible:ring-primary/40 ${
         selected
-          ? "bg-base-100 shadow-md ring-1 ring-primary/25 border-l-[3px] border-l-primary"
-          : "bg-base-100/75 hover:bg-base-100 hover:shadow-sm border border-base-300/75 border-l-[3px] border-l-transparent"
+          ? "bg-base-200 border-hairline"
+          : "bg-transparent hover:bg-base-200/60 border border-transparent"
       }`}
     >
       <div className="flex items-start gap-2.5">
+        {/* Status dot — solid green if completed, pulsing if running,
+            muted otherwise. Replaces the larger ringed bullet. */}
         <span
-          className={`mt-1.5 inline-block w-2 h-2 rounded-full shrink-0 ring-2 ring-base-100 ${statusDotClass(
-            run.status,
-          )}`}
+          className={`status-dot mt-[7px] shrink-0 ${
+            run.status === "running" ? "pulse" : run.status === "completed" ? "" : "muted"
+          }`}
           aria-hidden
         />
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] leading-snug line-clamp-2 text-base-content font-medium tracking-tight">
+          <p className="text-[12.5px] leading-snug line-clamp-2 text-base-content/95 font-normal tracking-tight">
             {historyTitle(run)}
           </p>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-base-content/70">
-            <span className="tabular-nums">{formatTimeAgo(run.created_at)}</span>
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="font-mono text-[10px] tracking-wide text-base-content/45 tabular-nums">
+              {formatTimeAgo(run.created_at)}
+            </span>
             {adapter && (
               <>
-                <span aria-hidden className="text-base-content/55">
-                  ·
-                </span>
-                <span className="font-mono-ui text-[10px] uppercase tracking-wider text-base-content/65">
+                <span aria-hidden className="text-base-content/25 text-[10px]">·</span>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-base-content/55">
                   {adapter}
                 </span>
               </>
             )}
+            {run.total_seconds != null && (
+              <>
+                <span aria-hidden className="text-base-content/25 text-[10px]">·</span>
+                <span className="font-mono text-[10px] text-base-content/45 tabular-nums">
+                  {formatWall(run.total_seconds)}
+                </span>
+              </>
+            )}
+            {run.total_cost_usd != null && (
+              <>
+                <span aria-hidden className="text-base-content/25 text-[10px]">·</span>
+                <span className="font-mono text-[10px] text-accent/85 tabular-nums">
+                  {formatCost(run.total_cost_usd)}
+                </span>
+              </>
+            )}
           </div>
-          {(run.total_seconds != null || run.total_cost_usd != null) && (
-            <div className="mt-1 text-[10px] text-base-content/70 tabular-nums">
-              {run.total_seconds != null && <span>{formatWall(run.total_seconds)}</span>}
-              {run.total_seconds != null && run.total_cost_usd != null && (
-                <span className="mx-1 text-base-content/55">·</span>
-              )}
-              {run.total_cost_usd != null && <span>{formatCost(run.total_cost_usd)}</span>}
-            </div>
-          )}
         </div>
         {!isPendingSidebar && (
         <button
@@ -454,30 +461,34 @@ function Citations({ citations }: { citations: Array<Record<string, unknown>> })
 }
 
 function MetaStrip({ run }: { run: DisplayedRun }) {
-  const items: Array<{ label: string; value: string }> = [];
-  if (run.engine) items.push({ label: "Engine", value: run.engine });
-  if (run.model) items.push({ label: "Model", value: run.model });
+  // Render the per-run telemetry as typed chips — engine + model are info,
+  // cost is amber (cautionary), tokens neutral. This is exactly the kind
+  // of metric strip you'd see at the top of a Datadog widget, not the
+  // generic gray pills daisyUI gives you.
+  type Variant = "default" | "info" | "accent";
+  const items: Array<{ label: string; value: string; variant?: Variant }> = [];
+  if (run.engine) items.push({ label: "engine", value: run.engine, variant: "info" });
+  if (run.model) items.push({ label: "model", value: run.model });
   if (run.wall_seconds != null)
-    items.push({ label: "Time", value: formatWall(run.wall_seconds) });
-  if (run.cost_usd != null) items.push({ label: "Cost", value: formatCost(run.cost_usd) });
+    items.push({ label: "wall", value: formatWall(run.wall_seconds) });
+  if (run.cost_usd != null)
+    items.push({ label: "cost", value: formatCost(run.cost_usd), variant: "accent" });
   if (run.input_tokens != null || run.output_tokens != null) {
     items.push({
-      label: "Tokens",
-      value: `${run.input_tokens ?? 0} → ${run.output_tokens ?? 0}`,
+      label: "tokens",
+      value: `${run.input_tokens ?? 0}→${run.output_tokens ?? 0}`,
     });
   }
   if (!items.length) return null;
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       {items.map((it) => (
         <span
           key={it.label}
-          className="inline-flex items-center gap-1.5 rounded-full bg-base-200/90 px-3 py-1 text-[11px] text-base-content/88 border border-base-300/60 shadow-sm"
+          className={`chip ${it.variant === "info" ? "chip-info" : it.variant === "accent" ? "chip-accent" : ""}`}
         >
-          <span className="text-base-content/65 font-semibold uppercase tracking-wide text-[10px]">
-            {it.label}
-          </span>
-          <span className="font-mono-ui tabular-nums text-[11px] text-base-content/90">{it.value}</span>
+          <span className="chip-label">{it.label}</span>
+          <span className="chip-value">{it.value}</span>
         </span>
       ))}
     </div>
@@ -1053,57 +1064,67 @@ export function App() {
     <div className="app-surface min-h-screen text-base-content">
       <div className="app-grain" aria-hidden />
       <div className="app-shell-content grid grid-cols-1 md:grid-cols-[minmax(17rem,20rem)_1fr] h-screen min-h-0">
-        <aside className="min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-base-300 bg-base-100/92 backdrop-blur-md">
-          <div className="px-4 pt-4 pb-3 border-b border-base-300/80 bg-base-200/15">
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary/25 to-secondary/10 text-base font-display font-semibold text-primary shadow-sm ring-1 ring-primary/20">
-                ◈
+        <aside className="min-h-0 flex flex-col hairline-r bg-base-100/60 backdrop-blur-md">
+          {/* Brand block — tight 2-line ID, monospace, no gradient blob. */}
+          <div className="px-4 pt-5 pb-4 hairline-b">
+            <div className="flex items-center gap-2.5">
+              <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-primary/30 bg-primary/8">
+                <span className="font-display text-[14px] font-semibold text-primary leading-none">▰</span>
+                <span className="absolute -bottom-px left-1/2 -translate-x-1/2 h-px w-3.5 bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
               </div>
-              <div className="min-w-0 pt-0.5">
-                <p className="font-display text-lg font-semibold tracking-tight leading-tight">decomp</p>
-                <p className="text-[11px] text-base-content/75 mt-0.5">Multi-repo Q&amp;A</p>
+              <div className="min-w-0">
+                <p className="font-display text-[14px] font-medium tracking-tight leading-tight text-base-content/95">
+                  polycontext
+                </p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-base-content/40 leading-tight mt-0.5">
+                  code Q&amp;A
+                </p>
               </div>
             </div>
           </div>
-          <div className="px-3 py-3 border-b border-base-300/60">
+
+          {/* New question — ghost-style button; primary action lives in the composer. */}
+          <div className="px-3 py-3 hairline-b">
             <button
               type="button"
               onClick={startNew}
-              className="btn btn-primary btn-sm w-full gap-2 rounded-xl"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-base-300 bg-base-200/50 hover:bg-base-200 hover:border-primary/30 transition-colors px-3 py-1.5 font-mono text-[11px] tracking-wide text-base-content/85"
+              title="Clear the composer and start a new thread"
             >
-              <span className="text-lg leading-none">+</span>
-              <span>New question</span>
+              <span className="text-primary text-sm leading-none">＋</span>
+              <span>New thread</span>
             </button>
           </div>
 
-          <div className="px-3 pt-3 pb-1 flex items-center justify-between">
-            <h2 className="text-[10px] font-bold uppercase tracking-widest text-base-content/70">
+          {/* History header — tight tracking, refresh tucked at the end. */}
+          <div className="px-4 pt-4 pb-2 flex items-center justify-between">
+            <h2 className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-base-content/45">
               History
             </h2>
             <button
               type="button"
               onClick={loadHistory}
-              className="btn btn-ghost btn-xs btn-square text-base-content/75"
+              className="inline-flex h-5 w-5 items-center justify-center rounded text-base-content/45 hover:text-base-content hover:bg-base-200/50 transition-colors"
               aria-label="Refresh history"
               title="Refresh now (also updates every 15s while this tab is visible)"
             >
-              ↻
+              <span className="text-[11px]">↻</span>
             </button>
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-4">
             {historyWithPlaceholder.length === 0 ? (
-              <p className="text-xs text-base-content/75 px-2 py-6 leading-relaxed">
-                No runs yet. Ask a question in the composer — it will show up here.
+              <p className="text-[11px] text-base-content/50 px-3 py-6 leading-relaxed font-mono">
+                no runs yet. ask in the composer.
               </p>
             ) : (
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-3">
                 {historyGroups.map((g) => (
                   <div key={g.label}>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-base-content/65 px-1.5 mb-1.5">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/35 px-3 mb-1">
                       {g.label}
                     </p>
-                    <ul className="flex flex-col gap-1.5">
+                    <ul className="flex flex-col gap-0.5">
                       {g.items.map((r) => (
                         <li key={r.id}>
                           <HistoryItem
@@ -1127,24 +1148,29 @@ export function App() {
           </div>
         </aside>
 
-        <main className="min-h-0 flex flex-col h-full min-w-0 bg-base-200/40">
-          <header className="shrink-0 border-b border-base-300/80 bg-base-100/70 backdrop-blur-md shadow-sm shadow-base-300/10 px-4 sm:px-6 py-3 sm:py-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight">
-                  Workspace
+        <main className="min-h-0 flex flex-col h-full min-w-0">
+          <header className="shrink-0 hairline-b bg-base-100/60 backdrop-blur-md px-4 sm:px-6 py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <h1 className="font-display text-[15px] font-medium tracking-tight text-base-content/95">
+                  {view === "ask" ? "Ask" : "Decompose"}
                 </h1>
-                <p className="text-xs text-base-content/75 mt-1 leading-relaxed max-w-2xl">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-base-content/35 hidden md:inline">
                   {view === "ask"
-                    ? "Ask with follow-ups in one thread. History on the left keeps prior sessions."
-                    : "Decompose a ticket into structured subtasks across repos."}
-                </p>
+                    ? activeThreadId
+                      ? "thread · follow-up context"
+                      : pickedAdapter
+                        ? `route ${pickedAdapter.name}`
+                        : "no adapter"
+                    : "ticket → subtasks"}
+                </span>
               </div>
-              <div role="tablist" className="tabs tabs-boxed tabs-sm shrink-0">
+              {/* Mode tabs styled as a segmented control matching the composer. */}
+              <div role="tablist" className="segmented shrink-0" aria-label="View">
                 <button
                   type="button"
                   role="tab"
-                  className={`tab ${view === "ask" ? "tab-active" : ""}`}
+                  aria-pressed={view === "ask"}
                   onClick={() => setView("ask")}
                 >
                   Ask
@@ -1152,22 +1178,13 @@ export function App() {
                 <button
                   type="button"
                   role="tab"
-                  className={`tab ${view === "decompose" ? "tab-active" : ""}`}
+                  aria-pressed={view === "decompose"}
                   onClick={() => setView("decompose")}
                 >
                   Decompose
                 </button>
               </div>
             </div>
-            {view === "ask" && (
-              <p className="text-[11px] text-base-content/70 mt-2 border-t border-base-300/70 pt-2">
-                {activeThreadId
-                  ? "Follow-ups use this thread — prior turns are sent as context."
-                  : pickedAdapter
-                    ? `Routing through ${pickedAdapter.name}.`
-                    : "Pick an adapter before sending."}
-              </p>
-            )}
           </header>
 
           {view === "decompose" ? (
@@ -1255,136 +1272,145 @@ export function App() {
             </div>
           </div>
 
-          <div className="shrink-0 border-t border-base-300/80 bg-base-100/90 backdrop-blur-md px-4 sm:px-6 py-4">
+          <div className="shrink-0 hairline-t bg-base-100/95 backdrop-blur-md px-4 sm:px-6 py-4">
             <form
               onSubmit={handleSubmit}
-              className="max-w-3xl mx-auto w-full rounded-2xl bg-base-100 border border-base-300 shadow-md focus-within:border-primary/35 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/15 transition-all"
+              className="max-w-4xl mx-auto w-full"
             >
-              <textarea
-                ref={composerRef}
-                placeholder="Ask about architecture, flows, or where something lives…"
-                value={form.question}
-                onChange={(e) => setForm((f) => ({ ...f, question: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    void handleSubmit(e as unknown as React.FormEvent);
-                  }
-                }}
-                rows={3}
-                className="w-full p-4 bg-transparent text-sm resize-y min-h-18 focus:outline-none placeholder:text-base-content/52"
-              />
-              <div className="flex items-center gap-3 flex-wrap px-3 py-2.5 border-t border-base-200/90 bg-base-200/20 rounded-b-2xl">
-                <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
-                  <span>SDK</span>
-                  <select
-                    className="select select-bordered select-xs rounded-lg min-w-[8.5rem]"
-                    value={form.adapter}
-                    onChange={(e) => setForm((f) => ({ ...f, adapter: e.target.value }))}
-                    disabled={!adapterListHydrated || adapters.length === 0}
-                    title="POST /v1/adapters/{name}/ask"
-                  >
-                    {!adapterListHydrated ? (
-                      <option value={form.adapter}>Loading…</option>
-                    ) : adapters.length === 0 ? (
-                      <option value="">No SDKs</option>
-                    ) : (
-                      adapters.map((a) => (
-                        <option
-                          key={a.name}
-                          value={a.name}
-                          title={a.health.ok ? a.description : (a.health.reason ?? "unhealthy")}
-                        >
-                          {a.name}
-                          {a.health.ok ? "" : " (unhealthy)"}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                </label>
-                {/*
-                  Grounding is opt-in and off by default — the bake-off
-                  (eval/outputs/bakeoff-20260518T134739Z) showed grounding
-                  hurts most adapters on most questions. Demoted from a
-                  visible checkbox to an Advanced disclosure so we don't
-                  push casual users toward a worse default.
-                */}
-                {/* Mode picker — Hybrid / Grounded-only / Agent-only / Raw. */}
-                <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
-                  <span>Mode</span>
-                  <select
-                    className="select select-bordered select-xs rounded-lg min-w-[11rem]"
-                    value={form.mode}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, mode: e.target.value as AskMode }))
+              {/* Composer card — textarea above; controls strip below in a hairline-separated row. */}
+              <div className="surface overflow-hidden focus-within:border-base-300 transition-colors">
+                <textarea
+                  ref={composerRef}
+                  placeholder="Ask about architecture, flows, or where something lives…"
+                  value={form.question}
+                  onChange={(e) => setForm((f) => ({ ...f, question: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      void handleSubmit(e as unknown as React.FormEvent);
                     }
-                    title={ASK_MODE_DESCRIPTIONS[form.mode]}
-                  >
-                    {(Object.keys(ASK_MODE_LABELS) as AskMode[]).map((m) => (
-                      <option key={m} value={m} title={ASK_MODE_DESCRIPTIONS[m]}>
-                        {ASK_MODE_LABELS[m]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {/* Model picker — curated (recommended) + live OpenRouter
-                    catalog when the adapter accepts OpenRouter ids. */}
-                {(adapterModels.length > 0 || openrouterModels.length > 0) && (
-                  <label className="flex items-center gap-2 text-[11px] text-base-content/78 font-medium">
-                    <span>Model</span>
+                  }}
+                  rows={3}
+                  className="w-full px-5 py-4 bg-transparent text-[15px] leading-relaxed resize-y min-h-20 focus:outline-none placeholder:text-base-content/40 font-sans"
+                />
+                {/* Three labeled pickers + Ask button, separated by hairlines. */}
+                <div className="hairline-t flex items-end gap-4 flex-wrap px-4 py-3 bg-base-100/40">
+                  <div className="picker">
+                    <span className="picker-label">SDK</span>
                     <select
-                      className="select select-bordered select-xs rounded-lg min-w-[12rem]"
-                      value={form.model}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, model: e.target.value }))
-                      }
-                      title="Per-request model override. Provider credentials must be set in .env."
+                      value={form.adapter}
+                      onChange={(e) => setForm((f) => ({ ...f, adapter: e.target.value }))}
+                      disabled={!adapterListHydrated || adapters.length === 0}
+                      title="POST /v1/adapters/{name}/ask"
+                      className="min-w-[10rem]"
                     >
-                      <option value="">(adapter default)</option>
-                      {adapterModels.length > 0 && (
-                        <optgroup label="Recommended">
-                          {adapterModels.map((m) => (
-                            <option key={m.id} value={m.id} title={m.note ?? ""}>
-                              {m.name}
-                              {typeof m.in_per_m_usd === "number"
-                                ? `  · $${m.in_per_m_usd}/${m.out_per_m_usd}/M`
-                                : ""}
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-                      {openrouterModels.length > 0 && (
-                        <optgroup label={`OpenRouter live (${openrouterModels.length})`}>
-                          {openrouterModels.map((m) => (
-                            <option key={m.id} value={m.id} title={m.note ?? ""}>
-                              {m.name}
-                              {typeof m.in_per_m_usd === "number"
-                                ? `  · $${m.in_per_m_usd}/${m.out_per_m_usd}/M`
-                                : ""}
-                            </option>
-                          ))}
-                        </optgroup>
+                      {!adapterListHydrated ? (
+                        <option value={form.adapter}>Loading…</option>
+                      ) : adapters.length === 0 ? (
+                        <option value="">No SDKs</option>
+                      ) : (
+                        adapters.map((a) => (
+                          <option
+                            key={a.name}
+                            value={a.name}
+                            title={a.health.ok ? a.description : (a.health.reason ?? "unhealthy")}
+                          >
+                            {a.name}
+                            {a.health.ok ? "" : " (unhealthy)"}
+                          </option>
+                        ))
                       )}
                     </select>
-                  </label>
-                )}
-                <span className="text-[10px] text-base-content/65 hidden sm:inline ml-auto sm:ml-0">
-                  ⌘↵ send
-                </span>
-                <button
-                  type="submit"
-                  className="btn btn-primary btn-sm rounded-xl gap-2 sm:ml-auto"
-                  disabled={
-                    submitting ||
-                    !adapterListHydrated ||
-                    !form.question.trim() ||
-                    !pickedAdapter?.health.ok
-                  }
-                >
-                  {submitting && <span className="loading loading-spinner loading-xs" />}
-                  <span>{submitting ? "Asking…" : "Ask"}</span>
-                </button>
+                  </div>
+
+                  {(adapterModels.length > 0 || openrouterModels.length > 0) && (
+                    <div className="picker">
+                      <span className="picker-label">Model</span>
+                      <select
+                        value={form.model}
+                        onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+                        title="Per-request model override. Provider credentials must be set in .env."
+                        className="min-w-[14rem] max-w-[18rem]"
+                      >
+                        <option value="">(adapter default)</option>
+                        {adapterModels.length > 0 && (
+                          <optgroup label="Recommended">
+                            {adapterModels.map((m) => (
+                              <option key={m.id} value={m.id} title={m.note ?? ""}>
+                                {m.name}
+                                {typeof m.in_per_m_usd === "number"
+                                  ? `  · $${m.in_per_m_usd}/${m.out_per_m_usd}/M`
+                                  : ""}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {openrouterModels.length > 0 && (
+                          <optgroup label={`OpenRouter live (${openrouterModels.length})`}>
+                            {openrouterModels.map((m) => (
+                              <option key={m.id} value={m.id} title={m.note ?? ""}>
+                                {m.name}
+                                {typeof m.in_per_m_usd === "number"
+                                  ? `  · $${m.in_per_m_usd}/${m.out_per_m_usd}/M`
+                                  : ""}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Mode — segmented control. 4 first-class pills, far better
+                      than a <select> for the small finite set of options. */}
+                  <div className="picker">
+                    <span className="picker-label" title={ASK_MODE_DESCRIPTIONS[form.mode]}>Mode</span>
+                    <div className="segmented" role="tablist" aria-label="Operating mode">
+                      {(Object.keys(ASK_MODE_LABELS) as AskMode[]).map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          role="tab"
+                          aria-pressed={form.mode === m}
+                          aria-selected={form.mode === m}
+                          onClick={() => setForm((f) => ({ ...f, mode: m }))}
+                          title={ASK_MODE_DESCRIPTIONS[m]}
+                        >
+                          {askModeShortLabel(m)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex-1" />
+
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-[10px] text-base-content/45 tracking-[0.12em] uppercase hidden sm:inline">
+                      ⌘↵ Send
+                    </span>
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-sm rounded-lg gap-2 px-4 font-mono text-[12px] font-medium tracking-wide normal-case"
+                      disabled={
+                        submitting ||
+                        !adapterListHydrated ||
+                        !form.question.trim() ||
+                        !pickedAdapter?.health.ok
+                      }
+                    >
+                      {submitting && <span className="loading loading-spinner loading-xs" />}
+                      <span>{submitting ? "asking…" : "ask"}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
+              {/* Helper line below — keeps mode context legible without
+                  cramping the controls strip itself. */}
+              <p className="text-[11px] text-base-content/45 mt-2 font-mono leading-relaxed">
+                <span className="text-base-content/65">{ASK_MODE_LABELS[form.mode].toLowerCase()}</span>
+                <span className="text-base-content/30"> · </span>
+                {ASK_MODE_DESCRIPTIONS[form.mode]}
+              </p>
             </form>
           </div>
           </>

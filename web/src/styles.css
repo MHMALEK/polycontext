@@ -1,59 +1,139 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 @plugin "daisyui" {
-  themes: light --default, dark --prefersdark;
+  themes: midnight --default --prefersdark, light;
+}
+
+/*
+ * ============================================================================
+ *  "Engineering Telemetry" theme — refined dark dashboard with IDE DNA.
+ *
+ *  Inspired by Linear's hairlines, Vercel's typographic precision, and the
+ *  density of professional engineering tools (Datadog, Grafana, Bloomberg).
+ *
+ *  Color: deep midnight with a faint cool cast (NOT pure black, NOT generic
+ *  grey). One confident accent (green) for primary actions + signal of
+ *  health/recall. Amber for cost/cautionary numerics. Calm blue for info.
+ *
+ *  Typography: IBM Plex Mono for headings + metrics + code; IBM Plex Sans
+ *  for narrative copy. Both have real character (not generic Inter/Roboto).
+ *  Tabular numerics on every metric chip.
+ *
+ *  Rule of thumb: surfaces stay quiet, hairlines do the structuring,
+ *  monospace numbers carry the weight.
+ * ============================================================================
+ */
+
+@plugin "daisyui/theme" {
+  name: "midnight";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+
+  /* Surfaces ------------------------------------------------------ */
+  --color-base-100: oklch(13% 0.008 240);   /* page background          */
+  --color-base-200: oklch(16% 0.010 240);   /* card / surface           */
+  --color-base-300: oklch(20% 0.012 240);   /* elevated, hover state    */
+  --color-base-content: oklch(96% 0.004 240); /* primary text           */
+
+  /* Accents — used VERY sparingly. One color does most of the work. */
+  --color-primary: oklch(74% 0.16 145);     /* confident green          */
+  --color-primary-content: oklch(13% 0.008 240);
+  --color-secondary: oklch(76% 0.13 220);   /* calm blue, info          */
+  --color-secondary-content: oklch(13% 0.008 240);
+  --color-accent: oklch(78% 0.14 85);       /* warm amber, cost/warn    */
+  --color-accent-content: oklch(13% 0.008 240);
+  --color-neutral: oklch(22% 0.012 240);
+  --color-neutral-content: oklch(96% 0.004 240);
+  --color-info: oklch(76% 0.13 220);
+  --color-info-content: oklch(13% 0.008 240);
+  --color-success: oklch(74% 0.16 145);
+  --color-success-content: oklch(13% 0.008 240);
+  --color-warning: oklch(80% 0.16 75);
+  --color-warning-content: oklch(13% 0.008 240);
+  --color-error: oklch(66% 0.22 25);
+  --color-error-content: oklch(96% 0.004 240);
+
+  /* Geometry ------------------------------------------------------ */
+  --radius-selector: 0.375rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1px;       /* hairline borders everywhere                  */
+  --depth: 0;          /* zero default depth — flat surfaces           */
+  --noise: 0;
 }
 
 @layer base {
   html {
-    font-family: "Outfit", system-ui, sans-serif;
-    font-feature-settings: "ss01" on, "cv11" on;
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-feature-settings: "ss01" on, "cv11" on, "cv02" on;
   }
 
+  body {
+    font-feature-settings: "ss01" on;
+  }
+
+  /* IBM Plex Mono shows up everywhere a metric, code path, or
+     identifier appears — file paths, model ids, token counts, costs.
+     Tailwind's ``font-mono`` utility maps here automatically. */
+  code, pre, kbd, samp, .font-mono,
+  .conversation-prose code,
+  .conversation-prose pre {
+    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  /* Display class for headers — keeps Plex Mono but with tighter
+     tracking. Gives a "technical document" feel without intruding on
+     body prose. */
   .font-display {
-    font-family: "Source Serif 4", ui-serif, Georgia, serif;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 500;
+    letter-spacing: -0.015em;
   }
 
   .font-mono-ui {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
   }
 
-  /**
-   * DaisyUI "light" gray ramps are extremely pale (base-300 ≈ 95% L), so borders
-   * and muted text (--color-base-content at low Tailwind opacity) wash out.
-   * Nudge neutrals darker and content slightly deeper for WCAG-friendly UI chrome.
-   */
-  [data-theme="light"] {
-    --color-base-100: oklch(99.2% 0.004 285.885);
-    --color-base-200: oklch(94% 0.012 285.885);
-    --color-base-300: oklch(86% 0.022 285.885);
-    --color-base-content: oklch(17% 0.024 285.885);
+  /* Tabular numerics — applied to every metric badge so cost/token
+     columns line up across rows. */
+  .tabular,
+  .chip,
+  .metric-num {
+    font-variant-numeric: tabular-nums;
   }
-}
 
-/* Atmospheric shell (works with DaisyUI semantic colors) */
-.app-surface {
-  background-color: oklch(var(--b2) / 1);
-  background-image:
-    radial-gradient(ellipse 120% 80% at 100% 0%, oklch(var(--p) / 0.09), transparent 50%),
-    radial-gradient(ellipse 90% 60% at 0% 100%, oklch(var(--in) / 0.06), transparent 45%),
-    linear-gradient(180deg, oklch(var(--b1) / 0.4) 0%, transparent 32%);
-}
-
-@media (prefers-color-scheme: dark) {
-  .app-surface {
+  /* Faint dotted grid background — sets the "engineering canvas"
+     atmosphere without competing with content. */
+  body {
+    background-color: oklch(11% 0.006 240);
     background-image:
-      radial-gradient(ellipse 100% 70% at 90% -10%, oklch(var(--p) / 0.12), transparent 52%),
-      radial-gradient(ellipse 80% 50% at -5% 100%, oklch(var(--in) / 0.08), transparent 48%),
-      linear-gradient(180deg, oklch(var(--b1) / 0.15) 0%, transparent 40%);
+      radial-gradient(circle at 1px 1px, oklch(28% 0.015 240) 1px, transparent 0);
+    background-size: 32px 32px;
+    background-position: 0 0;
   }
+}
+
+/* ============================================================================
+ *  Atmospheric shell — applied to the top-level app container.
+ *  A whisper of green/blue radial light in the corners gives the dashboard
+ *  depth without splashing color across the canvas.
+ * ============================================================================ */
+
+.app-surface {
+  background-color: transparent;
+  background-image:
+    radial-gradient(ellipse 120% 70% at 100% -5%, oklch(74% 0.16 145 / 0.06), transparent 55%),
+    radial-gradient(ellipse 90% 50% at 0% 105%, oklch(76% 0.13 220 / 0.05), transparent 50%);
 }
 
 .app-grain {
   pointer-events: none;
   position: fixed;
   inset: 0;
-  opacity: 0.035;
+  opacity: 0.025;
   z-index: 1;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
@@ -63,31 +143,291 @@
   z-index: 2;
 }
 
-/* Message transcript */
+/* ============================================================================
+ *  Building blocks — small reusable primitives that compose the dashboard.
+ * ============================================================================ */
+
+/* Hairline border in the project's exact color. Use ``border-hairline`` as
+   a Tailwind utility or stack the class directly. */
+.hairline,
+.border-hairline {
+  border: 1px solid oklch(24% 0.013 240);
+}
+
+.hairline-b { border-bottom: 1px solid oklch(24% 0.013 240); }
+.hairline-t { border-top:    1px solid oklch(24% 0.013 240); }
+.hairline-r { border-right:  1px solid oklch(24% 0.013 240); }
+.hairline-l { border-left:   1px solid oklch(24% 0.013 240); }
+
+/* Chip — small inline metric badge. Plex Mono, tabular nums, hairline
+   border, slightly recessed surface. Compose with .chip-accent /
+   .chip-success / .chip-info / .chip-danger for typed variants. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  border-radius: 0.375rem;
+  border: 1px solid oklch(24% 0.013 240);
+  background-color: oklch(15% 0.009 240);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  color: oklch(78% 0.012 240);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chip > .chip-label {
+  color: oklch(58% 0.012 240);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 500;
+}
+
+.chip > .chip-value {
+  color: oklch(94% 0.005 240);
+}
+
+.chip.chip-accent  { color: oklch(78% 0.14 85);  border-color: oklch(35% 0.10 75);  background-color: oklch(18% 0.04 75 / 0.4); }
+.chip.chip-accent  > .chip-value { color: oklch(86% 0.14 85); }
+
+.chip.chip-success { color: oklch(74% 0.16 145); border-color: oklch(32% 0.10 145); background-color: oklch(18% 0.04 145 / 0.4); }
+.chip.chip-success > .chip-value { color: oklch(82% 0.18 145); }
+
+.chip.chip-info    { color: oklch(76% 0.13 220); border-color: oklch(32% 0.08 220); background-color: oklch(17% 0.03 220 / 0.4); }
+.chip.chip-info    > .chip-value { color: oklch(84% 0.14 220); }
+
+.chip.chip-danger  { color: oklch(70% 0.20 25);  border-color: oklch(34% 0.12 25);  background-color: oklch(18% 0.05 25 / 0.4); }
+
+/* Segmented control — used for the Mode picker. 4 pills, one active.
+   Far better than a <select> for a few first-class discrete options. */
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 3px;
+  border-radius: 0.5rem;
+  border: 1px solid oklch(24% 0.013 240);
+  background-color: oklch(15% 0.009 240);
+  gap: 1px;
+}
+
+.segmented > button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  height: 1.75rem;
+  border-radius: 0.375rem;
+  background-color: transparent;
+  border: 1px solid transparent;
+  color: oklch(64% 0.012 240);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 80ms ease, background-color 80ms ease;
+}
+
+.segmented > button:hover {
+  color: oklch(92% 0.005 240);
+  background-color: oklch(20% 0.012 240);
+}
+
+.segmented > button[aria-pressed="true"] {
+  background-color: oklch(22% 0.014 240);
+  color: oklch(96% 0.005 240);
+  border-color: oklch(30% 0.018 240);
+  box-shadow: 0 0 0 1px oklch(74% 0.16 145 / 0.18) inset,
+              0 1px 0 oklch(0% 0 0 / 0.2);
+}
+
+.segmented > button[aria-pressed="true"]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -1px;
+  transform: translateX(-50%);
+  width: 60%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, oklch(74% 0.16 145 / 0.7), transparent);
+}
+
+/* Picker — the labeled select fields in the composer. ``.picker-label``
+   sits above the field as a 10px uppercase tracking; the <select> below
+   sits in a tight hairline well. Replaces DaisyUI's generic select. */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.picker > .picker-label {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: oklch(54% 0.013 240);
+  padding-left: 0.125rem;
+}
+
+.picker > select {
+  appearance: none;
+  background-color: oklch(15% 0.009 240);
+  border: 1px solid oklch(24% 0.013 240);
+  border-radius: 0.5rem;
+  padding: 0.4375rem 1.75rem 0.4375rem 0.625rem;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 400;
+  color: oklch(94% 0.005 240);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 80ms ease, background-color 80ms ease;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%237a8694' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.625rem center;
+  min-width: 0;
+}
+
+.picker > select:hover {
+  border-color: oklch(32% 0.017 240);
+  background-color: oklch(17% 0.010 240);
+}
+
+.picker > select:focus {
+  border-color: oklch(48% 0.025 240);
+  box-shadow: 0 0 0 3px oklch(74% 0.16 145 / 0.10);
+}
+
+.picker > select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Surface — card-style elevated panel with hairline. */
+.surface {
+  background-color: oklch(15% 0.009 240);
+  border: 1px solid oklch(22% 0.013 240);
+  border-radius: 0.75rem;
+}
+
+.surface-2 {
+  background-color: oklch(16% 0.010 240);
+  border: 1px solid oklch(24% 0.013 240);
+  border-radius: 0.5rem;
+}
+
+/* Status dot — small indicator for streaming / in-progress. */
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: oklch(74% 0.16 145);
+  box-shadow: 0 0 0 2px oklch(74% 0.16 145 / 0.15);
+}
+
+.status-dot.pulse { animation: pulse 1.6s ease-in-out infinite; }
+
+.status-dot.muted {
+  background-color: oklch(40% 0.013 240);
+  box-shadow: 0 0 0 2px oklch(40% 0.013 240 / 0.15);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* ============================================================================
+ *  Conversation prose — the markdown answer body.
+ * ============================================================================ */
+
 .conversation-prose {
   @apply prose prose-sm sm:prose-base max-w-none;
-  @apply prose-p:leading-relaxed prose-pre:bg-base-300/55 prose-pre:text-base-content;
+  @apply prose-p:leading-relaxed prose-p:text-base-content/90;
+  @apply prose-pre:bg-base-100 prose-pre:border prose-pre:border-base-300/60 prose-pre:rounded-md;
   @apply prose-code:before:content-none prose-code:after:content-none;
-  @apply prose-code:bg-base-300/50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:text-[0.88em];
+  @apply prose-code:bg-base-300/60 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[0.85em];
+  @apply prose-headings:font-display prose-headings:text-base-content;
+  @apply prose-strong:text-base-content prose-strong:font-medium;
+  @apply prose-a:text-secondary prose-a:no-underline hover:prose-a:underline;
+  @apply prose-blockquote:border-l-primary/40 prose-blockquote:text-base-content/75;
+  @apply prose-hr:border-base-300/60;
+  @apply prose-li:marker:text-base-content/40;
+  color: oklch(86% 0.008 240);
 }
 
 .conversation-prose :where(h1, h2, h3, h4) {
-  font-family: "Source Serif 4", ui-serif, Georgia, serif;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: oklch(96% 0.005 240);
 }
 
+.conversation-prose :where(h2) {
+  font-size: 1.0625rem;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  padding-bottom: 0.375em;
+  border-bottom: 1px solid oklch(22% 0.013 240);
+}
+
+.conversation-prose :where(pre) {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ============================================================================
+ *  Animations — used sparingly.
+ * ============================================================================ */
+
 @keyframes msg-enter {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .animate-msg-enter {
-  animation: msg-enter 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: msg-enter 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out forwards;
+}
+
+/* ============================================================================
+ *  Scrollbar — slim, subtle, monochrome.
+ * ============================================================================ */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: oklch(24% 0.013 240);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: oklch(32% 0.017 240);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}
+
+::selection {
+  background-color: oklch(74% 0.16 145 / 0.25);
+  color: oklch(96% 0.005 240);
 }
