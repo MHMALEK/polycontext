@@ -86,6 +86,27 @@ class AdapterAskInput(BaseModel):
             "wrapping; adapters themselves are oblivious."
         ),
     )
+    model: str | None = Field(
+        default=None,
+        description=(
+            "Optional per-request model override. Format is adapter-specific:\n"
+            " - ``opencode``: ``provider/model`` (e.g. ``openrouter/deepseek/deepseek-v3.2``)\n"
+            " - ``pipeline``: ``provider:model`` (e.g. ``openrouter:qwen/qwen3-235b-a22b-2507``)\n"
+            " - ``gemini``: bare Gemini model id (e.g. ``gemini-2.5-pro``)\n"
+            "Falls back to the adapter's configured default when omitted."
+        ),
+    )
+    tools_enabled: bool = Field(
+        default=True,
+        description=(
+            "When False, instruct the adapter to skip its own tool use. Combined "
+            "with ``grounded``, this expresses three production modes:\n"
+            " - ``grounded=True, tools_enabled=True`` → hybrid (prefetch + agent tools)\n"
+            " - ``grounded=True, tools_enabled=False`` → grounded-only (single-shot from snippets)\n"
+            " - ``grounded=False, tools_enabled=True`` → agent-only (model navigates from scratch)\n"
+            "Currently honored by the ``opencode`` adapter; other adapters treat it advisory."
+        ),
+    )
 
 
 class AdapterAskResult(BaseModel):

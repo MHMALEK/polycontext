@@ -305,6 +305,20 @@ def list_adapters_endpoint() -> dict[str, Any]:
     return {"adapters": items}
 
 
+@app.get("/v1/adapters/{name}/models")
+def list_adapter_models_endpoint(name: str) -> dict[str, Any]:
+    """Curated model catalog for the named adapter.
+
+    Powers the UI's model picker. Returns the friendly list defined in
+    ``adapters/_models_catalog.py`` — *not* a live provider call (that would
+    blow up the page load with provider-side rate limits / auth). Edit the
+    catalog file to add or deprecate models for a given adapter.
+    """
+    from .adapters._models_catalog import models_for_adapter
+
+    return {"adapter": name, "models": models_for_adapter(name)}
+
+
 class GroundingRequest(BaseModel):
     """Standalone grounded-retrieval request — bypasses any adapter."""
 

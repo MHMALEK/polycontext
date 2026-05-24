@@ -69,7 +69,11 @@ class OpencodeSDKAdapter(Adapter):
 
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         t = time.monotonic()
-        pid, ak = self._credentials_for_model()
+        # Resolve credentials for the per-request model override when present,
+        # else for the configured default. e.g. ``openrouter/qwen/...`` →
+        # provider="openrouter" → uses OPENROUTER_API_KEY.
+        model_override = (inp.model or "").strip() or None
+        pid, ak = self._credentials_for_model(model_override=model_override)
         out = await self._run(
             system=_ASK_SYSTEM,
             prompt=inp.query,
@@ -79,6 +83,8 @@ class OpencodeSDKAdapter(Adapter):
             provider_id=pid,
             api_key=ak,
             structured_retry=self.settings.opencode_sdk_structured_retry_count,
+            model=model_override,
+            tools_enabled=inp.tools_enabled,
         )
         return AdapterAskResult(
             adapter=self.name,
@@ -123,8 +129,15 @@ class OpencodeSDKAdapter(Adapter):
             return self.settings.repo_path(repos[0])
         return Path(self.settings.repos_root)
 
-    def _credentials_for_model(self) -> tuple[str | None, str | None]:
-        spec = self.settings.opencode_sdk_model.strip()
+    def _credentials_for_model(
+        self, *, model_override: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        """Resolve (providerID, apiKey) for the model. When ``model_override``
+        is set (per-request UI/SDK override), use its provider prefix to
+        select the credential instead of the configured default — so a user
+        can pick ``openrouter/deepseek/...`` from the UI even if the env's
+        default model is ``anthropic/claude-...``."""
+        spec = (model_override or self.settings.opencode_sdk_model).strip()
         if "/" not in spec:
             return (None, None)
         pid, _mid = spec.split("/", 1)
@@ -156,6 +169,8 @@ class OpencodeSDKAdapter(Adapter):
         structured_retry: int,
         provider_id: str | None,
         api_key: str | None,
+        model: str | None = None,
+        tools_enabled: bool = True,
     ) -> dict[str, Any]:
         url = self.settings.agent_node_url.rstrip("/") + "/adapters/opencode/run"
         body: dict[str, Any] = {
@@ -164,7 +179,7 @@ class OpencodeSDKAdapter(Adapter):
             "cwd": str(cwd),
             "timeoutSec": int(timeout_seconds),
             "structured": structured,
-            "model": self.settings.opencode_sdk_model,
+            "model": (model or self.settings.opencode_sdk_model).strip(),
         }
         base = self.settings.opencode_sdk_base_url.strip()
         if base:
@@ -174,6 +189,12 @@ class OpencodeSDKAdapter(Adapter):
         if provider_id and api_key:
             body["providerID"] = provider_id
             body["apiKey"] = api_key
+        # When tools_enabled=False the user has asked for "grounded-only" mode
+        # — i.e. answer single-shot from the prefetched context. Tell agent-node
+        # to mask the read-side tools so the model can't call them even if its
+        # prompt would otherwise lead it to. The agent-node handler maps this
+        # to ``tools: { read: false, grep: false, ... }`` in session.prompt.
+        body["toolsEnabled"] = bool(tools_enabled)
         async with httpx.AsyncClient(timeout=timeout_seconds + 45) as c:
             r = await c.post(url, json=body)
         if r.status_code >= 400:

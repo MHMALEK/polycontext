@@ -34,6 +34,10 @@ export type OpencodeRunBody = {
    * runs a no-tool path and the model can't iterate beyond the prefetched
    * grounding block. */
   agent?: string;
+  /** When false, mask out the read-side tools in session.prompt so the model
+   * answers single-shot from whatever context the prompt already contains.
+   * Maps to UI "Grounded only (no agent tools)" mode. Defaults to true. */
+  toolsEnabled?: boolean;
 };
 
 const DECOMPOSITION_JSON_SCHEMA = {
@@ -287,12 +291,27 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
       // permission ruleset). We pass it explicitly so this code path is the
       // same as ``opencode run --agent build``.
       //
-      // We deliberately do NOT pass ``tools: {...}`` here — per the SDK type
-      // ``Config.tools`` (gen/types.gen.d.ts:927), this map is a DISABLE
-      // filter applied on top of agent permissions, not an enable list. All
-      // tools default to true; passing them as true is a no-op. We mask
-      // writes via the permission ruleset on session.create instead.
+      // ``Config.tools`` (gen/types.gen.d.ts:927) is a DISABLE filter applied
+      // on top of agent permissions. All tools default to true. We use it
+      // *only* when the caller has explicitly set toolsEnabled=false (UI's
+      // "Grounded only" mode) — mask the read-side tools so the model
+      // answers single-shot from whatever the prompt already contains.
       const agentName = (body.agent || "build").trim();
+      const toolsEnabled = body.toolsEnabled !== false; // default true
+      const tools = toolsEnabled
+        ? undefined
+        : {
+            read: false,
+            grep: false,
+            glob: false,
+            ls: false,
+            bash: false,
+            edit: false,
+            write: false,
+            multiedit: false,
+            patch: false,
+            webfetch: false,
+          };
       const promptRes = await withTimeout(
         client.session.prompt({
           sessionID,
@@ -306,6 +325,7 @@ export async function runOpencode(body: OpencodeRunBody): Promise<{
                 }
               : undefined,
           agent: agentName,
+          ...(tools ? { tools } : {}),
           ...(format ? { format } : {}),
           parts: [{ type: "text", text: body.prompt }],
         }),
