@@ -75,6 +75,50 @@ function askModeShortLabel(m: AskMode): string {
   }
 }
 
+/**
+ * Which adapters actually honor each mode flag.
+ *
+ * - ``grounded`` is honored by everyone: the API endpoint controls the
+ *   prefetch step uniformly. (Even pipeline now respects it explicitly.)
+ *
+ * - ``tools_enabled=false`` only works on adapters where we've wired a
+ *   server-side tools-mask through to the underlying SDK. Today that's
+ *   ``opencode`` (passes ``tools: { read: false, ... }`` to session.prompt)
+ *   and ``pipeline`` (uses it to disable the agent fallback path).
+ *   Other adapters always run with their full toolset because we don't
+ *   currently have the agent-node wiring to mask their tools per-request.
+ *
+ *   For those adapters, selecting "Grounded only" or "Direct" silently
+ *   behaves the same as "Hybrid" / "Agent only" respectively — the tools
+ *   stay available. We disable the unsupported buttons in the UI so the
+ *   user isn't fooled.
+ */
+const ADAPTER_SUPPORTS_TOOLS_TOGGLE: Record<string, boolean> = {
+  opencode: true,
+  pipeline: true,
+  // gemini, cursor, claude_code, cline_sdk, openai_agents, sourcebot —
+  // all currently treat tools_enabled as advisory. Future work: thread
+  // the flag through agent-node and disable tool registration server-side.
+};
+
+function modeIsSupported(mode: AskMode, adapter: string): boolean {
+  if (mode === "hybrid" || mode === "agent_only") return true;
+  // "Grounded only" and "Direct" require tools_enabled=false to actually
+  // disable tool use. Only supported on adapters where we've wired it.
+  return ADAPTER_SUPPORTS_TOOLS_TOGGLE[adapter] === true;
+}
+
+function modeUnsupportedReason(mode: AskMode, adapter: string): string {
+  if (modeIsSupported(mode, adapter)) return "";
+  return (
+    `${displayAdapterName(adapter)} doesn't yet honor tools_enabled=false — ` +
+    `${ASK_MODE_LABELS[mode].toLowerCase()} would behave like ` +
+    `${
+      mode === "grounded_only" ? ASK_MODE_LABELS.hybrid : ASK_MODE_LABELS.agent_only
+    }. Pick opencode or polycontext for true tools-off modes.`
+  );
+}
+
 const ASK_MODE_DESCRIPTIONS: Record<AskMode, string> = {
   hybrid: "Prefetch Sourcebot+Serena snippets AND let the adapter call its own tools if it wants to. Default.",
   grounded_only: "Prefetch snippets and force the adapter to answer single-shot from them (no read/grep/glob).",
@@ -1109,6 +1153,24 @@ export function App() {
       .finally(() => setAdapterListHydrated(true));
   }, [loadHistory]);
 
+  // When the user switches adapters, snap the mode back to a supported one
+  // if the current pick isn't honored by the new adapter. e.g. switching
+  // from opencode (Direct supported) to gemini (Direct silently falls back
+  // to Agent-only) should auto-correct to Agent-only so the UI doesn't
+  // misrepresent what'll actually happen on the wire.
+  useEffect(() => {
+    if (!form.adapter) return;
+    if (modeIsSupported(form.mode, form.adapter)) return;
+    setForm((f) => {
+      if (modeIsSupported(f.mode, f.adapter)) return f;
+      // Map unsupported → closest supported. Grounded→Hybrid, Direct→Agent.
+      const fallback: AskMode =
+        f.mode === "grounded_only" ? "hybrid" : "agent_only";
+      return { ...f, mode: fallback };
+    });
+    // form.mode intentionally excluded from deps — we only snap on adapter switch.
+  }, [form.adapter]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Refresh the model catalog whenever the selected adapter changes.
   // Cancels stale responses if the user switches adapters before fetch returns.
   useEffect(() => {
@@ -1707,19 +1769,30 @@ export function App() {
                   <div className="picker">
                     <span className="picker-label" title={ASK_MODE_DESCRIPTIONS[form.mode]}>Mode</span>
                     <div className="segmented" role="tablist" aria-label="Operating mode">
-                      {(Object.keys(ASK_MODE_LABELS) as AskMode[]).map((m) => (
-                        <button
-                          key={m}
-                          type="button"
-                          role="tab"
-                          aria-pressed={form.mode === m}
-                          aria-selected={form.mode === m}
-                          onClick={() => setForm((f) => ({ ...f, mode: m }))}
-                          title={ASK_MODE_DESCRIPTIONS[m]}
-                        >
-                          {askModeShortLabel(m)}
-                        </button>
-                      ))}
+                      {(Object.keys(ASK_MODE_LABELS) as AskMode[]).map((m) => {
+                        const supported = modeIsSupported(m, form.adapter);
+                        const tooltip = supported
+                          ? ASK_MODE_DESCRIPTIONS[m]
+                          : modeUnsupportedReason(m, form.adapter);
+                        return (
+                          <button
+                            key={m}
+                            type="button"
+                            role="tab"
+                            aria-pressed={form.mode === m}
+                            aria-selected={form.mode === m}
+                            disabled={!supported}
+                            onClick={() => {
+                              if (!supported) return;
+                              setForm((f) => ({ ...f, mode: m }));
+                            }}
+                            title={tooltip}
+                            className={supported ? "" : "opacity-40 cursor-not-allowed"}
+                          >
+                            {askModeShortLabel(m)}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 

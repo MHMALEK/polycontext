@@ -83,43 +83,71 @@ class PipelineAdapter(Adapter):
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         t0 = time.monotonic()
         route = classify_task(query=inp.query, job="ask", tags=inp.tags)
-        extra: dict[str, Any] = {"pipeline_route": route.tier.value, "pipeline_reason": route.reason}
+        # Mode flags from the per-request input. We honor BOTH:
+        #   inp.grounded       — when false, skip the Sourcebot+Serena prefetch
+        #                        entirely. The synthesis call sees only the raw
+        #                        user query (Agent-only or Direct modes).
+        #   inp.tools_enabled  — when false, disable the agent fallback path so
+        #                        the pipeline never escalates to an external
+        #                        tool-using adapter (Grounded-only or Direct).
+        # This matches the UI's 4 modes (Hybrid / Grounded only / Agent only /
+        # Direct) explicitly instead of always running the full flow.
+        wants_grounding = bool(inp.grounded)
+        wants_tools = bool(inp.tools_enabled)
+        extra: dict[str, Any] = {
+            "pipeline_route": route.tier.value,
+            "pipeline_reason": route.reason,
+            "pipeline_grounded": wants_grounding,
+            "pipeline_tools_enabled": wants_tools,
+        }
 
         broad = route.tier in (TaskTier.ENUMERATION, TaskTier.COMPLEX, TaskTier.TRACE)
         boost = retrieval_boost_terms(inp.query, inp.tags)
         ctx_lines = 10 if route.tier == TaskTier.ENUMERATION else 6
 
-        grounding = await retrieve_grounded_context(
-            query=inp.query,
-            settings=self.settings,
-            repos=inp.repos,
-            top_k=max(inp.top_k, route.prefetch_top_k),
-            context_lines=ctx_lines,
-            retrieval_mode="broad" if broad else "default",
-            extra_terms=boost or None,
-        )
-        extra["grounding"] = grounding.metrics.model_dump()
-        extra["grounding_paths"] = sorted(snippet_paths(grounding.snippets))
-        coverage = assess_coverage(
-            grounding,
-            route,
-            min_snippets=self.settings.pipeline_min_snippets,
-            min_chars=self.settings.pipeline_min_chars,
-        )
-        extra["coverage"] = {
-            "score": coverage.score,
-            "sufficient": coverage.sufficient,
-            "reason": coverage.reason,
-        }
+        grounding = None
+        coverage = None
+        if wants_grounding:
+            grounding = await retrieve_grounded_context(
+                query=inp.query,
+                settings=self.settings,
+                repos=inp.repos,
+                top_k=max(inp.top_k, route.prefetch_top_k),
+                context_lines=ctx_lines,
+                retrieval_mode="broad" if broad else "default",
+                extra_terms=boost or None,
+            )
+            extra["grounding"] = grounding.metrics.model_dump()
+            extra["grounding_paths"] = sorted(snippet_paths(grounding.snippets))
+            coverage = assess_coverage(
+                grounding,
+                route,
+                min_snippets=self.settings.pipeline_min_snippets,
+                min_chars=self.settings.pipeline_min_chars,
+            )
+            extra["coverage"] = {
+                "score": coverage.score,
+                "sufficient": coverage.sufficient,
+                "reason": coverage.reason,
+            }
+        else:
+            extra["grounding_paths"] = []  # explicit: no retrieval ran
 
+        # Coverage-sufficient → cheap model; otherwise escalate to Pro. When
+        # grounding was skipped, treat coverage as insufficient so we either
+        # escalate the synthesis or fall back to the agent (if tools allowed).
+        coverage_ok = bool(coverage and coverage.sufficient)
         synth_model = _synthesis_model_id(
             self.settings,
             tags=inp.tags,
-            coverage_sufficient=coverage.sufficient,
+            coverage_sufficient=coverage_ok,
         )
         synth = await synthesize_ask(
             query=inp.query,
-            grounding_block=grounding.grounding_block or "(no snippets retrieved)",
+            grounding_block=(
+                grounding.grounding_block if grounding and grounding.grounding_block
+                else "(no snippets retrieved — answer from training knowledge)"
+            ),
             settings=self.settings,
             model_id=synth_model,
         )
@@ -130,21 +158,28 @@ class PipelineAdapter(Adapter):
         extra["synthesis_model"] = synth.model
         extra["synthesis_insufficient"] = answer_signals_insufficient(synth.text)
 
-        if should_agent_fallback(
+        # Agent fallback only fires if (a) the user allowed tools (tools_enabled)
+        # AND (b) coverage was insufficient or the model signaled it didn't know.
+        # In "Grounded only" and "Direct" modes, tools_enabled=false → never fall
+        # back, even if the synthesis output is clearly incomplete. That's
+        # intentional: the user picked a no-tool mode.
+        if wants_tools and should_agent_fallback(
             route=route,
             tags=inp.tags,
-            coverage_sufficient=coverage.sufficient,
+            coverage_sufficient=coverage_ok,
             synthesis_text=synth.text,
         ):
             model_id, max_rounds = self._fallback_model_config(route, inp.tags)
             extra["pipeline_path"] = "synthesis→agent_fallback"
             extra["fallback_model"] = model_id
             extra["fallback_max_tool_rounds"] = max_rounds
+            # When grounding was skipped (Agent-only mode), fall back to the
+            # raw query — the agent will navigate via its own tools.
             fb_query = (
                 build_grounded_prompt(
                     grounding_block=grounding.grounding_block, query=inp.query,
                 )
-                if grounding.grounding_block.strip()
+                if grounding and grounding.grounding_block.strip()
                 else inp.query
             )
             fb_inp = inp.model_copy(update={"query": fb_query})
