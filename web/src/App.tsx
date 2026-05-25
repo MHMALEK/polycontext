@@ -418,6 +418,60 @@ function activityHintForElapsed(elapsed: number): string {
   return "Taking a while — model might be retrying or exploring.";
 }
 
+/**
+ * Shared "thinking" body — cycling activity hint + shimmering skeleton
+ * draft lines. Used by ProgressTimeline (non-streaming adapters) AND by
+ * StreamingAnswerBubble's empty state (before the first text delta lands).
+ * Keeps the visual experience consistent: every adapter gets the same
+ * "something is happening" affordance.
+ */
+function ThinkingBody({ elapsed }: { elapsed: number }) {
+  // Skeleton bars that shimmer in staggered passes — purely cosmetic but
+  // suggests progress when we don't yet have real text/tool deltas.
+  const skeletonLines = [
+    { width: "94%", delay: "0ms" },
+    { width: "88%", delay: "180ms" },
+    { width: "76%", delay: "360ms" },
+    { width: "62%", delay: "540ms" },
+  ];
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-base-content/85 tabular-nums">
+        {activityHintForElapsed(elapsed)}
+      </p>
+      <div className="space-y-2.5" aria-hidden>
+        {skeletonLines.map((line, i) => (
+          <div
+            key={i}
+            className="h-2 rounded-full bg-base-content/[0.08] overflow-hidden relative"
+            style={{ width: line.width }}
+          >
+            <div
+              className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/30 to-transparent bg-[length:200%_100%] animate-thinking-shimmer"
+              style={{ animationDelay: line.delay }}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** React hook: tick every 250ms to refresh an elapsed-seconds derived
+ * value. Used so ThinkingBody re-renders with new activity hints + the
+ * StreamingAnswerBubble header shows wall time live. */
+function useElapsedSeconds(startedAt: number, active: boolean): number {
+  const [elapsed, setElapsed] = useState<number>((Date.now() - startedAt) / 1000);
+  useEffect(() => {
+    if (!active) return;
+    const t = window.setInterval(() => {
+      setElapsed((Date.now() - startedAt) / 1000);
+    }, 250);
+    return () => window.clearInterval(t);
+  }, [startedAt, active]);
+  return elapsed;
+}
+
 function ProgressTimeline({
   progress,
   adapter,
@@ -427,23 +481,9 @@ function ProgressTimeline({
   adapter?: string;
   model?: string;
 }) {
-  // Skeleton bars that "fill" as time passes — purely cosmetic, but
-  // suggests progress when we don't get real deltas from the SDK. Pick a
-  // tasteful number (4 lines) and stagger their pulse animation.
-  const skeletonLines = [
-    { width: "94%", delay: "0ms" },
-    { width: "88%", delay: "180ms" },
-    { width: "76%", delay: "360ms" },
-    { width: "62%", delay: "540ms" },
-  ];
-  const hint = activityHintForElapsed(progress.elapsed);
   return (
     <article className="rounded-2xl border border-base-300/70 bg-gradient-to-b from-base-100 to-base-100/95 shadow-lg shadow-base-300/15 overflow-hidden ring-1 ring-base-content/[0.1] animate-msg-enter">
-      {/* Animated gradient strip — primary signal that work is happening. */}
       <div className="h-1 bg-gradient-to-r from-primary/60 via-secondary/40 to-primary/30 bg-[length:200%_100%] animate-thinking-shimmer" aria-hidden />
-
-      {/* Header strip: adapter · model · elapsed time. Mirrors the chrome
-          of the finished AnswerCard so the visual handoff is seamless. */}
       <div className="px-4 sm:px-5 pt-3.5 pb-3 flex items-center gap-3 border-b border-base-200/80 bg-base-200/20">
         <span className="loading loading-spinner loading-xs text-primary" />
         <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-base-content/55 truncate">
@@ -454,27 +494,9 @@ function ProgressTimeline({
           {progress.elapsed.toFixed(1)}s
         </span>
       </div>
-
-      {/* Body: cycling activity hint + skeleton "draft" lines. */}
-      <div className="px-4 sm:px-5 py-5 space-y-4">
-        <p className="text-sm text-base-content/85 tabular-nums">{hint}</p>
-        <div className="space-y-2.5" aria-hidden>
-          {skeletonLines.map((line, i) => (
-            <div
-              key={i}
-              className="h-2 rounded-full bg-base-content/[0.08] overflow-hidden relative"
-              style={{ width: line.width }}
-            >
-              <div
-                className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/30 to-transparent bg-[length:200%_100%] animate-thinking-shimmer"
-                style={{ animationDelay: line.delay }}
-              />
-            </div>
-          ))}
-        </div>
+      <div className="px-4 sm:px-5 py-5">
+        <ThinkingBody elapsed={progress.elapsed} />
       </div>
-
-      {/* Footer hint — only shown once it's been a while, to avoid noise. */}
       {progress.elapsed > 8 && (
         <div className="px-4 sm:px-5 pb-3 -mt-1 text-[11px] leading-relaxed text-base-content/55 border-t border-base-200/60 pt-3">
           Adapter calls often take 10–60s while the model searches and drafts an answer.
@@ -1087,6 +1109,9 @@ interface StreamingTurnState {
    * lands server-side. Lets the bubble swap to the structured Answer
    * before we even reload the thread row. */
   shaped: ShapedAnswer | null;
+  /** Wall-clock start of the turn — used to drive the "thinking card"
+   * activity hint while we wait for the first text delta. */
+  startedAt: number;
 }
 
 /**
@@ -1147,31 +1172,51 @@ function applyStreamEvent(
 function StreamingAnswerBubble({
   state,
   onStop,
+  adapter,
+  model,
 }: {
   state: StreamingTurnState;
   onStop: () => void;
+  /** Adapter the request was sent to — shown in the header chrome the
+   * same way ProgressTimeline does it so the visual is consistent. */
+  adapter?: string;
+  /** Model id (optional) — surfaces the per-request model picker choice. */
+  model?: string;
 }) {
+  // Keep the header timer ticking only while we're still working —
+  // freeze it as soon as the final card lands so it doesn't tick past
+  // the answer that's already on screen.
+  const active = !state.shaped && !state.errored && state.status !== "done";
+  const elapsed = useElapsedSeconds(state.startedAt, active);
   return (
     <div className="flex flex-col animate-msg-enter">
       <RoleLabel role="Assistant" align="left" />
       <article className="rounded-2xl border border-base-300/70 bg-gradient-to-b from-base-100 to-base-100/95 shadow-lg shadow-base-300/15 overflow-hidden ring-1 ring-base-content/[0.1]">
-        <div className="h-1 bg-gradient-to-r from-primary/60 via-secondary/40 to-primary/30 animate-pulse" aria-hidden />
+        {/* Animated gradient strip — same one ProgressTimeline uses so the
+            visual matches the non-streaming "thinking card". */}
+        <div className="h-1 bg-gradient-to-r from-primary/60 via-secondary/40 to-primary/30 bg-[length:200%_100%] animate-thinking-shimmer" aria-hidden />
         <div className="px-4 sm:px-5 pt-3.5 pb-3 flex items-center justify-between gap-3 border-b border-base-200/80 bg-base-200/20">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="loading loading-dots loading-xs text-primary" />
+            <span className="loading loading-spinner loading-xs text-primary" />
             <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-base-content/55 truncate">
-              streaming · {state.status}
-              {state.sessionID ? ` · ${state.sessionID.slice(0, 8)}` : ""}
+              {adapter ? displayAdapterName(adapter) : "Assistant"}
+              {model ? ` · ${model}` : ""}
+              {state.sessionID ? ` · ${state.sessionID.slice(0, 12)}` : ""}
             </span>
           </div>
-          <button
-            type="button"
-            onClick={onStop}
-            className="btn btn-xs btn-ghost text-error border border-error/30 hover:bg-error/10"
-            title="Cancel this opencode session"
-          >
-            Stop
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="font-mono-ui text-[11px] text-base-content/85 tabular-nums">
+              {elapsed.toFixed(1)}s
+            </span>
+            <button
+              type="button"
+              onClick={onStop}
+              className="btn btn-xs btn-ghost text-error border border-error/30 hover:bg-error/10"
+              title="Cancel this streamed turn"
+            >
+              Stop
+            </button>
+          </div>
         </div>
 
         {state.tools.length > 0 && (
@@ -1216,14 +1261,15 @@ function StreamingAnswerBubble({
           {/* Three rendering states, picked in order of "freshest data wins":
               1. shaped → rich Answer card landed from the SSE `shaped` event
               2. text   → partial markdown deltas are streaming in
-              3. empty  → still warming up, show "Thinking…" */}
+              3. empty  → ThinkingBody (matches the non-streaming sourcebot
+                          loading: cycling hint + shimmer skeleton). */}
           {state.shaped ? (
             <RichAnswerCard
               shaped={state.shaped}
               fallbackAnswer={state.text || state.shaped.answer.details}
             />
           ) : state.text.length === 0 ? (
-            <p className="text-sm text-base-content/55 italic">Thinking…</p>
+            <ThinkingBody elapsed={elapsed} />
           ) : (
             <div className="markdown-prose">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.text}</ReactMarkdown>
@@ -1819,6 +1865,7 @@ export function App() {
             errored: null,
             status: "starting",
             shaped: null,
+            startedAt: Date.now(),
           });
           let threadIdFromStream: string | null = activeThreadId;
           const streamCall = useNativeStream
@@ -1845,6 +1892,11 @@ export function App() {
                 { signal: controller.signal },
               );
           try {
+            // IMPORTANT: don't break on the ``done`` event. The server emits
+            // ``done`` → ``shaped`` (post-process via pydantic-AI) → then
+            // persists the run, then closes the stream. If we break on done
+            // we race the persist and listThreadRuns returns stale rows,
+            // making the answer flash then disappear. Read to natural EOS.
             for await (const ev of streamCall) {
               if (submitGen !== detailFetchGen.current) break;
               applyStreamEvent(ev, setStreamingTurn);
@@ -1853,13 +1905,22 @@ export function App() {
               }
               if (ev.kind === "done") {
                 askCompleted = true;
-                break;
+                // do not break — keep reading for `shaped` + stream close
               }
             }
           } catch (err) {
             if ((err as Error).name === "AbortError") {
               // User pressed Stop — surface a friendly note, don't error out.
               setStreamingTurn((s) => (s ? { ...s, errored: "Stopped by user." } : s));
+            } else if (
+              // RemoteProtocolError-equivalent on the browser side: peer
+              // closed the chunked response mid-read. If we already saw
+              // the done event the run is fine — fall through to the
+              // success path. Otherwise rethrow.
+              askCompleted &&
+              /incomplete|chunked|peer closed/i.test((err as Error).message || "")
+            ) {
+              // swallow — askCompleted means we have the answer
             } else {
               throw err;
             }
@@ -2197,6 +2258,8 @@ export function App() {
                     {streamingTurn ? (
                       <StreamingAnswerBubble
                         state={streamingTurn}
+                        adapter={form.adapter}
+                        model={form.model || undefined}
                         onStop={async () => {
                           // Two-channel stop: (1) abort the SSE fetch so the
                           // browser stops accepting deltas, (2) tell opencode
