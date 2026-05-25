@@ -179,6 +179,49 @@ class GeminiAdapter(Adapter):
             inp, model_id=override, tools_enabled=inp.tools_enabled,
         )
 
+    async def astream(self, inp: AdapterAskInput):
+        """Proxy the SSE bridge in services/agent-node /adapters/gemini/stream.
+
+        Yields the normalized event union (kind: session/status/text.delta/
+        tool.update/error/done). Same shape as opencode.astream so the UI's
+        client reducer handles both transparently. We don't open a separate
+        websocket; httpx streams the chunked SSE response.
+        """
+        import json
+        from ..core.explore_directive import wrap_with_explore_directive
+        override = _strip_gemini_prefix(inp.model) or self.settings.gemini_sdk_model
+        prompt = wrap_with_explore_directive(
+            inp.query, tools_on=inp.tools_enabled and not inp.grounded,
+        )
+        body: dict[str, Any] = {
+            "systemPrompt": _ASK_SYSTEM,
+            "prompt": prompt,
+            "apiKey": self.settings.gemini_api_key,
+            "modelId": override,
+            "timeoutSec": int(self.settings.gemini_sdk_timeout_seconds),
+            "cwd": str(self._cwd_for_repos(inp.repos)),
+            "toolsEnabled": bool(inp.tools_enabled),
+        }
+        url = self.settings.agent_node_url.rstrip("/") + "/adapters/gemini/stream"
+        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=None)
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            async with c.stream("POST", url, json=body) as resp:
+                if resp.status_code >= 400:
+                    text = (await resp.aread()).decode("utf-8", "replace")[:500]
+                    raise RuntimeError(
+                        f"agent-node gemini /stream -> {resp.status_code}: {text}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload:
+                        continue
+                    try:
+                        yield json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+
     async def ask_configured(
         self,
         inp: AdapterAskInput,

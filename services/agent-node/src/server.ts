@@ -8,7 +8,7 @@ import Fastify from "fastify";
 import { runCursor } from "./adapters/cursor.js";
 import { runCline } from "./adapters/cline.js";
 import { runClaudeCode } from "./adapters/claude_code.js";
-import { runGemini } from "./adapters/gemini.js";
+import { runGemini, streamGemini } from "./adapters/gemini.js";
 import { runOpenAIAgents } from "./adapters/openai_agents.js";
 import { abortOpencodeSession, runOpencode, streamOpencode } from "./adapters/opencode.js";
 import { askSourcebotBlocking } from "./adapters/sourcebot.js";
@@ -138,11 +138,59 @@ fastify.post("/adapters/gemini/run", async (request, reply) => {
     timeoutSec: (b.timeoutSec as number) ?? 600,
     cwd: (b.cwd as string) || undefined,
     maxToolRounds: (b.maxToolRounds as number) ?? undefined,
+    toolsEnabled: b.toolsEnabled === undefined ? undefined : Boolean(b.toolsEnabled),
   });
   if (!out.ok) {
     return reply.code(502).send(out);
   }
   return out;
+});
+
+/**
+ * Gemini SSE stream — text deltas as the model speaks + tool.update events
+ * as the AFC loop fires read/grep/etc. Terminal `done` event carries the
+ * same metrics envelope as POST /adapters/gemini/run.
+ */
+fastify.post("/adapters/gemini/stream", async (request, reply) => {
+  const b = (request.body ?? {}) as Record<string, unknown>;
+  if (!b.prompt || typeof b.prompt !== "string") {
+    return reply.code(400).send({ ok: false, error: "prompt (string) required" });
+  }
+  const apiKey = (b.apiKey as string) || process.env.GEMINI_API_KEY || "";
+  if (!apiKey) {
+    return reply.code(400).send({ ok: false, error: "apiKey or GEMINI_API_KEY required" });
+  }
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const write = (obj: unknown) => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+
+  try {
+    for await (const ev of streamGemini({
+      systemPrompt: (b.systemPrompt as string) || undefined,
+      prompt: b.prompt as string,
+      apiKey,
+      modelId: (b.modelId as string) || process.env.GEMINI_SDK_MODEL,
+      timeoutSec: (b.timeoutSec as number) ?? 600,
+      cwd: (b.cwd as string) || undefined,
+      maxToolRounds: (b.maxToolRounds as number) ?? undefined,
+      toolsEnabled: b.toolsEnabled === undefined ? undefined : Boolean(b.toolsEnabled),
+    })) {
+      write(ev);
+      if (ev.kind === "done") break;
+    }
+  } catch (err) {
+    const e = err as Error;
+    write({ kind: "error", error: `${e?.name || "Error"}: ${e?.message || String(err)}` });
+  } finally {
+    if (!reply.raw.writableEnded) reply.raw.end();
+  }
 });
 
 fastify.post("/adapters/openai_agents/run", async (request, reply) => {

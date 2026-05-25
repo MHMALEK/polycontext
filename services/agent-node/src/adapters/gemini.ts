@@ -191,6 +191,206 @@ class WorkspaceFsCallableTool implements CallableTool {
   }
 }
 
+/**
+ * Streaming variant of WorkspaceFsCallableTool. Emits a tool.update event
+ * (status="running") before each call and (status="completed"|"error") after.
+ * Lets the SSE bridge surface tool calls live without changing the AFC loop.
+ */
+export class StreamingWorkspaceFsCallableTool implements CallableTool {
+  constructor(
+    private readonly cwd: string,
+    private readonly trace: ToolCallRecord[],
+    private readonly onEvent: (ev: GeminiStreamEvent) => void,
+  ) {}
+
+  async tool(): Promise<Tool> {
+    return FILE_TOOLS;
+  }
+
+  async callTool(functionCalls: FunctionCall[]): Promise<Part[]> {
+    const parts: Part[] = [];
+    let idx = 0;
+    for (const fc of functionCalls) {
+      const callID = fc.id?.trim() || `call_${idx++}`;
+      const tool = fc.name ?? "unknown";
+      const args = fc.args ?? {};
+      const filePath =
+        typeof (args as { path?: unknown }).path === "string"
+          ? (args as { path: string }).path
+          : undefined;
+      this.onEvent({
+        kind: "tool.update",
+        callID,
+        tool,
+        status: "running",
+        ...(filePath ? { filePath } : {}),
+      });
+      const t0 = Date.now();
+      let result: Record<string, unknown>;
+      let errored = false;
+      try {
+        result = await executeToolCall(this.cwd, fc);
+        if ("error" in result && typeof result.error === "string") errored = true;
+      } catch (err) {
+        const e = err as Error;
+        result = { error: `${e?.name || "Error"}: ${e?.message || String(err)}` };
+        errored = true;
+      }
+      const durationMs = Date.now() - t0;
+      parts.push(createPartFromFunctionResponse(callID, tool, result));
+      this.trace.push({
+        name: tool,
+        argsPreview: JSON.stringify(args).slice(0, 200),
+        resultPreview: _summarizeToolResult(result).slice(0, 200),
+        durationMs,
+      });
+      this.onEvent({
+        kind: "tool.update",
+        callID,
+        tool,
+        status: errored ? "error" : "completed",
+        durationMs,
+        ...(filePath ? { filePath } : {}),
+        ...(errored && typeof result.error === "string"
+          ? { error: result.error }
+          : {}),
+      });
+    }
+    return parts;
+  }
+}
+
+/** Normalized event union for the gemini SSE bridge. Mirrors the opencode
+ * stream shape so the UI consumer (api.ts adapterAskStream) handles both. */
+export type GeminiStreamEvent =
+  | { kind: "session"; sessionID: string }
+  | { kind: "status"; status: string }
+  | { kind: "text.delta"; text: string }
+  | {
+      kind: "tool.update";
+      callID: string;
+      tool: string;
+      status: "running" | "completed" | "error";
+      filePath?: string;
+      durationMs?: number;
+      error?: string;
+    }
+  | { kind: "error"; error: string }
+  | {
+      kind: "done";
+      result: {
+        ok: boolean;
+        answer?: string;
+        model?: string;
+        tokensIn?: number;
+        tokensOut?: number;
+        thoughtsTokens?: number;
+        toolCalls?: number;
+        toolTrace?: ToolCallRecord[];
+        durationMs?: number;
+        error?: string;
+      };
+    };
+
+/** Streaming variant of runGemini. Yields text deltas (each model token batch
+ * arrives as one chunk) and tool.update events while the AFC loop runs
+ * transparently in the SDK. Terminal event is `done` with full metrics. */
+export async function* streamGemini(body: GeminiRunBody): AsyncGenerator<GeminiStreamEvent, void, void> {
+  const started = Date.now();
+  const apiKey = body.apiKey;
+  if (!apiKey.trim()) {
+    yield { kind: "done", result: { ok: false, error: "apiKey required" } };
+    return;
+  }
+  const modelId = body.modelId || process.env.GEMINI_SDK_MODEL || "gemini-2.5-pro";
+  const timeoutMs = (body.timeoutSec ?? 600) * 1000;
+  const cwd = (body.cwd || "").trim();
+  const toolsEnabled = body.toolsEnabled !== false;
+  yield { kind: "session", sessionID: `gemini:${modelId}` };
+  yield { kind: "status", status: "running" };
+
+  const ai = new GoogleGenAI({ apiKey });
+  const buffered: GeminiStreamEvent[] = [];
+  const toolTrace: ToolCallRecord[] = [];
+  const onToolEvent = (ev: GeminiStreamEvent) => buffered.push(ev);
+
+  // Build params identical to runGemini so the only delta is generateContent
+  // → generateContentStream. Keeps response shapes + AFC behavior consistent.
+  let promptText = body.prompt;
+  let toolsConfig: Partial<Parameters<typeof ai.models.generateContentStream>[0]["config"]> = {};
+  if (cwd && toolsEnabled) {
+    const callable = new StreamingWorkspaceFsCallableTool(cwd, toolTrace, onToolEvent);
+    const maxRemoteCalls = Math.min(80, Math.max(1, body.maxToolRounds ?? 48));
+    promptText = `${body.prompt}\n\n[Workspace root on server: ${cwd}. Use read_file, list_directory, search_files, and grep_search to inspect code.]`;
+    toolsConfig = {
+      tools: [callable],
+      toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
+      automaticFunctionCalling: { disable: false, maximumRemoteCalls: maxRemoteCalls },
+    };
+  }
+
+  let finalText = "";
+  let lastUsage: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } | undefined;
+  try {
+    const stream = await ai.models.generateContentStream({
+      model: modelId,
+      contents: promptText,
+      config: {
+        ...(body.systemPrompt?.trim() ? { systemInstruction: body.systemPrompt } : {}),
+        thinkingConfig: { thinkingBudget: -1, includeThoughts: false },
+        temperature: 0.2,
+        httpOptions: { timeout: timeoutMs },
+        ...toolsConfig,
+      },
+    });
+
+    for await (const chunk of stream) {
+      // Drain tool events that fired during this chunk first.
+      while (buffered.length) {
+        const ev = buffered.shift();
+        if (ev) yield ev;
+      }
+      const text = chunk.text;
+      if (typeof text === "string" && text.length > 0) {
+        finalText += text;
+        yield { kind: "text.delta", text };
+      }
+      if (chunk.usageMetadata) lastUsage = chunk.usageMetadata;
+    }
+    // Drain any trailing tool events.
+    while (buffered.length) {
+      const ev = buffered.shift();
+      if (ev) yield ev;
+    }
+
+    yield {
+      kind: "done",
+      result: {
+        ok: true,
+        answer: finalText,
+        model: modelId,
+        tokensIn: lastUsage?.promptTokenCount,
+        tokensOut: lastUsage?.candidatesTokenCount,
+        thoughtsTokens: lastUsage?.thoughtsTokenCount,
+        toolCalls: toolTrace.length,
+        toolTrace,
+        durationMs: Date.now() - started,
+      },
+    };
+  } catch (err) {
+    const e = err as Error;
+    yield {
+      kind: "done",
+      result: {
+        ok: false,
+        error: `${e?.name || "Error"}: ${e?.message || String(e)}`,
+        model: modelId,
+        durationMs: Date.now() - started,
+      },
+    };
+  }
+}
+
 function _summarizeToolResult(result: Record<string, unknown>): string {
   if ("error" in result && typeof result.error === "string") {
     return `ERROR: ${result.error}`;

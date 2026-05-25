@@ -872,6 +872,171 @@ async def opencode_stream(inp: AdapterAskInput, request: Request) -> StreamingRe
     )
 
 
+@app.post("/v1/adapters/{name}/stream")
+async def adapter_stream(name: str, inp: AdapterAskInput, request: Request) -> StreamingResponse:
+    """Generic SSE bridge for any adapter that exposes an ``astream`` method.
+
+    Same event shape as the opencode-specific endpoint (session/status/
+    text.delta/tool.update/done + a trailing shaped event). Adapters that
+    don't implement astream return 501. The opencode handler above is kept
+    separate because it threads session-id reuse for chat continuity, which
+    is opencode-specific — other adapters just route through here.
+    """
+    # ``opencode`` has its own endpoint above with session-reuse. Route the
+    # generic case for everything else.
+    if name == "opencode":
+        return await opencode_stream(inp, request)
+
+    adapter = _resolve_adapter(name)
+    if not hasattr(adapter, "astream"):
+        raise HTTPException(
+            status_code=501,
+            detail=f"adapter {name!r} does not implement streaming",
+        )
+    settings = get_settings()
+    store = open_default_store(settings)
+    ctx = RunContext(settings=settings, mode="ask")
+
+    # Pre-fetch grounding the same way /ask does (skipped for the pipeline
+    # adapter which does its own internal grounding).
+    grounding: GroundedContext | None = None
+    if inp.grounded and name != "pipeline":
+        grounding = await retrieve_grounded_context(
+            query=inp.query, settings=settings, repos=inp.repos, top_k=inp.top_k,
+        )
+
+    thread_key = inp.thread_id or ctx.run_id
+    threaded_query = _augmented_ask_query_for_thread(
+        store, thread_key, ctx.run_id, inp.query,
+    )
+    final_query = (
+        build_grounded_prompt(grounding_block=grounding.grounding_block, query=threaded_query)
+        if grounding and grounding.grounding_block
+        else threaded_query
+    )
+    adapter_inp = inp.model_copy(update={"query": final_query})
+    ref_for_store = _storage_ask_ref(inp, thread_key)
+    q_preview = inp.query[:160].strip()
+    store.start(
+        run_id=ctx.run_id, mode="ask",
+        input_ref=ref_for_store,
+        input_preview=q_preview,
+        output_format="markdown",
+        thread_id=thread_key,
+    )
+    _adapter_progress_started(store, ctx.run_id, decompose=False)
+    import time as _time
+    start = _time.monotonic()
+
+    async def event_source():
+        yield f"data: {_sse_json({'kind': 'run', 'run_id': ctx.run_id, 'thread_id': thread_key})}\n\n"
+        final_event: dict[str, Any] | None = None
+        try:
+            async for ev in adapter.astream(adapter_inp):
+                if await request.is_disconnected():
+                    break
+                yield f"data: {_sse_json(ev)}\n\n"
+                if ev.get("kind") == "done":
+                    final_event = ev
+                    break
+        except Exception as e:  # noqa: BLE001
+            err = {"kind": "error", "error": f"{type(e).__name__}: {e}"}
+            yield f"data: {_sse_json(err)}\n\n"
+            _persist_failed(store, ctx.run_id, ref_for_store, q_preview, thread_key, err["error"])
+            return
+        finally:
+            try:
+                store.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        if final_event and (final_event.get("result") or {}).get("ok"):
+            result = final_event["result"]
+            duration_ms = int((_time.monotonic() - start) * 1000)
+            shaped = await _maybe_shape_answer(
+                settings=settings,
+                query=inp.query,
+                raw_text=result.get("answer") or "",
+                override=inp.shape,
+            )
+            if shaped is not None:
+                yield f"data: {_sse_json({'kind': 'shaped', 'shaped': shaped.model_dump(mode='json')})}\n\n"
+            # Persist via a generalized variant of _persist_streamed_ok.
+            _persist_generic_streamed_ok(
+                adapter_name=name,
+                run_id=ctx.run_id,
+                thread_key=thread_key,
+                ref_for_store=ref_for_store,
+                q_preview=q_preview,
+                grounding=grounding,
+                result=result,
+                duration_ms=duration_ms,
+                shaped=shaped,
+            )
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _persist_generic_streamed_ok(
+    *,
+    adapter_name: str,
+    run_id: str,
+    thread_key: str,
+    ref_for_store: dict[str, Any],
+    q_preview: str,
+    grounding: GroundedContext | None,
+    result: dict[str, Any],
+    duration_ms: int,
+    shaped: Any = None,
+) -> None:
+    """Adapter-agnostic version of _persist_streamed_ok. Pulls common
+    metric keys out of the agent-node result envelope and writes the run
+    row with engine=``{name}:ask:stream``."""
+    settings = get_settings()
+    s2 = open_default_store(settings)
+    try:
+        extra: dict[str, Any] = {"agent_node": True, "stream": True, "adapter": adapter_name}
+        for src, dst in (
+            ("toolCalls", "tool_calls"),
+            ("toolNames", "tool_names"),
+            ("toolTrace", "tool_trace"),
+            ("thoughtsTokens", "reasoning_tokens"),
+        ):
+            if result.get(src) is not None:
+                extra[dst] = result[src]
+        payload: dict[str, Any] = {"metrics_extra": extra}
+        if grounding is not None:
+            payload["grounding"] = grounding.model_dump(mode="json")
+            from .core.coverage import snippet_paths
+            extra["grounding_paths"] = sorted(snippet_paths(grounding.snippets))
+        if shaped is not None:
+            payload["structured_answer"] = shaped.model_dump(mode="json")
+        s2.record(
+            run_id=run_id, mode="ask", status="completed",
+            input_ref=ref_for_store, engine=f"{adapter_name}:ask:stream",
+            answer=result.get("answer") or "",
+            citations=[],
+            payload=payload,
+            model=result.get("model"),
+            total_seconds=duration_ms / 1000.0,
+            total_cost_usd=result.get("costUsd"),
+            input_tokens=result.get("tokensIn"),
+            output_tokens=result.get("tokensOut"),
+            input_preview=q_preview,
+            thread_id=thread_key,
+        )
+    finally:
+        s2.close()
+
+
 @app.post("/v1/adapters/opencode/abort")
 async def opencode_abort(body: OpencodeAbortRequest) -> dict[str, Any]:
     """Stop a running OpenCode session by id. Requires OPENCODE_SDK_BASE_URL."""

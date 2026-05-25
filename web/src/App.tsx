@@ -111,6 +111,19 @@ const ADAPTER_SUPPORTS_TOOLS_TOGGLE: Record<string, boolean> = {
   // work for them; not yet wired.
 };
 
+/**
+ * Adapters that implement an ``astream`` method on the server side so the
+ * UI can route through ``/v1/adapters/{name}/stream`` for the Hybrid /
+ * Agent (tools-on) modes. Adapters not in this set still get token
+ * streaming for the no-tools modes via the universal ``/v1/ask/stream``
+ * endpoint — just not the tool-call deltas during the agent loop.
+ */
+const ADAPTER_SUPPORTS_SSE_STREAM: Record<string, boolean> = {
+  opencode: true,
+  gemini: true,
+  // claude_code, openai_agents, cursor, cline_sdk — TODO.
+};
+
 function modeIsSupported(mode: AskMode, adapter: string): boolean {
   if (mode === "hybrid" || mode === "agent_only") return true;
   // "Grounded only" and "Direct" require tools_enabled=false to actually
@@ -1784,14 +1797,15 @@ export function App() {
         //   1. No-tools modes (Direct / Grounded-only) → /v1/ask/stream
         //      — bypasses adapter SDKs, streams token-by-token via
         //      pydantic-AI native streaming for ANY adapter.
-        //   2. OpenCode adapter with tools on → /v1/adapters/opencode/stream
-        //      — SSE bridge over the opencode session events (status +
-        //      tool updates; no text deltas with current opencode server).
-        //   3. Any other adapter with tools on → blocking /v1/adapters/{name}/ask
-        //      — no streaming because the SDK doesn't expose events to us.
+        //   2. Adapters with SDK-level event taps (opencode, gemini) +
+        //      tools on → /v1/adapters/{name}/stream — text deltas + tool
+        //      updates from the agent loop.
+        //   3. Any other adapter with tools on → blocking
+        //      /v1/adapters/{name}/ask — no streaming.
         const useNativeStream = !wireMode.tools_enabled;
-        const useOpencodeStream = !useNativeStream && form.adapter === "opencode";
-        if (useNativeStream || useOpencodeStream) {
+        const useAdapterStream =
+          !useNativeStream && ADAPTER_SUPPORTS_SSE_STREAM[form.adapter] === true;
+        if (useNativeStream || useAdapterStream) {
           const controller = new AbortController();
           streamAbortRef.current = controller;
           setStreamingTurn({
@@ -1817,6 +1831,7 @@ export function App() {
                 { signal: controller.signal },
               )
             : api.adapterAskStream(
+                form.adapter,
                 {
                   query: question,
                   grounded: wireMode.grounded,

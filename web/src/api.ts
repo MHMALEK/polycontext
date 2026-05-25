@@ -287,25 +287,33 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  /** Streams OpenCode events as the agent runs. Pass `signal` to cancel.
+  /** Streams adapter events as the model runs. Pass `signal` to cancel.
    *
-   * Yields the same JSON union the agent-node SSE bridge emits — the UI
+   * Routes to the per-adapter SSE endpoint `/v1/adapters/{name}/stream`,
+   * which works for opencode and any other adapter that implements
+   * ``astream`` server-side (currently opencode + gemini, more coming).
+   *
+   * Yields a JSON union compatible with the opencode reducer — the UI
    * appends text.delta to a partial answer, renders tool.update as chips,
-   * and stores `sessionID` on first `session` event so the Stop button
-   * can call ``opencodeAbort``. The terminal event is `{kind:"done"}`.
+   * and stores `sessionID` on first `session` event. Terminal event is
+   * `{kind:"done"}`.
    *
-   * Uses fetch + ReadableStream rather than EventSource because EventSource
-   * is GET-only — we POST a JSON body matching AdapterAskBody. */
+   * Uses fetch + ReadableStream rather than EventSource because
+   * EventSource is GET-only — we POST a JSON body matching AdapterAskBody. */
   async *adapterAskStream(
+    adapterName: string,
     body: AdapterAskBody,
     opts: { signal?: AbortSignal } = {},
   ): AsyncGenerator<OpencodeStreamEvent, void, void> {
-    const res = await fetch(`${BASE}/v1/adapters/opencode/stream`, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "text/event-stream" },
-      body: JSON.stringify(body),
-      signal: opts.signal,
-    });
+    const res = await fetch(
+      `${BASE}/v1/adapters/${encodeURIComponent(adapterName)}/stream`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify(body),
+        signal: opts.signal,
+      },
+    );
     if (!res.ok || !res.body) {
       const text = await res.text();
       throw new Error(`${res.status} /v1/adapters/opencode/stream: ${text.slice(0, 400)}`);
