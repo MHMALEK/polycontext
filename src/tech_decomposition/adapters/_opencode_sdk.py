@@ -1,5 +1,14 @@
 """OpenCode SDK via agent-node (@opencode-ai/sdk v2).
 
+Three entry points on top of the blocking ``ask``/``decompose`` contract:
+
+- ``ask``      — blocking; returns the final answer + rich metrics.
+- ``astream``  — async generator yielding stream events (text deltas, tool
+                 start/complete, session id, status, error, and the terminal
+                 ``done`` event that carries the same final metrics envelope
+                 as ``ask``). Wired up to the SSE endpoint in ``api.py``.
+- ``abort``    — cancel a running session by id (UI Stop button).
+
 Uses session API with structured ``json_schema`` output for decomposition (best
 practice per OpenCode SDK docs — clear schemas, retries, StructuredOutput errors).
 Prefer ``OPENCODE_SDK_BASE_URL`` / ``createOpencodeClient`` in production when a
@@ -7,7 +16,9 @@ server is already running; otherwise agent-node shells ``opencode serve``.
 """
 from __future__ import annotations
 
+import json
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +74,8 @@ class OpencodeSDKAdapter(Adapter):
     capabilities: set[Capability] = {"ask", "decompose"}
     description = (
         "OpenCode via @opencode-ai/sdk v2 (agent-node). Structured JSON decomposition; "
-        "set OPENCODE_SDK_BASE_URL to connect to an existing server (recommended)."
+        "set OPENCODE_SDK_BASE_URL to connect to an existing server (recommended). "
+        "Supports SSE streaming via /v1/adapters/opencode/stream."
     )
 
     def health(self) -> dict:
@@ -92,18 +104,9 @@ class OpencodeSDKAdapter(Adapter):
 
     async def ask(self, inp: AdapterAskInput) -> AdapterAskResult:
         t = time.monotonic()
-        # Resolve credentials for the per-request model override when present,
-        # else for the configured default. e.g. ``openrouter/qwen/...`` →
-        # provider="openrouter" → uses OPENROUTER_API_KEY.
         model_override = (inp.model or "").strip() or None
         pid, ak = self._credentials_for_model(model_override=model_override)
-        # OpenCode's session.prompt(system=...) parameter is unreliable —
-        # the "build" agent's baked-in system prompt overrides our directive
-        # in practice (verified empirically: input tokens=6 for "what is
-        # roles?" means even our 200-token system prompt isn't reaching the
-        # model). Inject the directive INTO the user message itself, where
-        # the model can't ignore it. Only when tools are enabled — there's
-        # no point telling a no-tools model to explore.
+        # See `core/explore_directive.py` for why this lives in the user message.
         prompt = _wrap_with_explore_directive(inp.query, tools_on=bool(inp.tools_enabled))
         out = await self._run(
             system=_ASK_SYSTEM,
@@ -123,6 +126,83 @@ class OpencodeSDKAdapter(Adapter):
             citations=[],
             metrics=_metrics_from(out, t),
         )
+
+    async def astream(
+        self,
+        inp: AdapterAskInput,
+        *,
+        session_id: str | None = None,
+        keep_session: bool = False,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield normalized stream events from agent-node's SSE bridge.
+
+        Each event is the JSON object the agent-node ``streamOpencode``
+        generator emitted (see ``services/agent-node/src/adapters/opencode.ts``
+        :py:class:`OpencodeStreamEvent`). Terminal event is ``{kind:"done",
+        result: {...metrics envelope...}}``.
+
+        Yields async — caller is expected to forward these into an SSE
+        response or render them live in a UI. We don't wrap or transform
+        events here so the UI can rely on a single agent-node-defined schema.
+        """
+        model_override = (inp.model or "").strip() or None
+        pid, ak = self._credentials_for_model(model_override=model_override)
+        prompt = _wrap_with_explore_directive(inp.query, tools_on=bool(inp.tools_enabled))
+        body = self._build_run_body(
+            system=_ASK_SYSTEM,
+            prompt=prompt,
+            cwd=self._cwd_for_repos(inp.repos),
+            timeout_seconds=self.settings.agent_node_timeout_seconds,
+            structured=False,
+            structured_retry=self.settings.opencode_sdk_structured_retry_count,
+            provider_id=pid,
+            api_key=ak,
+            model=model_override,
+            tools_enabled=inp.tools_enabled,
+        )
+        if session_id:
+            body["sessionID"] = session_id
+        if keep_session:
+            body["keepSession"] = True
+        url = self.settings.agent_node_url.rstrip("/") + "/adapters/opencode/stream"
+        # Long-lived stream: don't impose a read timeout. agent-node already
+        # honors timeoutSec in body and closes the stream on its own.
+        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=None)
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            async with c.stream("POST", url, json=body) as resp:
+                if resp.status_code >= 400:
+                    text = (await resp.aread()).decode("utf-8", "replace")[:500]
+                    raise RuntimeError(
+                        f"agent-node opencode /stream -> {resp.status_code}: {text}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    # SSE: lines like `data: <json>` separated by blank lines.
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload:
+                        continue
+                    try:
+                        yield json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+
+    async def abort(self, session_id: str, cwd: Path | str | None = None) -> dict[str, Any]:
+        """Cancel a running OpenCode session by id (UI Stop button)."""
+        url = self.settings.agent_node_url.rstrip("/") + "/adapters/opencode/abort"
+        body: dict[str, Any] = {"sessionID": session_id}
+        if cwd:
+            body["cwd"] = str(cwd)
+        base = self.settings.opencode_sdk_base_url.strip()
+        if base:
+            body["baseUrl"] = base.rstrip("/")
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(url, json=body)
+        if r.status_code >= 400:
+            raise RuntimeError(f"agent-node opencode /abort -> {r.status_code}: {r.text[:300]}")
+        return r.json()
 
     async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         """Drive opencode's chat without structured output.
@@ -163,11 +243,6 @@ class OpencodeSDKAdapter(Adapter):
     def _credentials_for_model(
         self, *, model_override: str | None = None,
     ) -> tuple[str | None, str | None]:
-        """Resolve (providerID, apiKey) for the model. When ``model_override``
-        is set (per-request UI/SDK override), use its provider prefix to
-        select the credential instead of the configured default — so a user
-        can pick ``openrouter/deepseek/...`` from the UI even if the env's
-        default model is ``anthropic/claude-...``."""
         spec = (model_override or self.settings.opencode_sdk_model).strip()
         if "/" not in spec:
             return (None, None)
@@ -186,10 +261,9 @@ class OpencodeSDKAdapter(Adapter):
                 else self.settings.openrouter_api_key
             )
             return (pid.strip(), k) if k else (None, None)
-        # Other providers rely on OAuth or server-side secrets on OpenCode itself.
         return (None, None)
 
-    async def _run(
+    def _build_run_body(
         self,
         *,
         system: str,
@@ -203,7 +277,6 @@ class OpencodeSDKAdapter(Adapter):
         model: str | None = None,
         tools_enabled: bool = True,
     ) -> dict[str, Any]:
-        url = self.settings.agent_node_url.rstrip("/") + "/adapters/opencode/run"
         body: dict[str, Any] = {
             "systemPrompt": system,
             "prompt": prompt,
@@ -220,12 +293,36 @@ class OpencodeSDKAdapter(Adapter):
         if provider_id and api_key:
             body["providerID"] = provider_id
             body["apiKey"] = api_key
-        # When tools_enabled=False the user has asked for "grounded-only" mode
-        # — i.e. answer single-shot from the prefetched context. Tell agent-node
-        # to mask the read-side tools so the model can't call them even if its
-        # prompt would otherwise lead it to. The agent-node handler maps this
-        # to ``tools: { read: false, grep: false, ... }`` in session.prompt.
         body["toolsEnabled"] = bool(tools_enabled)
+        return body
+
+    async def _run(
+        self,
+        *,
+        system: str,
+        prompt: str,
+        cwd: Path,
+        timeout_seconds: float,
+        structured: bool,
+        structured_retry: int,
+        provider_id: str | None,
+        api_key: str | None,
+        model: str | None = None,
+        tools_enabled: bool = True,
+    ) -> dict[str, Any]:
+        url = self.settings.agent_node_url.rstrip("/") + "/adapters/opencode/run"
+        body = self._build_run_body(
+            system=system,
+            prompt=prompt,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            structured=structured,
+            structured_retry=structured_retry,
+            provider_id=provider_id,
+            api_key=api_key,
+            model=model,
+            tools_enabled=tools_enabled,
+        )
         async with httpx.AsyncClient(timeout=timeout_seconds + 45) as c:
             r = await c.post(url, json=body)
         if r.status_code >= 400:
@@ -237,18 +334,31 @@ class OpencodeSDKAdapter(Adapter):
 
 
 def _metrics_from(out: dict[str, Any], start: float) -> AdapterMetrics:
+    """Project the agent-node OpencodeRunResult into AdapterMetrics + extras."""
     extra: dict[str, Any] = {"agent_node": True, "opencode_mode": True}
     if out.get("structuredOutputFailed"):
         extra["structured_output_failed"] = True
     if out.get("toolNames"):
         extra["opencode_tool_names"] = list(out["toolNames"])
-    # Surface the files the agent actually read so the context_recall scorer
-    # can compute recall against each case's labeled ``expected_files``. The
-    # opencode adapter retrieves on-demand via tools, not via a prefetch
-    # block — without this, recall would be uninformative for it.
     paths = out.get("groundingPaths")
     if isinstance(paths, list):
         extra["grounding_paths"] = sorted(p for p in paths if isinstance(p, str))
+    # New: richer telemetry now surfaced by the agent-node side.
+    trace = out.get("toolTrace")
+    if isinstance(trace, list):
+        extra["tool_trace"] = trace
+    for src_key, dst_key in (
+        ("toolWallMs", "tool_wall_ms"),
+        ("cacheReadTokens", "cache_read_tokens"),
+        ("cacheWriteTokens", "cache_write_tokens"),
+        ("tokensReasoning", "reasoning_tokens"),
+        ("finishReason", "finish_reason"),
+        ("providerID", "provider_id"),
+        ("agentMode", "agent_mode"),
+        ("sessionID", "session_id"),
+    ):
+        if out.get(src_key) is not None:
+            extra[dst_key] = out[src_key]
     tc = out.get("toolCalls")
     return AdapterMetrics(
         duration_ms=int((time.monotonic() - start) * 1000),

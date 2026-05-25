@@ -10,7 +10,7 @@ import { runCline } from "./adapters/cline.js";
 import { runClaudeCode } from "./adapters/claude_code.js";
 import { runGemini } from "./adapters/gemini.js";
 import { runOpenAIAgents } from "./adapters/openai_agents.js";
-import { runOpencode } from "./adapters/opencode.js";
+import { abortOpencodeSession, runOpencode, streamOpencode } from "./adapters/opencode.js";
 import { askSourcebotBlocking } from "./adapters/sourcebot.js";
 
 const fastify = Fastify({ logger: { level: process.env.LOG_LEVEL || "info" } });
@@ -204,10 +204,107 @@ fastify.post("/adapters/opencode/run", async (request, reply) => {
       typeof b.structuredRetryCount === "number" ? (b.structuredRetryCount as number) : undefined,
     providerID: pid || undefined,
     apiKey: pk || undefined,
+    agent: typeof b.agent === "string" ? b.agent : undefined,
+    toolsEnabled: b.toolsEnabled === undefined ? undefined : Boolean(b.toolsEnabled),
+    sessionID: typeof b.sessionID === "string" ? b.sessionID : undefined,
+    keepSession: Boolean(b.keepSession),
   });
   if (!out.ok) {
     return reply.code(502).send(out);
   }
+  return out;
+});
+
+/**
+ * SSE stream: token deltas, tool start/complete, todo updates. Each event is
+ * a JSON object on a `data: …` line. The terminal event is `{kind:"done", …}`
+ * which carries the same metrics envelope as POST /adapters/opencode/run.
+ */
+fastify.post("/adapters/opencode/stream", async (request, reply) => {
+  const b = (request.body ?? {}) as Record<string, unknown>;
+  if (!b.prompt || typeof b.prompt !== "string") {
+    return reply.code(400).send({ ok: false, error: "prompt (string) required" });
+  }
+  const pid = typeof b.providerID === "string" ? b.providerID.trim() : "";
+  const pk = typeof b.apiKey === "string" ? b.apiKey.trim() : "";
+  if ((pid || pk) && (!pid || !pk)) {
+    return reply.code(400).send({
+      ok: false,
+      error: "providerID and apiKey must both be set when passing credentials",
+    });
+  }
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const write = (obj: unknown) => {
+    if (reply.raw.writableEnded) return;
+    reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+
+  // Detect client disconnect via the RESPONSE socket. We previously listened
+  // to ``request.raw.on("close")`` but on Node's IncomingMessage that event
+  // fires as soon as the inbound body is fully read — which happens right
+  // after Fastify parses the JSON, before we ever start streaming. That
+  // self-aborted every SSE call after the first `session` event. ``reply.raw``
+  // (ServerResponse) only emits "close" when the underlying TCP connection
+  // terminates *before* response.end() — exactly what we want.
+  const controller = new AbortController();
+  reply.raw.on("close", () => {
+    if (!reply.raw.writableEnded) controller.abort();
+  });
+
+  try {
+    for await (const ev of streamOpencode(
+      {
+        systemPrompt: typeof b.systemPrompt === "string" ? b.systemPrompt : undefined,
+        prompt: b.prompt as string,
+        cwd: typeof b.cwd === "string" ? b.cwd : undefined,
+        model:
+          (typeof b.model === "string" && b.model.trim()
+            ? b.model
+            : process.env.OPENCODE_MODEL)?.trim(),
+        baseUrl:
+          typeof b.baseUrl === "string"
+            ? b.baseUrl.trim()
+            : ((process.env.OPENCODE_BASE_URL || "").trim() || undefined),
+        timeoutSec: (b.timeoutSec as number) ?? 600,
+        providerID: pid || undefined,
+        apiKey: pk || undefined,
+        agent: typeof b.agent === "string" ? b.agent : undefined,
+        toolsEnabled: b.toolsEnabled === undefined ? undefined : Boolean(b.toolsEnabled),
+        sessionID: typeof b.sessionID === "string" ? b.sessionID : undefined,
+        keepSession: Boolean(b.keepSession),
+      },
+      controller.signal
+    )) {
+      write(ev);
+      if (ev.kind === "done") break;
+    }
+  } catch (err) {
+    const e = err as Error;
+    write({ kind: "error", error: `${e?.name || "Error"}: ${e?.message || String(err)}` });
+  } finally {
+    if (!reply.raw.writableEnded) reply.raw.end();
+  }
+});
+
+/** Cancel a running opencode session by id. Requires OPENCODE_BASE_URL. */
+fastify.post("/adapters/opencode/abort", async (request, reply) => {
+  const b = (request.body ?? {}) as Record<string, unknown>;
+  const sessionID = typeof b.sessionID === "string" ? b.sessionID.trim() : "";
+  if (!sessionID) {
+    return reply.code(400).send({ ok: false, error: "sessionID required" });
+  }
+  const out = await abortOpencodeSession({
+    sessionID,
+    cwd: typeof b.cwd === "string" ? b.cwd : undefined,
+    baseUrl: typeof b.baseUrl === "string" ? b.baseUrl : undefined,
+  });
+  if (!out.ok) return reply.code(502).send(out);
   return out;
 });
 
