@@ -20,8 +20,9 @@ from typing import Any, Literal
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -466,8 +467,16 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
                 "metrics": result.metrics.model_copy(update={"extra": extra}),
             })
         m = result.metrics
+        # Optional rich-card shaper pass — one extra Gemini Flash call that
+        # coerces the raw markdown answer into a structured Answer (summary,
+        # details, citations, confidence, caveats, next_steps). Always
+        # returns gracefully; never raises. Skipped per-request via
+        # ``shape=false`` or globally via ANSWER_SHAPER_ENABLED=false.
+        shaped = await _maybe_shape_answer(
+            settings=settings, query=inp.query, raw_text=result.answer, override=inp.shape,
+        )
         # Build the persisted payload so /runs/{id} can replay the full
-        # telemetry. Two sources of telemetry live in different places:
+        # telemetry. Three sources of telemetry live in different places:
         #   - grounding   : when the API itself prefetched snippets
         #                   (skipped for the pipeline adapter, which does
         #                   its own internal grounding instead)
@@ -476,11 +485,14 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
         #                   tool_names, etc. Without this in payload, the
         #                   UI's Telemetry panel renders empty after reload
         #                   because /runs/{id} responses don't carry it.
+        #   - structured_answer : the shaper output the UI's rich card binds to.
         payload: dict[str, Any] = {}
         if grounding is not None:
             payload["grounding"] = grounding.model_dump(mode="json")
         if m.extra:
             payload["metrics_extra"] = dict(m.extra)
+        if shaped is not None:
+            payload["structured_answer"] = shaped.model_dump(mode="json")
         store.record(
             run_id=ctx.run_id, mode="ask", status="completed",
             input_ref=ref_for_store, engine=f"{name}:ask",
@@ -500,7 +512,519 @@ async def adapter_ask(name: str, inp: AdapterAskInput) -> dict[str, Any]:
     result_body = result.model_dump()
     if grounding is not None:
         result_body["grounding"] = grounding.model_dump(mode="json")
+    if shaped is not None:
+        result_body["structured_answer"] = shaped.model_dump(mode="json")
     return {"run_id": ctx.run_id, "thread_id": thread_key, "result": result_body}
+
+
+# ---------------------------------------------------------------------------
+# Universal native-model streaming
+# ---------------------------------------------------------------------------
+
+
+def _wants_tools_disabled(inp: AdapterAskInput) -> bool:
+    """Direct mode (no tools, no grounding) and Grounded-only mode (tools off,
+    grounding on) both reduce to a single LLM call — they can be streamed
+    natively via pydantic-AI's ``run_stream`` regardless of which adapter
+    the user picked. Hybrid + Agent need the SDK's tool loop and can't take
+    this path."""
+    return not inp.tools_enabled
+
+
+def _resolve_synthesis_model(inp: AdapterAskInput, adapter_name: str, settings) -> str:
+    """Choose the model spec for the native-streaming path.
+
+    Priority:
+      1. Explicit ``inp.model`` (per-request override from the UI dropdown).
+         Already in ``provider:name`` or adapter-native form — normalized below.
+      2. Fall back to the adapter's configured default model.
+      3. Last resort: ``pipeline_synthesis_model`` (Flash by default).
+    """
+    raw = (inp.model or "").strip()
+    if not raw:
+        # Adapter-specific config keys hold the default. We look them up by
+        # name so users picking "claude_code" with no override get
+        # claude-sonnet-* instead of gemini-2.5-flash.
+        defaults: dict[str, str] = {
+            "opencode": settings.opencode_sdk_model,
+            "gemini": settings.gemini_sdk_model if hasattr(settings, "gemini_sdk_model") else "gemini-2.5-flash",
+            "claude_code": settings.claude_code_model if hasattr(settings, "claude_code_model") else "claude-sonnet-4-5",
+            "openai_agents": settings.openai_agents_sdk_model if hasattr(settings, "openai_agents_sdk_model") else "gpt-4o",
+            "cursor": settings.cursor_sdk_model if hasattr(settings, "cursor_sdk_model") else "composer-2",
+        }
+        raw = (defaults.get(adapter_name) or settings.pipeline_synthesis_model or "gemini-2.5-flash").strip()
+
+    # Normalize to a provider:name spec the llm_registry understands.
+    # OpenCode-style "anthropic/claude-..." → "anthropic:claude-..."
+    # Bare names like "gemini-2.5-pro" stay bare (registry infers gemini).
+    if "/" in raw and ":" not in raw:
+        provider, name = raw.split("/", 1)
+        # OpenCode + OpenRouter both use slashes. If provider is "openrouter",
+        # the model id keeps its embedded slash (e.g. openrouter/deepseek/...).
+        if provider == "openrouter":
+            raw = f"openrouter:{name}"
+        elif provider in ("anthropic", "google", "openai"):
+            raw = f"{'gemini' if provider == 'google' else provider}:{name}"
+    return raw
+
+
+@app.post("/v1/ask/stream")
+async def ask_stream(inp: AdapterAskInput, request: Request) -> StreamingResponse:
+    """SSE endpoint that streams a single-shot LLM call directly via
+    pydantic-AI when the request is in a no-tools mode (Direct or
+    Grounded-only). Works for ANY adapter selection because we bypass the
+    SDK entirely — the ``adapter`` parameter only influences which model to
+    default to.
+
+    For requests that DO need the agent loop (Hybrid / Agent mode), this
+    endpoint returns a 400 directing the caller to the adapter-specific
+    streaming endpoint (currently only ``/v1/adapters/opencode/stream``).
+    """
+    if not _wants_tools_disabled(inp):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "ask/stream supports only no-tools modes (Direct, Grounded-only). "
+                "Use /v1/adapters/opencode/stream for tool-loop streaming."
+            ),
+        )
+
+    settings = get_settings()
+    store = open_default_store(settings)
+    ctx = RunContext(settings=settings, mode="ask")
+    thread_key = inp.thread_id or ctx.run_id
+    q_preview = inp.query[:160].strip()
+    ref_for_store = _storage_ask_ref(inp, thread_key)
+
+    # Optional grounding prefetch — same shape as the blocking /ask endpoint.
+    grounding: GroundedContext | None = None
+    if inp.grounded:
+        grounding = await retrieve_grounded_context(
+            query=inp.query, settings=settings, repos=inp.repos, top_k=inp.top_k,
+        )
+
+    threaded_query = _augmented_ask_query_for_thread(
+        store, thread_key, ctx.run_id, inp.query,
+    )
+
+    store.start(
+        run_id=ctx.run_id, mode="ask",
+        input_ref=ref_for_store,
+        input_preview=q_preview,
+        output_format="markdown",
+        thread_id=thread_key,
+    )
+
+    # The "adapter" field on the input is just a default-model hint —
+    # we always go native (pydantic-AI) regardless.
+    adapter_name = (inp.adapter or "pipeline").lower()
+    model_spec = _resolve_synthesis_model(inp, adapter_name, settings)
+    grounding_block = (grounding.grounding_block if grounding else "")
+
+    import time as _time
+    start = _time.monotonic()
+
+    async def event_source():
+        yield f"data: {_sse_json({'kind': 'run', 'run_id': ctx.run_id, 'thread_id': thread_key})}\n\n"
+        # Emit a synthetic "session" with the model so the UI's bubble
+        # has something to show in the header strip.
+        yield f"data: {_sse_json({'kind': 'session', 'sessionID': f'native:{model_spec}'})}\n\n"
+        yield f"data: {_sse_json({'kind': 'status', 'status': 'running'})}\n\n"
+
+        final_text = ""
+        toks_in: int | None = None
+        toks_out: int | None = None
+        duration_ms = 0
+        from .core.synthesize import synthesize_ask_stream
+        try:
+            async for ev in synthesize_ask_stream(
+                query=threaded_query,
+                grounding_block=grounding_block,
+                settings=settings,
+                model_id=model_spec,
+            ):
+                if await request.is_disconnected():
+                    break
+                if ev["kind"] == "text.delta":
+                    yield f"data: {_sse_json({'kind': 'text.delta', 'text': ev['text']})}\n\n"
+                elif ev["kind"] == "result":
+                    final_text = ev["text"]
+                    toks_in = ev.get("tokens_in")
+                    toks_out = ev.get("tokens_out")
+                    duration_ms = ev.get("duration_ms") or 0
+        except Exception as e:  # noqa: BLE001
+            err = {"kind": "error", "error": f"{type(e).__name__}: {e}"}
+            yield f"data: {_sse_json(err)}\n\n"
+            _persist_failed(store, ctx.run_id, ref_for_store, q_preview, thread_key, err["error"])
+            try:
+                store.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        # Build the done envelope mirroring opencode's shape so the UI
+        # client can use the same reducer.
+        done_result = {
+            "ok": True,
+            "answer": final_text,
+            "model": model_spec,
+            "tokensIn": toks_in,
+            "tokensOut": toks_out,
+            "costUsd": None,
+            "toolCalls": 0,
+            "toolNames": [],
+            "toolTrace": [],
+        }
+        yield f"data: {_sse_json({'kind': 'done', 'result': done_result})}\n\n"
+
+        # Optional shaper pass + emit shaped event.
+        shaped = await _maybe_shape_answer(
+            settings=settings, query=inp.query, raw_text=final_text, override=inp.shape,
+        )
+        if shaped is not None:
+            yield f"data: {_sse_json({'kind': 'shaped', 'shaped': shaped.model_dump(mode='json')})}\n\n"
+
+        # Persist completion the same way the streamed opencode path does.
+        try:
+            extra: dict[str, Any] = {
+                "native_stream": True,
+                "synthesis_model": model_spec,
+                "wall_ms_total": int((_time.monotonic() - start) * 1000),
+                "synth_duration_ms": duration_ms,
+            }
+            payload: dict[str, Any] = {"metrics_extra": extra}
+            if grounding is not None:
+                payload["grounding"] = grounding.model_dump(mode="json")
+                from .core.coverage import snippet_paths
+                extra["grounding_paths"] = sorted(snippet_paths(grounding.snippets))
+            if shaped is not None:
+                payload["structured_answer"] = shaped.model_dump(mode="json")
+            s2 = open_default_store(settings)
+            try:
+                s2.record(
+                    run_id=ctx.run_id, mode="ask", status="completed",
+                    input_ref=ref_for_store, engine=f"{adapter_name}:ask:native_stream",
+                    answer=final_text,
+                    citations=[],
+                    payload=payload,
+                    model=model_spec,
+                    total_seconds=duration_ms / 1000.0 if duration_ms else None,
+                    total_cost_usd=None,
+                    input_tokens=toks_in,
+                    output_tokens=toks_out,
+                    input_preview=q_preview,
+                    thread_id=thread_key,
+                )
+            finally:
+                s2.close()
+        except Exception:  # noqa: BLE001
+            # Persistence failure shouldn't surface to the user — they
+            # already have the answer. The runstore reload will just miss
+            # this row.
+            pass
+        try:
+            store.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# OpenCode streaming + abort
+# ---------------------------------------------------------------------------
+
+
+class OpencodeAbortRequest(BaseModel):
+    session_id: str
+    repos: list[str] | None = None
+
+
+@app.post("/v1/adapters/opencode/stream")
+async def opencode_stream(inp: AdapterAskInput, request: Request) -> StreamingResponse:
+    """SSE bridge that proxies agent-node ``streamOpencode`` straight to the
+    browser. Each event line is ``data: <json>\\n\\n``; the terminal event is
+    ``{kind:"done", result: {...}}``. The recorded run row is written under
+    the same shape ``/v1/adapters/{name}/ask`` produces — so /runs and the
+    history sidebar pick it up without changes.
+    """
+    from .adapters._opencode_sdk import OpencodeSDKAdapter
+
+    adapter = _resolve_adapter("opencode")
+    if not isinstance(adapter, OpencodeSDKAdapter):
+        raise HTTPException(status_code=500, detail="opencode adapter not registered")
+    settings = get_settings()
+    store = open_default_store(settings)
+    ctx = RunContext(settings=settings, mode="ask")
+
+    # Pre-fetch grounding identically to /ask so the UI can keep its modes.
+    grounding: GroundedContext | None = None
+    if inp.grounded:
+        grounding = await retrieve_grounded_context(
+            query=inp.query, settings=settings, repos=inp.repos, top_k=inp.top_k,
+        )
+
+    thread_key = inp.thread_id or ctx.run_id
+    threaded_query = _augmented_ask_query_for_thread(
+        store, thread_key, ctx.run_id, inp.query,
+    )
+    final_query = (
+        build_grounded_prompt(grounding_block=grounding.grounding_block, query=threaded_query)
+        if grounding and grounding.grounding_block
+        else threaded_query
+    )
+    adapter_inp = inp.model_copy(update={"query": final_query})
+
+    # When this is a thread continuation, try to reuse the previous OpenCode
+    # session id so the SDK keeps conversation memory + warm prompt cache.
+    reuse_session_id = (
+        _latest_opencode_session_for_thread(store, thread_key)
+        if inp.thread_id
+        else None
+    )
+    ref_for_store = _storage_ask_ref(inp, thread_key)
+    q_preview = inp.query[:160].strip()
+    store.start(
+        run_id=ctx.run_id, mode="ask",
+        input_ref=ref_for_store,
+        input_preview=q_preview,
+        output_format="markdown",
+        thread_id=thread_key,
+    )
+    _adapter_progress_started(store, ctx.run_id, decompose=False)
+    import time as _time
+    start = _time.monotonic()
+
+    async def event_source():
+        # Emit a tiny preamble so the UI can render shell chrome before
+        # opencode's session even starts.
+        yield f"data: {_sse_json({'kind': 'run', 'run_id': ctx.run_id, 'thread_id': thread_key})}\n\n"
+        final_event: dict[str, Any] | None = None
+        try:
+            async for ev in adapter.astream(
+                adapter_inp,
+                session_id=reuse_session_id,
+                keep_session=bool(inp.thread_id),
+            ):
+                if await request.is_disconnected():
+                    break
+                yield f"data: {_sse_json(ev)}\n\n"
+                if ev.get("kind") == "done":
+                    final_event = ev
+                    break
+        except Exception as e:  # noqa: BLE001
+            err = {"kind": "error", "error": f"{type(e).__name__}: {e}"}
+            yield f"data: {_sse_json(err)}\n\n"
+            _persist_failed(store, ctx.run_id, ref_for_store, q_preview, thread_key, err["error"])
+            return
+        finally:
+            try:
+                store.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Persist on completion so reload picks the row up. We re-open the
+        # store because the `finally` above has closed it. This mirrors the
+        # blocking /ask handler — same payload shape (metrics_extra,
+        # citations, structured_answer).
+        if final_event and (final_event.get("result") or {}).get("ok"):
+            result = final_event["result"]
+            duration_ms = int((_time.monotonic() - start) * 1000)
+            # Shape the final answer the same way the blocking endpoint does,
+            # then emit ONE more SSE event so the UI can swap to the rich
+            # card immediately — without it the client would have to refetch
+            # the run row to discover the structured_answer.
+            shaped = await _maybe_shape_answer(
+                settings=settings,
+                query=inp.query,
+                raw_text=result.get("answer") or "",
+                override=inp.shape,
+            )
+            if shaped is not None:
+                yield f"data: {_sse_json({'kind': 'shaped', 'shaped': shaped.model_dump(mode='json')})}\n\n"
+            _persist_streamed_ok(
+                run_id=ctx.run_id,
+                thread_key=thread_key,
+                ref_for_store=ref_for_store,
+                q_preview=q_preview,
+                grounding=grounding,
+                result=result,
+                duration_ms=duration_ms,
+                shaped=shaped,
+            )
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/v1/adapters/opencode/abort")
+async def opencode_abort(body: OpencodeAbortRequest) -> dict[str, Any]:
+    """Stop a running OpenCode session by id. Requires OPENCODE_SDK_BASE_URL."""
+    from .adapters._opencode_sdk import OpencodeSDKAdapter
+
+    adapter = _resolve_adapter("opencode")
+    if not isinstance(adapter, OpencodeSDKAdapter):
+        raise HTTPException(status_code=500, detail="opencode adapter not registered")
+    cwd = (
+        adapter.settings.repo_path(body.repos[0])
+        if body.repos and len(body.repos) == 1
+        else Path(adapter.settings.repos_root)
+    )
+    try:
+        out = await adapter.abort(body.session_id, cwd=cwd)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+    return out
+
+
+def _sse_json(obj: Any) -> str:
+    import json as _json
+    return _json.dumps(obj, ensure_ascii=False)
+
+
+async def _maybe_shape_answer(
+    *,
+    settings,
+    query: str,
+    raw_text: str,
+    override: bool | None,
+):
+    """Run the structured-answer shaper if globally enabled and not opted
+    out for this request.
+
+    Returns ``ShapedAnswer | None``. None means we skipped — caller does
+    not persist ``structured_answer``. Errors inside the shaper degrade
+    to a fallback ShapedAnswer (not None) — the only "skip" cases are
+    user override or settings disabled.
+    """
+    enabled = settings.answer_shaper_enabled if override is None else bool(override)
+    if not enabled:
+        return None
+    if not (raw_text or "").strip():
+        return None
+    from .core.answer_shaper import shape_answer
+    return await shape_answer(query=query, raw_text=raw_text, settings=settings)
+
+
+def _latest_opencode_session_for_thread(store: RunStore, thread_id: str) -> str | None:
+    """Return the last completed opencode run's OpenCode sessionID in this
+    thread, so the next streamed turn can reuse it (chat memory + cache hits).
+
+    The id is stored under ``payload_json.metrics_extra.session_id`` by
+    ``_persist_streamed_ok``. We walk newest-first to grab the most recent.
+    """
+    try:
+        rows = store.list_by_thread(thread_id, mode="ask", limit=20)
+    except Exception:  # noqa: BLE001
+        return None
+    for row in reversed(rows):
+        if (row.get("engine") or "") != "opencode:ask":
+            continue
+        if row.get("status") != "completed":
+            continue
+        payload = row.get("payload_json") or row.get("payload") or {}
+        if isinstance(payload, str):
+            try:
+                import json as _json
+                payload = _json.loads(payload)
+            except Exception:  # noqa: BLE001
+                payload = {}
+        extra = (payload or {}).get("metrics_extra") or {}
+        sid = extra.get("session_id")
+        if isinstance(sid, str) and sid.strip():
+            return sid.strip()
+    return None
+
+
+def _persist_failed(
+    store: RunStore,
+    run_id: str,
+    ref_for_store: dict[str, Any],
+    q_preview: str,
+    thread_key: str,
+    error: str,
+) -> None:
+    try:
+        store.record(
+            run_id=run_id, mode="ask", status="failed",
+            input_ref=ref_for_store, engine="opencode:ask",
+            error=error, input_preview=q_preview,
+            thread_id=thread_key,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _persist_streamed_ok(
+    *,
+    run_id: str,
+    thread_key: str,
+    ref_for_store: dict[str, Any],
+    q_preview: str,
+    grounding: GroundedContext | None,
+    result: dict[str, Any],
+    duration_ms: int,
+    shaped: Any = None,
+) -> None:
+    """Write the completed streamed run into the runstore so the history
+    sidebar, telemetry panel, and bake-off all see it — same shape the
+    blocking /ask handler uses. ``shaped`` is the optional ShapedAnswer
+    from the post-processing pass; persisted under ``structured_answer``."""
+    settings = get_settings()
+    s2 = open_default_store(settings)
+    try:
+        extra: dict[str, Any] = {"agent_node": True, "opencode_mode": True}
+        for src, dst in (
+            ("toolNames", "opencode_tool_names"),
+            ("toolTrace", "tool_trace"),
+            ("toolWallMs", "tool_wall_ms"),
+            ("cacheReadTokens", "cache_read_tokens"),
+            ("cacheWriteTokens", "cache_write_tokens"),
+            ("tokensReasoning", "reasoning_tokens"),
+            ("finishReason", "finish_reason"),
+            ("providerID", "provider_id"),
+            ("agentMode", "agent_mode"),
+            ("sessionID", "session_id"),
+            ("groundingPaths", "grounding_paths"),
+        ):
+            if result.get(src) is not None:
+                extra[dst] = result[src]
+        payload: dict[str, Any] = {"metrics_extra": extra}
+        if grounding is not None:
+            payload["grounding"] = grounding.model_dump(mode="json")
+        if shaped is not None:
+            payload["structured_answer"] = shaped.model_dump(mode="json")
+        s2.record(
+            run_id=run_id, mode="ask", status="completed",
+            input_ref=ref_for_store, engine="opencode:ask",
+            answer=result.get("answer") or "",
+            citations=[],
+            payload=payload,
+            model=result.get("model"),
+            total_seconds=duration_ms / 1000.0,
+            total_cost_usd=result.get("costUsd"),
+            input_tokens=result.get("tokensIn"),
+            output_tokens=result.get("tokensOut"),
+            input_preview=q_preview,
+            thread_id=thread_key,
+        )
+    finally:
+        s2.close()
 
 
 @app.post("/v1/adapters/{name}/decompose")

@@ -130,6 +130,17 @@ class Settings(BaseSettings):
     # Structurer model for decompose JSON coercion (Flash keeps cost low).
     pipeline_structurer_model: str = "gemini-2.5-flash"
 
+    # ---- Answer shaper ----
+    # Post-processes every adapter's raw ask answer through a pydantic-ai
+    # pass that returns a structured ``Answer`` (summary, details, citations,
+    # confidence, caveats, next_steps). Renders as a rich card in the UI.
+    # Adds one LLM call per turn (~$0.0001 on Flash). Set to false to skip.
+    answer_shaper_enabled: bool = True
+    answer_shaper_model: str = "gemini-2.5-flash"
+    # Cap how much raw answer we feed the shaper. Bigger = more cost; cheap
+    # models start ignoring detail past ~16k anyway.
+    answer_shaper_max_input_chars: int = 16000
+
     @field_validator("enabled_adapters", mode="before")
     @classmethod
     def _split_enabled(cls, v):

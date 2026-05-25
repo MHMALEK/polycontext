@@ -107,6 +107,23 @@ class AdapterAskInput(BaseModel):
             "Currently honored by the ``opencode`` adapter; other adapters treat it advisory."
         ),
     )
+    shape: bool | None = Field(
+        default=None,
+        description=(
+            "Override the global ``answer_shaper_enabled`` setting for this one "
+            "call. None = use server default (typically True). False to skip the "
+            "rich-card pydantic-AI pass (saves ~1s + a Flash call per turn)."
+        ),
+    )
+    adapter: str | None = Field(
+        default=None,
+        description=(
+            "Adapter hint used by the universal native-stream endpoint "
+            "(``/v1/ask/stream``) to pick a sensible default model. Ignored by "
+            "the per-adapter ``/v1/adapters/{name}/ask`` paths, which take the "
+            "adapter from the URL."
+        ),
+    )
 
 
 class AdapterAskResult(BaseModel):

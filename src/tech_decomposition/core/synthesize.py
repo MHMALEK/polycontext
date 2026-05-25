@@ -31,6 +31,25 @@ Rules:
 - Be concise but complete. Use markdown lists when listing items.
 """
 
+# Used by the native streaming path when the request is Direct mode — no
+# grounding snippets, no tools. The previous prompt told the model to
+# answer "only from snippets", which makes it refuse when none were
+# provided. This variant is suited for a single-shot LLM-only answer.
+_ASK_DIRECT_SYSTEM = """\
+You are a senior engineer answering a question directly from your own
+knowledge. There are no code snippets attached — answer from what you
+know about general engineering practice, common framework patterns, and
+the question itself.
+
+Rules:
+- Be concise. Give the engineer a useful answer, not a textbook chapter.
+- If the question is asking about something repo-specific (e.g. "Where is
+  X in OUR codebase"), be honest that you don't have access to the code
+  in this mode and suggest using Grounded or Agent mode instead.
+- Use markdown lists for enumerations. Code fences for code examples.
+- Don't refuse if the question is general — answer it.
+"""
+
 _DECOMPOSE_DRAFT_SYSTEM = """\
 You decompose engineering tickets into a tech work breakdown for developers.
 You receive pre-fetched code snippets — use them as primary evidence.
@@ -138,6 +157,70 @@ async def synthesize_ask(
         tokens_out=toks_out,
         duration_ms=int((time.monotonic() - t0) * 1000),
     )
+
+
+async def synthesize_ask_stream(
+    *,
+    query: str,
+    grounding_block: str,
+    settings: Settings,
+    model_id: str | None = None,
+):
+    """Stream token deltas from a single-shot LLM call (no tools, no agent loop).
+
+    Used by the API's ``/v1/ask/stream`` for the no-tools modes (Direct,
+    Grounded-only) across ANY adapter — bypasses each adapter's SDK and
+    streams natively via pydantic-AI. Works for Gemini, Anthropic, OpenAI,
+    OpenRouter (any model the ``llm_registry`` can build).
+
+    Yields a sequence of events::
+
+        {"kind": "text.delta",   "text": "..."}   # zero or more
+        {"kind": "result",       "text": "<full>", "model": ..., "tokens_in": ..., "tokens_out": ..., "duration_ms": ...}
+
+    The terminal ``result`` event always fires (even on degenerate runs);
+    callers can break the loop after seeing it. Raises on hard errors so
+    the bridge can emit a structured error event.
+    """
+    import time
+
+    # Pick a system prompt suited to the mode: grounded uses the strict
+    # "answer only from snippets" prompt; direct uses the LLM-only prompt.
+    # Without this split, direct-mode queries get refused ("no snippets
+    # were provided") because the grounded prompt insists on evidence.
+    system_prompt = _ASK_SYNTH_SYSTEM if grounding_block else _ASK_DIRECT_SYSTEM
+    agent, model_name = _build_agent(
+        settings, system=system_prompt, model_id=model_id,
+    )
+    prompt = build_grounded_prompt(grounding_block=grounding_block, query=query) if grounding_block else query
+    t0 = time.monotonic()
+    final_text = ""
+    toks_in: int | None = None
+    toks_out: int | None = None
+    # ``run_stream`` returns an async context manager that yields a
+    # StreamedRunResult. ``stream_text(delta=True)`` then yields just the
+    # incremental text — exactly what the UI's <StreamingAnswerBubble> wants.
+    async with agent.run_stream(prompt) as response:
+        async for delta in response.stream_text(delta=True):
+            if not delta:
+                continue
+            final_text += delta
+            yield {"kind": "text.delta", "text": delta}
+        # Usage is only populated after the stream completes.
+        try:
+            u = response.usage()
+            toks_in = getattr(u, "request_tokens", None) or getattr(u, "input_tokens", None)
+            toks_out = getattr(u, "response_tokens", None) or getattr(u, "output_tokens", None)
+        except Exception:  # noqa: BLE001
+            pass
+    yield {
+        "kind": "result",
+        "text": final_text.strip(),
+        "model": model_name,
+        "tokens_in": toks_in,
+        "tokens_out": toks_out,
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+    }
 
 
 async def synthesize_decompose_draft(
