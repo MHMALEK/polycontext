@@ -111,13 +111,26 @@ const ADAPTER_SUPPORTS_TOOLS_TOGGLE: Record<string, boolean> = {
   // work for them; not yet wired.
 };
 
-// The per-adapter SSE-streaming capability map was retired when the
-// chat UI moved to a single ``/v1/ask/stream`` pipeline backed by
-// pydantic-AI for every mode. The per-SDK ``/v1/adapters/{name}/stream``
-// endpoints + the agent-node streamX functions stay in the codebase
-// for now but are no longer reached from the UI. The blocking
-// ``/v1/adapters/{name}/ask`` path is still used by the bake-off
-// harness so the adapter SDKs themselves remain compared.
+/**
+ * Adapters where the chat UI should keep using the native SDK's
+ * streaming endpoint instead of the universal pydantic-AI pipeline.
+ *
+ * Why: OpenCode in particular owns features pydantic-AI doesn't model
+ * (multi-provider routing via OpenRouter, the "build" agent with its
+ * own curated tools, session continuity across thread turns, cost
+ * tracking, MCP servers). Those are first-class features users pick
+ * when they pick OpenCode — so for opencode we route to
+ * ``/v1/adapters/opencode/stream`` which preserves all of that and
+ * uses the message-polling fallback for live tool visibility.
+ *
+ * Other adapters (gemini, claude_code, etc.) go through the universal
+ * pipeline because their SDK-specific behaviors are smaller deltas
+ * vs. just "model + tools" and the simplification is worth more than
+ * the extra complexity of per-SDK streamers.
+ */
+const ADAPTER_USES_NATIVE_STREAM: Record<string, boolean> = {
+  opencode: true,
+};
 
 function modeIsSupported(mode: AskMode, adapter: string): boolean {
   if (mode === "hybrid" || mode === "agent_only") return true;
@@ -1834,12 +1847,15 @@ export function App() {
           throw new Error("pick an adapter from the dropdown before submitting");
         }
         const wireMode = askModeToWire(form.mode);
-        // Single streaming pipeline for all four modes — /v1/ask/stream
-        // now handles Direct / Grounded-only / Agent / Hybrid universally
-        // via pydantic-AI. The adapter dropdown just picks the default
-        // model. The blocking /v1/adapters/{name}/ask path stays for the
-        // bake-off harness (it iterates each adapter's native SDK), but
-        // the chat UI no longer needs the per-SDK streaming branch.
+        // Two streaming pipelines, chosen by adapter:
+        //   1. OpenCode (and any future ADAPTER_USES_NATIVE_STREAM entry)
+        //      → /v1/adapters/{name}/stream. Preserves the SDK's own
+        //      agent loop, session continuity, multi-provider routing,
+        //      MCP servers, and real session ids. For opencode we also
+        //      get the message-polling fallback for live tool visibility.
+        //   2. Everything else → /v1/ask/stream (pydantic-AI universal).
+        //      One code path, one set of tools, works for any model.
+        const useOpencodeNative = ADAPTER_USES_NATIVE_STREAM[form.adapter] === true;
         {
           const controller = new AbortController();
           streamAbortRef.current = controller;
@@ -1854,7 +1870,19 @@ export function App() {
             startedAt: Date.now(),
           });
           let threadIdFromStream: string | null = activeThreadId;
-          const streamCall = api.nativeAskStream(
+          const streamCall = useOpencodeNative
+            ? api.adapterAskStream(
+                form.adapter,
+                {
+                  query: question,
+                  grounded: wireMode.grounded,
+                  tools_enabled: wireMode.tools_enabled,
+                  ...(form.model ? { model: form.model } : {}),
+                  ...(activeThreadId ? { thread_id: activeThreadId } : {}),
+                },
+                { signal: controller.signal },
+              )
+            : api.nativeAskStream(
                 {
                   query: question,
                   grounded: wireMode.grounded,
