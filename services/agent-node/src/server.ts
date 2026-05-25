@@ -7,7 +7,7 @@
 import Fastify from "fastify";
 import { runCursor } from "./adapters/cursor.js";
 import { runCline } from "./adapters/cline.js";
-import { runClaudeCode } from "./adapters/claude_code.js";
+import { runClaudeCode, streamClaudeCode } from "./adapters/claude_code.js";
 import { runGemini, streamGemini } from "./adapters/gemini.js";
 import { runOpenAIAgents } from "./adapters/openai_agents.js";
 import { abortOpencodeSession, runOpencode, streamOpencode } from "./adapters/opencode.js";
@@ -89,6 +89,55 @@ fastify.post("/adapters/claude_code/run", async (request, reply) => {
     return reply.code(502).send(out);
   }
   return out;
+});
+
+/**
+ * Claude Code SSE stream — per-token text deltas + tool start/complete
+ * events while the agent SDK iterates. Uses includePartialMessages so the
+ * SDK emits SDKPartialAssistantMessage (stream_event) per token.
+ */
+fastify.post("/adapters/claude_code/stream", async (request, reply) => {
+  const b = (request.body ?? {}) as Record<string, unknown>;
+  const apiKey = (b.apiKey as string) || process.env.ANTHROPIC_API_KEY || "";
+  if (!b.prompt || typeof b.prompt !== "string") {
+    return reply.code(400).send({ ok: false, error: "prompt (string) required" });
+  }
+  if (!b.cwd || typeof b.cwd !== "string") {
+    return reply.code(400).send({ ok: false, error: "cwd (string) required" });
+  }
+  if (!apiKey) {
+    return reply.code(400).send({ ok: false, error: "apiKey or ANTHROPIC_API_KEY required" });
+  }
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const write = (obj: unknown) => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+
+  try {
+    for await (const ev of streamClaudeCode({
+      systemPrompt: b.systemPrompt as string | undefined,
+      prompt: b.prompt as string,
+      cwd: b.cwd as string,
+      apiKey,
+      model: (b.model as string) || process.env.CLAUDE_CODE_MODEL || "claude-sonnet-4-5",
+      maxTurns: b.maxTurns as number | undefined,
+      timeoutSec: (b.timeoutSec as number) ?? 600,
+    })) {
+      write(ev);
+      if (ev.kind === "done") break;
+    }
+  } catch (err) {
+    const e = err as Error;
+    write({ kind: "error", error: `${e?.name || "Error"}: ${e?.message || String(err)}` });
+  } finally {
+    if (!reply.raw.writableEnded) reply.raw.end();
+  }
 });
 
 fastify.post("/adapters/cline/run", async (request, reply) => {

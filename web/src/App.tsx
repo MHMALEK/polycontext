@@ -121,7 +121,8 @@ const ADAPTER_SUPPORTS_TOOLS_TOGGLE: Record<string, boolean> = {
 const ADAPTER_SUPPORTS_SSE_STREAM: Record<string, boolean> = {
   opencode: true,
   gemini: true,
-  // claude_code, openai_agents, cursor, cline_sdk — TODO.
+  claude_code: true,  // includePartialMessages on the SDK → per-token deltas
+  // openai_agents, cursor, cline_sdk — TODO.
 };
 
 function modeIsSupported(mode: AskMode, adapter: string): boolean {
