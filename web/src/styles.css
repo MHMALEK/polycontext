@@ -444,6 +444,21 @@
   animation: fade-in 0.4s ease-out forwards;
 }
 
+/*
+ * Shimmer used by the ProgressTimeline / "thinking" card. Slides a soft
+ * gradient across the element, suggesting motion without strobing. Pairs
+ * with `bg-[length:200%_100%]` so the gradient is twice the element width
+ * and translates fully across in one pass.
+ */
+@keyframes thinking-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.animate-thinking-shimmer {
+  animation: thinking-shimmer 2.4s linear infinite;
+}
+
 /* ============================================================================
  *  Scrollbar — slim, subtle, monochrome.
  * ============================================================================ */

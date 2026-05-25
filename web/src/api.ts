@@ -136,6 +136,37 @@ export interface AdapterAskBody {
   /** When false, disable the adapter's tool use so the model answers
    * single-shot from prefetched context. Defaults to true. */
   tools_enabled?: boolean;
+  /** Override the global ANSWER_SHAPER_ENABLED setting for this one call.
+   * False = skip the rich-card pydantic-AI pass (saves ~1s + a Flash call).
+   * Omitted = use server default. */
+  shape?: boolean;
+}
+
+/** Rich-card structure returned by the pydantic-AI shaper (api/core/answer_shaper.py).
+ * When ``run.payload.structured_answer`` is present, the UI renders this
+ * shape instead of the raw markdown answer. */
+export interface Citation {
+  path: string;
+  start_line?: number | null;
+  end_line?: number | null;
+  note?: string | null;
+}
+export interface Answer {
+  summary: string;
+  details: string;
+  citations: Citation[];
+  confidence: "low" | "medium" | "high";
+  caveats: string[];
+  next_steps: string[];
+}
+export interface ShapedAnswer {
+  answer: Answer;
+  shaper_model?: string | null;
+  duration_ms?: number;
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+  used_fallback?: boolean;
+  fallback_reason?: string | null;
 }
 
 /** Curated per-adapter model entry from GET /v1/adapters/{name}/models. */
@@ -222,6 +253,31 @@ export interface AdapterDecomposeResponse {
   };
 }
 
+/** Stream-protocol events emitted by /v1/adapters/opencode/stream. Mirrors
+ * the OpencodeStreamEvent union in agent-node/src/adapters/opencode.ts plus
+ * a synthetic `run` envelope the FastAPI bridge adds up front. */
+export type OpencodeStreamEvent =
+  | { kind: "run"; run_id: string; thread_id: string }
+  | { kind: "session"; sessionID: string }
+  | { kind: "status"; status: string; attempt?: number; message?: string }
+  | { kind: "text.delta"; text: string }
+  | { kind: "reasoning.delta"; text: string }
+  | {
+      kind: "tool.update";
+      callID: string;
+      tool: string;
+      status: "pending" | "running" | "completed" | "error";
+      title?: string;
+      filePath?: string;
+      durationMs?: number;
+      error?: string;
+    }
+  | { kind: "todo"; todos: Array<{ content: string; status: string; priority: string }> }
+  | { kind: "file.edited"; path: string }
+  | { kind: "error"; error: string }
+  | { kind: "shaped"; shaped: ShapedAnswer }
+  | { kind: "done"; result: Record<string, unknown> };
+
 export const api = {
   health: () => jsonReq<{ status: string }>("/health"),
 
@@ -230,6 +286,127 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  /** Streams OpenCode events as the agent runs. Pass `signal` to cancel.
+   *
+   * Yields the same JSON union the agent-node SSE bridge emits — the UI
+   * appends text.delta to a partial answer, renders tool.update as chips,
+   * and stores `sessionID` on first `session` event so the Stop button
+   * can call ``opencodeAbort``. The terminal event is `{kind:"done"}`.
+   *
+   * Uses fetch + ReadableStream rather than EventSource because EventSource
+   * is GET-only — we POST a JSON body matching AdapterAskBody. */
+  async *adapterAskStream(
+    body: AdapterAskBody,
+    opts: { signal?: AbortSignal } = {},
+  ): AsyncGenerator<OpencodeStreamEvent, void, void> {
+    const res = await fetch(`${BASE}/v1/adapters/opencode/stream`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify(body),
+      signal: opts.signal,
+    });
+    if (!res.ok || !res.body) {
+      const text = await res.text();
+      throw new Error(`${res.status} /v1/adapters/opencode/stream: ${text.slice(0, 400)}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buf = "";
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // SSE frames are separated by a blank line. Each frame has one or
+        // more `data: …` lines.
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const dataLines = frame
+            .split("\n")
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).trimStart());
+          if (!dataLines.length) continue;
+          const payload = dataLines.join("\n");
+          try {
+            yield JSON.parse(payload) as OpencodeStreamEvent;
+          } catch {
+            // ignore non-JSON keepalives
+          }
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* ignore */
+      }
+    }
+  },
+
+  /** Stop a streaming opencode run. Returns ``{ ok: true }`` on success. */
+  opencodeAbort: (sessionID: string, repos?: string[]) =>
+    jsonReq<{ ok: boolean; error?: string }>(`/v1/adapters/opencode/abort`, {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionID, ...(repos ? { repos } : {}) }),
+    }),
+
+  /** Native-model streaming via pydantic-AI's run_stream — works for ANY
+   * adapter as long as the request is in a no-tools mode (Direct or
+   * Grounded-only). Bypasses each adapter's SDK and goes straight to
+   * Gemini/Anthropic/OpenAI/OpenRouter for token-by-token deltas.
+   *
+   * The adapter name is carried in the body only so the server can pick
+   * a sensible default model — the SDK itself isn't used. */
+  async *nativeAskStream(
+    body: AdapterAskBody & { adapter?: string },
+    opts: { signal?: AbortSignal } = {},
+  ): AsyncGenerator<OpencodeStreamEvent, void, void> {
+    const res = await fetch(`${BASE}/v1/ask/stream`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify(body),
+      signal: opts.signal,
+    });
+    if (!res.ok || !res.body) {
+      const text = await res.text();
+      throw new Error(`${res.status} /v1/ask/stream: ${text.slice(0, 400)}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buf = "";
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const dataLines = frame
+            .split("\n")
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).trimStart());
+          if (!dataLines.length) continue;
+          const payload = dataLines.join("\n");
+          try {
+            yield JSON.parse(payload) as OpencodeStreamEvent;
+          } catch {
+            /* ignore keepalives / non-JSON */
+          }
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* ignore */
+      }
+    }
+  },
 
   groundingRetrieve: (body: {
     query: string;

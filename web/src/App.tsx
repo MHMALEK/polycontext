@@ -2,7 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "./api";
-import type { AdapterInfo, AdapterModelInfo, RunDetail, RunListItem } from "./api";
+import type {
+  AdapterInfo,
+  AdapterModelInfo,
+  Citation as CitationModel,
+  OpencodeStreamEvent,
+  RunDetail,
+  RunListItem,
+  ShapedAnswer,
+} from "./api";
 import { Decompose } from "./Decompose";
 
 type View = "ask" | "decompose";
@@ -198,49 +206,12 @@ const SUGGESTED_PROMPTS = [
   "What endpoints does the API expose?",
 ];
 
-// Friendly labels for the raw "stage:strategy" identifier the backend emits.
-function prettyStage(label: string | null | undefined): string {
-  if (!label) return "Working…";
-  const [stage, strategy] = label.split(":");
-  switch (stage) {
-    case "input":
-      return "Loading input";
-    case "enrich":
-      return strategy && strategy !== "(none)"
-        ? `Enriching question (${strategy})`
-        : "Preparing question";
-    case "engine": {
-      const s = strategy?.toLowerCase() ?? "";
-      if (s.includes("sourcebot")) return "Searching code & reasoning";
-      if (s.includes("structured")) return "Calling LLM";
-      if (s.includes("decompose")) return "Decomposing ticket";
-      return strategy ? `Calling engine (${strategy})` : "Calling engine";
-    }
-    case "render":
-      return "Rendering output";
-    case "sink":
-      return "Writing output";
-    default:
-      return label;
-  }
-}
-
-const PIPELINE_STAGES: { key: string; label: string }[] = [
-  { key: "input", label: "Load input" },
-  { key: "enrich", label: "Prepare question" },
-  { key: "engine", label: "Reason & answer" },
-  { key: "render", label: "Render output" },
-];
-
-function stageState(
-  stageKey: string,
-  done: string[],
-  current: string | null,
-): "done" | "active" | "pending" {
-  if (done.some((d) => d.startsWith(stageKey + ":"))) return "done";
-  if (current?.startsWith(stageKey + ":")) return "active";
-  return "pending";
-}
+// Note: the old prettyStage / PIPELINE_STAGES / stageState helpers were
+// removed when ProgressTimeline switched from a 4-stage fake-progress
+// timeline to a single "thinking card" with cycling activity hints
+// (activityHintForElapsed). The stage signals coming out of the runstore
+// (input / enrich / engine / render) were almost always stuck on "engine"
+// for the entire wall clock of an adapter call — meaningless to the user.
 
 function formatTimeAgo(iso: string): string {
   const d = new Date(iso);
@@ -413,51 +384,87 @@ function HistoryItem({
   );
 }
 
-function ProgressTimeline({ progress }: { progress: LiveProgress }) {
+/**
+ * Activity hints cycled while the (blocking) adapter is working. We don't
+ * actually know what the model is doing turn-by-turn for non-streaming
+ * adapters, but the elapsed-time-based phases reflect the typical wall-clock
+ * shape of an adapter call: dispatch → tools → drafting → finalizing.
+ *
+ * For streaming adapters (opencode today), the StreamingAnswerBubble
+ * replaces this card entirely and shows real deltas.
+ */
+function activityHintForElapsed(elapsed: number): string {
+  if (elapsed < 2) return "Sending request to model…";
+  if (elapsed < 6) return "Model reading codebase…";
+  if (elapsed < 15) return "Reasoning over snippets…";
+  if (elapsed < 30) return "Drafting answer…";
+  if (elapsed < 60) return "Still drafting — long answer or deep dive…";
+  return "Taking a while — model might be retrying or exploring.";
+}
+
+function ProgressTimeline({
+  progress,
+  adapter,
+  model,
+}: {
+  progress: LiveProgress;
+  adapter?: string;
+  model?: string;
+}) {
+  // Skeleton bars that "fill" as time passes — purely cosmetic, but
+  // suggests progress when we don't get real deltas from the SDK. Pick a
+  // tasteful number (4 lines) and stagger their pulse animation.
+  const skeletonLines = [
+    { width: "94%", delay: "0ms" },
+    { width: "88%", delay: "180ms" },
+    { width: "76%", delay: "360ms" },
+    { width: "62%", delay: "540ms" },
+  ];
+  const hint = activityHintForElapsed(progress.elapsed);
   return (
-    <div className="rounded-2xl border border-base-300/80 bg-gradient-to-br from-base-100 to-base-200/40 p-5 shadow-inner ring-1 ring-base-content/[0.1] animate-msg-enter">
-      <div className="flex items-center gap-3 mb-5">
-        <span className="loading loading-spinner loading-sm text-primary" />
-        <span className="text-sm font-medium tracking-tight">{prettyStage(progress.currentStage)}…</span>
-        <span className="ml-auto font-mono-ui text-xs text-base-content/75 tabular-nums">
+    <article className="rounded-2xl border border-base-300/70 bg-gradient-to-b from-base-100 to-base-100/95 shadow-lg shadow-base-300/15 overflow-hidden ring-1 ring-base-content/[0.1] animate-msg-enter">
+      {/* Animated gradient strip — primary signal that work is happening. */}
+      <div className="h-1 bg-gradient-to-r from-primary/60 via-secondary/40 to-primary/30 bg-[length:200%_100%] animate-thinking-shimmer" aria-hidden />
+
+      {/* Header strip: adapter · model · elapsed time. Mirrors the chrome
+          of the finished AnswerCard so the visual handoff is seamless. */}
+      <div className="px-4 sm:px-5 pt-3.5 pb-3 flex items-center gap-3 border-b border-base-200/80 bg-base-200/20">
+        <span className="loading loading-spinner loading-xs text-primary" />
+        <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-base-content/55 truncate">
+          {adapter ? displayAdapterName(adapter) : "Assistant"}
+          {model ? ` · ${model}` : ""}
+        </span>
+        <span className="ml-auto font-mono-ui text-[11px] text-base-content/85 tabular-nums">
           {progress.elapsed.toFixed(1)}s
         </span>
       </div>
-      <ol className="flex flex-col gap-2.5">
-        {PIPELINE_STAGES.map((s) => {
-          const st = stageState(s.key, progress.stagesDone, progress.currentStage);
-          return (
-            <li key={s.key} className="flex items-center gap-3 text-sm">
-              <span
-                className={`inline-flex items-center justify-center w-6 h-6 rounded-full shrink-0 text-[11px] font-semibold transition-colors ${
-                  st === "done"
-                    ? "bg-success/20 text-success"
-                    : st === "active"
-                      ? "bg-primary/20 text-primary shadow-sm"
-                      : "bg-base-300/65 text-base-content/68"
-                }`}
-              >
-                {st === "done" ? "✓" : st === "active" ? "●" : ""}
-              </span>
-              <span
-                className={
-                  st === "pending"
-                    ? "text-base-content/66"
-                    : st === "active"
-                      ? "text-base-content font-medium"
-                      : "text-base-content/78"
-                }
-              >
-                {s.label}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-      <p className="mt-5 text-[11px] leading-relaxed text-base-content/70 border-t border-base-300/70 pt-4">
-        Adapter calls often take 10–60s while the model searches and drafts an answer.
-      </p>
-    </div>
+
+      {/* Body: cycling activity hint + skeleton "draft" lines. */}
+      <div className="px-4 sm:px-5 py-5 space-y-4">
+        <p className="text-sm text-base-content/85 tabular-nums">{hint}</p>
+        <div className="space-y-2.5" aria-hidden>
+          {skeletonLines.map((line, i) => (
+            <div
+              key={i}
+              className="h-2 rounded-full bg-base-content/[0.08] overflow-hidden relative"
+              style={{ width: line.width }}
+            >
+              <div
+                className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/30 to-transparent bg-[length:200%_100%] animate-thinking-shimmer"
+                style={{ animationDelay: line.delay }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Footer hint — only shown once it's been a while, to avoid noise. */}
+      {progress.elapsed > 8 && (
+        <div className="px-4 sm:px-5 pb-3 -mt-1 text-[11px] leading-relaxed text-base-content/55 border-t border-base-200/60 pt-3">
+          Adapter calls often take 10–60s while the model searches and drafts an answer.
+        </div>
+      )}
+    </article>
   );
 }
 
@@ -914,6 +921,68 @@ function TelemetryPanel({ turn }: { turn: RunDetail }) {
             {toolNames.length > 0 && (
               <KVRow k="tool_names" v={toolNames.join(", ")} />
             )}
+            {typeof extra.tool_wall_ms === "number" && (
+              <KVRow k="tool_wall_ms" v={String(extra.tool_wall_ms)} />
+            )}
+            {Array.isArray(extra.tool_trace) && (extra.tool_trace as unknown[]).length > 0 && (
+              <details className="mt-2">
+                <summary className="cursor-pointer list-none inline-flex items-center gap-2 select-none">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/45">
+                    ▸ Per-call breakdown
+                  </span>
+                </summary>
+                <table className="mt-2 w-full text-[11px] font-mono">
+                  <tbody>
+                    {(extra.tool_trace as Array<{
+                      name: string;
+                      status: string;
+                      duration_ms?: number;
+                      file_path?: string;
+                      title?: string;
+                    }>).map((t, i) => (
+                      <tr key={i} className="border-t border-base-200/60">
+                        <td className="py-1 pr-2 text-base-content/70 whitespace-nowrap">{t.name}</td>
+                        <td className={`py-1 pr-2 whitespace-nowrap ${
+                          t.status === "error" ? "text-error" :
+                          t.status === "completed" ? "text-success/90" :
+                          "text-base-content/55"
+                        }`}>{t.status}</td>
+                        <td className="py-1 pr-2 text-base-content/45 whitespace-nowrap">
+                          {typeof t.duration_ms === "number" ? `${t.duration_ms}ms` : ""}
+                        </td>
+                        <td className="py-1 text-base-content/65 truncate max-w-[24rem]">
+                          {t.file_path || t.title || ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            )}
+          </Section>
+        )}
+
+        {/* OpenCode-specific session telemetry — cache, finish reason, session id */}
+        {(extra.cache_read_tokens != null ||
+          extra.cache_write_tokens != null ||
+          extra.reasoning_tokens != null ||
+          extra.finish_reason != null ||
+          extra.agent_mode != null ||
+          extra.session_id != null) && (
+          <Section title="OpenCode session">
+            <KVRow k="agent_mode" v={extra.agent_mode as string | undefined} />
+            <KVRow k="provider" v={extra.provider_id as string | undefined} />
+            <KVRow k="finish_reason" v={extra.finish_reason as string | undefined} />
+            {typeof extra.cache_read_tokens === "number" && (
+              <KVRow k="cache_read_tokens" v={String(extra.cache_read_tokens)} />
+            )}
+            {typeof extra.cache_write_tokens === "number" && (
+              <KVRow k="cache_write_tokens" v={String(extra.cache_write_tokens)} />
+            )}
+            {typeof extra.reasoning_tokens === "number" && extra.reasoning_tokens > 0 && (
+              <KVRow k="reasoning_tokens" v={String(extra.reasoning_tokens)} />
+            )}
+            <KVRow k="session_id" v={extra.session_id as string | undefined} />
           </Section>
         )}
 
@@ -981,6 +1050,341 @@ function KVRow({
   );
 }
 
+/** Live-streaming opencode turn (only used while a turn is in flight). */
+interface StreamingToolEvent {
+  callID: string;
+  tool: string;
+  status: "pending" | "running" | "completed" | "error";
+  title?: string;
+  filePath?: string;
+  durationMs?: number;
+  error?: string;
+}
+interface StreamingTurnState {
+  question: string;
+  text: string;
+  tools: StreamingToolEvent[];
+  sessionID: string | null;
+  errored: string | null;
+  status: string;
+  /** Populated by the trailing `shaped` SSE event when the rich-card pass
+   * lands server-side. Lets the bubble swap to the structured Answer
+   * before we even reload the thread row. */
+  shaped: ShapedAnswer | null;
+}
+
+/**
+ * Reducer used by the SSE consumer: pure state → state transition for one
+ * normalized event. Keeps the streaming branch in the submit handler shallow.
+ */
+function applyStreamEvent(
+  ev: OpencodeStreamEvent,
+  setState: React.Dispatch<React.SetStateAction<StreamingTurnState | null>>,
+): void {
+  setState((s) => {
+    if (!s) return s;
+    if (ev.kind === "session") {
+      return { ...s, sessionID: ev.sessionID, status: "running" };
+    }
+    if (ev.kind === "status") {
+      return { ...s, status: ev.status };
+    }
+    if (ev.kind === "text.delta") {
+      return { ...s, text: s.text + ev.text };
+    }
+    if (ev.kind === "tool.update") {
+      const tools = [...s.tools];
+      const ix = tools.findIndex((t) => t.callID === ev.callID);
+      const next: StreamingToolEvent = {
+        callID: ev.callID,
+        tool: ev.tool,
+        status: ev.status,
+        ...(ev.title ? { title: ev.title } : {}),
+        ...(ev.filePath ? { filePath: ev.filePath } : {}),
+        ...(typeof ev.durationMs === "number" ? { durationMs: ev.durationMs } : {}),
+        ...(ev.error ? { error: ev.error } : {}),
+      };
+      if (ix >= 0) tools[ix] = { ...tools[ix], ...next };
+      else tools.push(next);
+      return { ...s, tools };
+    }
+    if (ev.kind === "error") {
+      return { ...s, errored: ev.error, status: "error" };
+    }
+    if (ev.kind === "shaped") {
+      return { ...s, shaped: ev.shaped, status: "shaped" };
+    }
+    if (ev.kind === "done") {
+      return { ...s, status: "done" };
+    }
+    return s;
+  });
+}
+
+/**
+ * Live answer bubble for an opencode SSE turn. Renders partial markdown text
+ * as it arrives plus a vertical strip of tool-call chips with status colors.
+ *
+ * Designed to feel like Linear/Vercel logs: dense, monospaced where it
+ * counts, and updates without re-flowing the surrounding layout.
+ */
+function StreamingAnswerBubble({
+  state,
+  onStop,
+}: {
+  state: StreamingTurnState;
+  onStop: () => void;
+}) {
+  return (
+    <div className="flex flex-col animate-msg-enter">
+      <RoleLabel role="Assistant" align="left" />
+      <article className="rounded-2xl border border-base-300/70 bg-gradient-to-b from-base-100 to-base-100/95 shadow-lg shadow-base-300/15 overflow-hidden ring-1 ring-base-content/[0.1]">
+        <div className="h-1 bg-gradient-to-r from-primary/60 via-secondary/40 to-primary/30 animate-pulse" aria-hidden />
+        <div className="px-4 sm:px-5 pt-3.5 pb-3 flex items-center justify-between gap-3 border-b border-base-200/80 bg-base-200/20">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="loading loading-dots loading-xs text-primary" />
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-base-content/55 truncate">
+              streaming · {state.status}
+              {state.sessionID ? ` · ${state.sessionID.slice(0, 8)}` : ""}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onStop}
+            className="btn btn-xs btn-ghost text-error border border-error/30 hover:bg-error/10"
+            title="Cancel this opencode session"
+          >
+            Stop
+          </button>
+        </div>
+
+        {state.tools.length > 0 && (
+          <div className="px-4 sm:px-5 py-3 border-b border-base-200/80 bg-base-200/10">
+            <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/45 mb-2">
+              Tool calls
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {state.tools.map((t, i) => {
+                const color =
+                  t.status === "error"
+                    ? "text-error border-error/40 bg-error/10"
+                    : t.status === "completed"
+                      ? "text-success/90 border-success/30 bg-success/5"
+                      : "text-primary/90 border-primary/30 bg-primary/5";
+                return (
+                  <span
+                    key={`${t.callID}-${i}`}
+                    className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${color}`}
+                    title={t.title || t.filePath || ""}
+                  >
+                    {t.status === "running" && (
+                      <span className="loading loading-spinner loading-xs" />
+                    )}
+                    {t.tool}
+                    {t.filePath ? (
+                      <span className="text-base-content/55 truncate max-w-[18rem]">
+                        {t.filePath}
+                      </span>
+                    ) : null}
+                    {typeof t.durationMs === "number" && t.durationMs > 0 && (
+                      <span className="text-base-content/45">{t.durationMs}ms</span>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="px-4 sm:px-5 py-5">
+          {/* Three rendering states, picked in order of "freshest data wins":
+              1. shaped → rich Answer card landed from the SSE `shaped` event
+              2. text   → partial markdown deltas are streaming in
+              3. empty  → still warming up, show "Thinking…" */}
+          {state.shaped ? (
+            <RichAnswerCard
+              shaped={state.shaped}
+              fallbackAnswer={state.text || state.shaped.answer.details}
+            />
+          ) : state.text.length === 0 ? (
+            <p className="text-sm text-base-content/55 italic">Thinking…</p>
+          ) : (
+            <div className="markdown-prose">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.text}</ReactMarkdown>
+            </div>
+          )}
+          {state.errored && (
+            <pre className="mt-3 text-xs text-error font-mono whitespace-pre-wrap">{state.errored}</pre>
+          )}
+        </div>
+      </article>
+    </div>
+  );
+}
+
+/** Extract the shaper output from a persisted run. Lives under
+ * ``payload.structured_answer`` (written by api.py after the rich-card
+ * pass succeeds). Returns null when the shaper was disabled, skipped,
+ * or the run pre-dates this feature. */
+function extractStructuredAnswer(turn: RunDetail): ShapedAnswer | null {
+  const payload = (turn.payload || {}) as Record<string, unknown>;
+  const sa = payload.structured_answer as ShapedAnswer | undefined;
+  if (!sa || typeof sa !== "object" || !sa.answer) return null;
+  return sa;
+}
+
+/** Confidence pill — colored by level so the user can calibrate trust at a glance. */
+function ConfidencePill({ level }: { level: "low" | "medium" | "high" }) {
+  const styles =
+    level === "high"
+      ? "border-success/40 bg-success/10 text-success/95"
+      : level === "medium"
+        ? "border-warning/40 bg-warning/10 text-warning"
+        : "border-error/40 bg-error/10 text-error";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] ${styles}`}
+      title={`Confidence: ${level}. Inferred from how specific the underlying answer was.`}
+    >
+      <span className="w-1 h-1 rounded-full bg-current opacity-80" />
+      {level}
+    </span>
+  );
+}
+
+/** Inline citation chip — clickable file:line reference. */
+function CitationChip({ c }: { c: CitationModel }) {
+  const range =
+    c.start_line && c.end_line && c.start_line !== c.end_line
+      ? `:${c.start_line}-${c.end_line}`
+      : c.start_line
+        ? `:${c.start_line}`
+        : "";
+  const label = `${c.path}${range}`;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-md border border-base-300/70 bg-base-200/40 px-1.5 py-0.5 font-mono text-[10.5px] text-base-content/85 hover:bg-base-200 hover:border-primary/40 transition-colors"
+      title={c.note || label}
+    >
+      <span className="text-base-content/45">·</span>
+      {label}
+    </span>
+  );
+}
+
+/**
+ * RichAnswerCard — what the user sees when the pydantic-AI shaper ran on
+ * the raw adapter answer. Mirrors the visual hierarchy of the schema:
+ * summary > confidence > details > citations > caveats > next_steps.
+ *
+ * Designed to read at a glance:
+ *   - Summary is bold, 1-2 sentences, top of the card.
+ *   - Confidence pill is right-aligned in the header.
+ *   - Details are the same markdown body the user expects (collapsible if long).
+ *   - Citations are inline chips; caveats are a warning section; next steps
+ *     are an actionable checklist.
+ */
+function RichAnswerCard({
+  shaped,
+  fallbackAnswer,
+}: {
+  shaped: ShapedAnswer;
+  /** Raw markdown — shown when shaped.details is empty (extreme degenerate case). */
+  fallbackAnswer: string;
+}) {
+  const a = shaped.answer;
+  const details = a.details?.trim() || fallbackAnswer;
+  // Collapse the details when they're long enough that the summary alone
+  // tells the story — saves scroll. Threshold tuned to typical answer length.
+  const longDetails = details.length > 600;
+  return (
+    <div className="space-y-4">
+      {/* Summary headline + confidence — the "TL;DR" the user reads first. */}
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[15px] leading-snug text-base-content font-medium tracking-tight">
+          {a.summary}
+        </p>
+        <ConfidencePill level={a.confidence} />
+      </div>
+
+      {/* Details — collapsed by default when long. */}
+      {details && (
+        <details open={!longDetails} className="group">
+          <summary className="cursor-pointer list-none inline-flex items-center gap-2 select-none mb-2">
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/55 group-hover:text-base-content/85 transition-colors">
+              ▸ Details
+            </span>
+            {longDetails && (
+              <span className="text-base-content/35 text-[10px]">
+                · {details.length.toLocaleString()} chars
+              </span>
+            )}
+          </summary>
+          <div className="conversation-prose">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{details}</ReactMarkdown>
+          </div>
+        </details>
+      )}
+
+      {/* Citations — inline chips, deduped server-side. */}
+      {a.citations.length > 0 && (
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/55 mb-2">
+            Citations ({a.citations.length})
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {a.citations.map((c, i) => (
+              <CitationChip key={`${c.path}:${c.start_line ?? ""}:${i}`} c={c} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Caveats — warning section, only when present. */}
+      {a.caveats.length > 0 && (
+        <div className="rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-3 text-[13px] leading-relaxed">
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-warning mb-1.5">
+            Caveats
+          </div>
+          <ul className="space-y-1">
+            {a.caveats.map((c, i) => (
+              <li key={i} className="text-base-content/85">
+                <span className="text-warning/85">·</span> {c}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Next steps — concrete actions. */}
+      {a.next_steps.length > 0 && (
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-base-content/55 mb-2">
+            Next steps
+          </div>
+          <ol className="space-y-1.5">
+            {a.next_steps.map((s, i) => (
+              <li key={i} className="text-[13px] text-base-content/85 leading-relaxed flex gap-2">
+                <span className="text-base-content/45 font-mono text-[11px] mt-0.5">
+                  {i + 1}.
+                </span>
+                <span>{s}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Shaper telemetry — only when it ran and degraded, so the user knows */}
+      {shaped.used_fallback && (
+        <p className="text-[10px] font-mono text-base-content/40">
+          shaper degraded: {shaped.fallback_reason || "unknown"}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ChatTurn({
   turn,
   suppressRunningAssistant,
@@ -1026,8 +1430,24 @@ function ChatTurn({
               <CopyButton text={disp.answer} />
             </div>
             <div className="px-4 sm:px-5 py-5">
-              <AnswerBody text={disp.answer} />
-              <Citations citations={disp.citations} />
+              {/* Rich-card path: when the pydantic-AI shaper ran, render
+                  the structured Answer (summary/confidence/details/...).
+                  Falls back to plain markdown when shaping was skipped
+                  or the run pre-dates the feature. */}
+              {(() => {
+                const shaped = extractStructuredAnswer(turn);
+                if (shaped) {
+                  return (
+                    <RichAnswerCard shaped={shaped} fallbackAnswer={disp.answer} />
+                  );
+                }
+                return (
+                  <>
+                    <AnswerBody text={disp.answer} />
+                    <Citations citations={disp.citations} />
+                  </>
+                );
+              })()}
               {grounding && <GroundingPanel grounding={grounding} />}
               {showTelemetry && <TelemetryPanel turn={turn} />}
             </div>
@@ -1104,6 +1524,16 @@ export function App() {
   const [threadListLoading, setThreadListLoading] = useState(false);
   const [optimisticUser, setOptimisticUser] = useState<string | null>(null);
   const [progress, setProgress] = useState<LiveProgress | null>(null);
+  /** Live state of an in-flight opencode SSE turn. ``null`` when not streaming.
+   *
+   * `text` is the assistant's partial answer (concatenated text.delta events),
+   * `tools` is an ordered list of tool calls observed so far (latest status
+   * wins per callID), `sessionID` is captured on the first ``session`` event
+   * and used by the Stop button to call ``/v1/adapters/opencode/abort``. */
+  const [streamingTurn, setStreamingTurn] = useState<StreamingTurnState | null>(null);
+  /** AbortController for the currently-streaming fetch — cancels the SSE
+   * connection in addition to calling opencode session.abort server-side. */
+  const streamAbortRef = useRef<AbortController | null>(null);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapterListHydrated, setAdapterListHydrated] = useState(false);
   const [adapterListError, setAdapterListError] = useState<string | null>(null);
@@ -1350,6 +1780,87 @@ export function App() {
           throw new Error("pick an adapter from the dropdown before submitting");
         }
         const wireMode = askModeToWire(form.mode);
+        // Three streaming strategies, ordered by preference:
+        //   1. No-tools modes (Direct / Grounded-only) → /v1/ask/stream
+        //      — bypasses adapter SDKs, streams token-by-token via
+        //      pydantic-AI native streaming for ANY adapter.
+        //   2. OpenCode adapter with tools on → /v1/adapters/opencode/stream
+        //      — SSE bridge over the opencode session events (status +
+        //      tool updates; no text deltas with current opencode server).
+        //   3. Any other adapter with tools on → blocking /v1/adapters/{name}/ask
+        //      — no streaming because the SDK doesn't expose events to us.
+        const useNativeStream = !wireMode.tools_enabled;
+        const useOpencodeStream = !useNativeStream && form.adapter === "opencode";
+        if (useNativeStream || useOpencodeStream) {
+          const controller = new AbortController();
+          streamAbortRef.current = controller;
+          setStreamingTurn({
+            question,
+            text: "",
+            tools: [],
+            sessionID: null,
+            errored: null,
+            status: "starting",
+            shaped: null,
+          });
+          let threadIdFromStream: string | null = activeThreadId;
+          const streamCall = useNativeStream
+            ? api.nativeAskStream(
+                {
+                  query: question,
+                  grounded: wireMode.grounded,
+                  tools_enabled: wireMode.tools_enabled,
+                  adapter: form.adapter,
+                  ...(form.model ? { model: form.model } : {}),
+                  ...(activeThreadId ? { thread_id: activeThreadId } : {}),
+                },
+                { signal: controller.signal },
+              )
+            : api.adapterAskStream(
+                {
+                  query: question,
+                  grounded: wireMode.grounded,
+                  tools_enabled: wireMode.tools_enabled,
+                  ...(form.model ? { model: form.model } : {}),
+                  ...(activeThreadId ? { thread_id: activeThreadId } : {}),
+                },
+                { signal: controller.signal },
+              );
+          try {
+            for await (const ev of streamCall) {
+              if (submitGen !== detailFetchGen.current) break;
+              applyStreamEvent(ev, setStreamingTurn);
+              if (ev.kind === "run") {
+                threadIdFromStream = ev.thread_id;
+              }
+              if (ev.kind === "done") {
+                askCompleted = true;
+                break;
+              }
+            }
+          } catch (err) {
+            if ((err as Error).name === "AbortError") {
+              // User pressed Stop — surface a friendly note, don't error out.
+              setStreamingTurn((s) => (s ? { ...s, errored: "Stopped by user." } : s));
+            } else {
+              throw err;
+            }
+          }
+          if (submitGen !== detailFetchGen.current) return;
+          if (threadIdFromStream) {
+            setActiveThreadId(threadIdFromStream);
+            displayedThreadRef.current = threadIdFromStream;
+            await loadHistory();
+            const rows = await api.listThreadRuns(threadIdFromStream);
+            if (submitGen !== detailFetchGen.current) return;
+            setThreadMessages(rows);
+          }
+          streamAbortRef.current = null;
+          // Clear streamingTurn after thread reload — the persisted row now
+          // renders the answer via ChatTurn, so we don't want a duplicate.
+          setStreamingTurn(null);
+          return;
+        }
         const askPromise = api.adapterAsk(form.adapter, {
           query: question,
           grounded: wireMode.grounded,
@@ -1386,6 +1897,12 @@ export function App() {
         setOptimisticUser(null);
         setSubmitting(false);
         setSidebarPlaceholder(null);
+        // Streaming branch sets this on opencode; if it errored out before
+        // the success path could clear it (e.g. 404 from stale server,
+        // network blip), the bubble would otherwise stay stuck on
+        // "Thinking…" indefinitely. Always clear on submit-finally.
+        setStreamingTurn(null);
+        streamAbortRef.current = null;
       }
     },
     [form, submitting, loadHistory, adapters, adapterListHydrated, activeThreadId],
@@ -1599,7 +2116,7 @@ export function App() {
             ref={threadRef}
             className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-6"
           >
-            <div className="max-w-3xl mx-auto flex flex-col gap-6">
+            <div className="max-w-4xl mx-auto w-full flex flex-col gap-6">
               {adapterListHydrated && !adapterListError && adapters.length === 0 && (
                 <div className="alert alert-warning text-xs shadow-sm">
                   No adapters with <code>ask</code> capability. Check{" "}
@@ -1651,7 +2168,7 @@ export function App() {
                   />
                 ))}
 
-                {submitting && progress && (
+                {submitting && (streamingTurn || progress) && (
                   <div className="flex flex-col gap-3">
                     {optimisticUser &&
                       !(
@@ -1659,10 +2176,38 @@ export function App() {
                         threadMessages[threadMessages.length - 1]?.status === "running" &&
                         extractQuestion(threadMessages[threadMessages.length - 1]).trim() === optimisticUser.trim()
                       ) && <QuestionBubble text={optimisticUser} />}
-                    <div className="flex flex-col">
-                      <RoleLabel role="Assistant" align="left" />
-                      <ProgressTimeline progress={progress} />
-                    </div>
+                    {streamingTurn ? (
+                      <StreamingAnswerBubble
+                        state={streamingTurn}
+                        onStop={async () => {
+                          // Two-channel stop: (1) abort the SSE fetch so the
+                          // browser stops accepting deltas, (2) tell opencode
+                          // server-side to terminate the LLM call. Either alone
+                          // would leave the other half running.
+                          try {
+                            streamAbortRef.current?.abort();
+                          } catch {
+                            /* ignore */
+                          }
+                          if (streamingTurn?.sessionID) {
+                            try {
+                              await api.opencodeAbort(streamingTurn.sessionID);
+                            } catch (e) {
+                              console.warn("opencode abort failed", e);
+                            }
+                          }
+                        }}
+                      />
+                    ) : progress ? (
+                      <div className="flex flex-col">
+                        <RoleLabel role="Assistant" align="left" />
+                        <ProgressTimeline
+                          progress={progress}
+                          adapter={form.adapter}
+                          model={form.model || undefined}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 )}
 
