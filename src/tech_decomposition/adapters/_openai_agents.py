@@ -76,6 +76,46 @@ class OpenAIAgentsAdapter(Adapter):
             metrics=_metrics_from(out, t),
         )
 
+    async def astream(self, inp: AdapterAskInput):
+        """Proxy /adapters/openai_agents/stream — yields the normalized
+        event union (session/status/text.delta/tool.update/error/done)."""
+        import json
+        from ..core.explore_directive import wrap_with_explore_directive
+        prompt = wrap_with_explore_directive(
+            inp.query, tools_on=inp.tools_enabled and not inp.grounded,
+        )
+        body: dict[str, Any] = {
+            "systemPrompt": _ASK_SYSTEM,
+            "prompt": prompt,
+            "apiKey": self.settings.openai_api_key,
+            "modelId": (inp.model or self.settings.openai_agents_sdk_model),
+            "timeoutSec": int(self.settings.openai_agents_sdk_timeout_seconds),
+            "cwd": str(self._cwd_for_repos(inp.repos)),
+        }
+        url = self.settings.agent_node_url.rstrip("/") + "/adapters/openai_agents/stream"
+        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=None)
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            async with c.stream("POST", url, json=body) as resp:
+                if resp.status_code >= 400:
+                    text = (await resp.aread()).decode("utf-8", "replace")[:500]
+                    raise RuntimeError(
+                        f"agent-node openai_agents /stream -> {resp.status_code}: {text}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload:
+                        continue
+                    try:
+                        ev = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    yield ev
+                    # Stop on terminal event — see _gemini.py for rationale.
+                    if isinstance(ev, dict) and ev.get("kind") == "done":
+                        return
+
     def _decompose_model_id(self) -> str:
         g = (self.settings.openai_agents_sdk_decompose_model or "").strip()
         if g:

@@ -497,3 +497,296 @@ export async function runCline(body: ClineRunBody): Promise<{
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Streaming
+// ---------------------------------------------------------------------------
+
+/** Normalized event union — same shape as the other adapters' streamers. */
+export type ClineStreamEvent =
+  | { kind: "session"; sessionID: string }
+  | { kind: "status"; status: string }
+  | { kind: "text.delta"; text: string }
+  | {
+      kind: "tool.update";
+      callID: string;
+      tool: string;
+      status: "running" | "completed" | "error";
+      filePath?: string;
+      durationMs?: number;
+      error?: string;
+    }
+  | { kind: "error"; error: string }
+  | {
+      kind: "done";
+      result: {
+        ok: boolean;
+        answer?: string;
+        error?: string;
+        status?: string;
+        iterations?: number;
+        tokensIn?: number;
+        tokensOut?: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        costUsd?: number;
+        toolCalls?: number;
+        toolNames?: string[];
+      };
+    };
+
+/**
+ * Stream a Cline run. Cline's Agent.subscribe(listener) callback pattern
+ * is bridged into an async-iterable channel: events from the SDK are
+ * pushed into a buffer; the outer for-await consumes them as they arrive.
+ *
+ * Maps to our normalized union:
+ *  - SessionChunkEvent (type=chunk, stream=agent) → text.delta
+ *  - SessionToolEvent (hookEventName=tool_call) → tool.update running
+ *  - SessionToolEvent (hookEventName=tool_result) → tool.update completed
+ *  - status → status passthrough
+ *
+ * Cline's chunk events tend to be sentence-sized rather than per-token,
+ * so the streaming feels less granular than Anthropic/Gemini/OpenAI. The
+ * tool lifecycle is still emitted live which is the main UX win.
+ */
+export async function* streamCline(body: ClineRunBody): AsyncGenerator<ClineStreamEvent, void, void> {
+  const originalCwd = process.cwd();
+  if (body.cwd) {
+    try {
+      process.chdir(body.cwd);
+    } catch {
+      /* let SDK fail */
+    }
+  }
+
+  let mcpManager: InMemoryMcpManager | undefined;
+  const sEnv = serenaEnv();
+  const toolStart = new Map<string, { name: string; startMs: number; filePath?: string }>();
+  const toolNames = new Set<string>();
+  let finalText = "";
+
+  yield { kind: "session", sessionID: `cline:${body.providerId}/${body.modelId}` };
+  yield { kind: "status", status: "running" };
+
+  try {
+    const tools = [];
+    const wsRoot = body.cwd?.trim() ? path.resolve(body.cwd.trim()) : "";
+    if (wsRoot) {
+      try {
+        const st = await fsp.stat(wsRoot);
+        if (st.isDirectory()) tools.push(...createWorkspaceTools(wsRoot));
+      } catch {
+        /* invalid cwd */
+      }
+    }
+    if (body.enableFindCode && (process.env.SOURCEBOT_URL || "").trim()) {
+      tools.push(findCodeTool);
+    }
+    if (sEnv) {
+      const transport: McpServerTransportConfig =
+        sEnv.transport === "sse"
+          ? {
+              type: "sse",
+              url: sEnv.url,
+              ...(sEnv.apiKey ? { headers: { Authorization: `Bearer ${sEnv.apiKey}` } } : {}),
+            }
+          : {
+              type: "streamableHttp",
+              url: sEnv.url,
+              ...(sEnv.apiKey ? { headers: { Authorization: `Bearer ${sEnv.apiKey}` } } : {}),
+            };
+      mcpManager = new InMemoryMcpManager({ clientFactory: createDefaultMcpServerClientFactory() });
+      await mcpManager.registerServer({ name: "serena", transport });
+      await mcpManager.connectServer("serena");
+      const mcpTools = await createMcpTools({ serverName: "serena", provider: mcpManager });
+      tools.push(...mcpTools);
+    }
+
+    if (tools.length === 0) {
+      yield {
+        kind: "done",
+        result: {
+          ok: false,
+          error: "No tools available: cwd not readable and Serena/SOURCEBOT not configured.",
+        },
+      };
+      return;
+    }
+
+    const agent = new Agent({
+      providerId: body.providerId,
+      modelId: body.modelId,
+      apiKey: body.apiKey,
+      maxIterations: body.maxIterations ?? 30,
+      systemPrompt: body.systemPrompt,
+      tools,
+      toolPolicies: { "*": { enabled: true, autoApprove: true } },
+      requestToolApproval: async () => ({ approved: true }),
+    });
+
+    // Channel-based pump: subscribe fires events synchronously; we
+    // buffer + notify the outer consumer so it yields in order.
+    const channel: ClineStreamEvent[] = [];
+    let pendingResolve: (() => void) | undefined;
+    const notify = () => {
+      const r = pendingResolve;
+      pendingResolve = undefined;
+      r?.();
+    };
+    let unsubscribe: (() => void) | undefined;
+    if (typeof agent.subscribe === "function") {
+      unsubscribe = agent.subscribe((event: unknown) => {
+        const ev = event as { type?: string; payload?: Record<string, unknown> };
+        if (!ev || typeof ev !== "object") return;
+        if (ev.type === "chunk") {
+          const p = ev.payload as { stream?: string; chunk?: string } | undefined;
+          if (p?.stream === "agent" && typeof p.chunk === "string" && p.chunk) {
+            finalText += p.chunk;
+            channel.push({ kind: "text.delta", text: p.chunk });
+            notify();
+          }
+        } else if (ev.type === "hook") {
+          const p = ev.payload as {
+            hookEventName?: string;
+            toolName?: string;
+            iteration?: number;
+          } | undefined;
+          if (!p?.toolName) return;
+          const callID = `${p.toolName}-${p.iteration ?? toolStart.size}`;
+          if (p.hookEventName === "tool_call") {
+            toolStart.set(callID, { name: p.toolName, startMs: Date.now() });
+            toolNames.add(p.toolName);
+            channel.push({
+              kind: "tool.update",
+              callID,
+              tool: p.toolName,
+              status: "running",
+            });
+            notify();
+          } else if (p.hookEventName === "tool_result") {
+            const meta = toolStart.get(callID);
+            const durationMs = meta ? Date.now() - meta.startMs : undefined;
+            channel.push({
+              kind: "tool.update",
+              callID,
+              tool: meta?.name || p.toolName,
+              status: "completed",
+              ...(typeof durationMs === "number" ? { durationMs } : {}),
+            });
+            notify();
+          }
+        } else if (ev.type === "status") {
+          const p = ev.payload as { status?: string } | undefined;
+          if (p?.status) {
+            channel.push({ kind: "status", status: p.status });
+            notify();
+          }
+        }
+      });
+    }
+
+    // Drive the run + drain the channel concurrently. agent.run() is the
+    // blocking promise; while we wait, the subscribe callbacks fill the
+    // channel and we yield from it.
+    const runPromise = withTimeout(agent.run(body.prompt), (body.timeoutSec ?? 600) * 1000) as Promise<{
+      outputText?: string;
+      status?: string;
+      iterations?: number;
+      usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; totalCost?: number };
+      error?: { message?: string } | string;
+    }>;
+    let runDone = false;
+    let runResult: Awaited<typeof runPromise> | undefined;
+    let runError: Error | undefined;
+    runPromise.then(
+      (r) => {
+        runResult = r;
+        runDone = true;
+        notify();
+      },
+      (e) => {
+        runError = e as Error;
+        runDone = true;
+        notify();
+      },
+    );
+
+    while (true) {
+      while (channel.length) {
+        const ev = channel.shift();
+        if (ev) yield ev;
+      }
+      if (runDone) break;
+      await new Promise<void>((resolve) => {
+        pendingResolve = resolve;
+        setTimeout(resolve, 250);
+      });
+    }
+    // Drain trailing events.
+    while (channel.length) {
+      const ev = channel.shift();
+      if (ev) yield ev;
+    }
+    unsubscribe?.();
+
+    if (runError) {
+      yield {
+        kind: "done",
+        result: {
+          ok: false,
+          error: `${runError.name || "Error"}: ${runError.message || String(runError)}`,
+          answer: finalText || undefined,
+          toolCalls: toolStart.size,
+          toolNames: Array.from(toolNames),
+        },
+      };
+      return;
+    }
+    const usage = runResult?.usage ?? {};
+    yield {
+      kind: "done",
+      result: {
+        ok: true,
+        answer: runResult?.outputText ?? finalText,
+        status: runResult?.status,
+        iterations: runResult?.iterations,
+        tokensIn: usage.inputTokens,
+        tokensOut: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        costUsd: usage.totalCost,
+        toolCalls: toolStart.size,
+        toolNames: Array.from(toolNames),
+        error: runResult?.error
+          ? String(
+              typeof runResult.error === "object" && runResult.error?.message
+                ? runResult.error.message
+                : runResult.error,
+            )
+          : undefined,
+      },
+    };
+  } catch (err) {
+    const e = err as Error;
+    yield {
+      kind: "done",
+      result: {
+        ok: false,
+        error: `${e?.name || "Error"}: ${e?.message || String(e)}`,
+        answer: finalText || undefined,
+        toolCalls: toolStart.size,
+        toolNames: Array.from(toolNames),
+      },
+    };
+  } finally {
+    if (mcpManager) await mcpManager.dispose().catch(() => undefined);
+    if (body.cwd) {
+      try {
+        process.chdir(originalCwd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}

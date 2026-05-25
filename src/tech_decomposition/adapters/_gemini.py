@@ -218,9 +218,16 @@ class GeminiAdapter(Adapter):
                     if not payload:
                         continue
                     try:
-                        yield json.loads(payload)
+                        ev = json.loads(payload)
                     except json.JSONDecodeError:
                         continue
+                    yield ev
+                    # Stop reading on the terminal ``done`` event. Continuing
+                    # to ``aiter_lines`` after this would race against
+                    # agent-node closing its chunked-encoding response and
+                    # raise RemoteProtocolError on a half-closed read.
+                    if isinstance(ev, dict) and ev.get("kind") == "done":
+                        return
 
     async def ask_configured(
         self,

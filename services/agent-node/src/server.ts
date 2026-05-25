@@ -5,11 +5,11 @@
  * Python FastAPI adapters call this over HTTP.
  */
 import Fastify from "fastify";
-import { runCursor } from "./adapters/cursor.js";
-import { runCline } from "./adapters/cline.js";
+import { runCursor, streamCursor } from "./adapters/cursor.js";
+import { runCline, streamCline } from "./adapters/cline.js";
 import { runClaudeCode, streamClaudeCode } from "./adapters/claude_code.js";
 import { runGemini, streamGemini } from "./adapters/gemini.js";
-import { runOpenAIAgents } from "./adapters/openai_agents.js";
+import { runOpenAIAgents, streamOpenAIAgents } from "./adapters/openai_agents.js";
 import { abortOpencodeSession, runOpencode, streamOpencode } from "./adapters/opencode.js";
 import { askSourcebotBlocking } from "./adapters/sourcebot.js";
 
@@ -56,6 +56,49 @@ fastify.post("/adapters/cursor/run", async (request, reply) => {
     return reply.code(502).send(out);
   }
   return out;
+});
+
+/** Cursor SDK SSE stream — taps run.stream() events (assistant.message
+ * content + tool_call lifecycle + status). */
+fastify.post("/adapters/cursor/stream", async (request, reply) => {
+  const b = (request.body ?? {}) as Record<string, unknown>;
+  const apiKey = (b.apiKey as string) || process.env.CURSOR_API_KEY || "";
+  if (!b.prompt || typeof b.prompt !== "string") {
+    return reply.code(400).send({ ok: false, error: "prompt (string) required" });
+  }
+  if (!b.cwd || typeof b.cwd !== "string") {
+    return reply.code(400).send({ ok: false, error: "cwd (string) required" });
+  }
+  if (!apiKey) {
+    return reply.code(400).send({ ok: false, error: "apiKey or CURSOR_API_KEY required" });
+  }
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const write = (obj: unknown) => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+  try {
+    for await (const ev of streamCursor({
+      systemPrompt: (b.systemPrompt as string) || "",
+      prompt: b.prompt as string,
+      cwd: b.cwd as string,
+      apiKey,
+      modelId: (b.modelId as string) || process.env.CURSOR_SDK_MODEL || "composer-2",
+      timeoutSec: (b.timeoutSec as number) ?? 600,
+    })) {
+      write(ev);
+      if (ev.kind === "done") break;
+    }
+  } catch (err) {
+    const e = err as Error;
+    write({ kind: "error", error: `${e?.name || "Error"}: ${e?.message || String(err)}` });
+  } finally {
+    if (!reply.raw.writableEnded) reply.raw.end();
+  }
 });
 
 fastify.post("/adapters/claude_code/run", async (request, reply) => {
@@ -167,6 +210,49 @@ fastify.post("/adapters/cline/run", async (request, reply) => {
   return out;
 });
 
+/** Cline SDK SSE stream — Agent.subscribe(listener) callback bridged
+ * into an async channel; chunk + hook + status events flow as the run
+ * iterates. */
+fastify.post("/adapters/cline/stream", async (request, reply) => {
+  const b = (request.body ?? {}) as Record<string, unknown>;
+  if (!b.prompt || typeof b.prompt !== "string") {
+    return reply.code(400).send({ ok: false, error: "prompt (string) required" });
+  }
+  if (!b.providerId || !b.modelId || !b.apiKey) {
+    return reply.code(400).send({ ok: false, error: "providerId, modelId, apiKey required" });
+  }
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const write = (obj: unknown) => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+  try {
+    for await (const ev of streamCline({
+      systemPrompt: b.systemPrompt as string | undefined,
+      prompt: b.prompt as string,
+      cwd: b.cwd as string | undefined,
+      providerId: b.providerId as string,
+      modelId: b.modelId as string,
+      apiKey: b.apiKey as string,
+      maxIterations: (b.maxIterations as number) ?? 30,
+      timeoutSec: (b.timeoutSec as number) ?? 600,
+      enableFindCode: Boolean(b.enableFindCode),
+    })) {
+      write(ev);
+      if (ev.kind === "done") break;
+    }
+  } catch (err) {
+    const e = err as Error;
+    write({ kind: "error", error: `${e?.name || "Error"}: ${e?.message || String(err)}` });
+  } finally {
+    if (!reply.raw.writableEnded) reply.raw.end();
+  }
+});
+
 fastify.post("/adapters/gemini/run", async (request, reply) => {
   const b = (request.body ?? {}) as Record<string, unknown>;
   if (!b.prompt || typeof b.prompt !== "string") {
@@ -266,6 +352,50 @@ fastify.post("/adapters/openai_agents/run", async (request, reply) => {
     return reply.code(502).send(out);
   }
   return out;
+});
+
+/** OpenAI Agents SSE stream — `Runner.run(..., {stream: true})` yields raw
+ * model deltas + run-item events; the streamer maps them to our normalized
+ * union (text.delta + tool.update + done). */
+fastify.post("/adapters/openai_agents/stream", async (request, reply) => {
+  const b = (request.body ?? {}) as Record<string, unknown>;
+  if (!b.prompt || typeof b.prompt !== "string") {
+    return reply.code(400).send({ ok: false, error: "prompt (string) required" });
+  }
+  const apiKey = (b.apiKey as string) || process.env.OPENAI_API_KEY || "";
+  if (!apiKey) {
+    return reply.code(400).send({ ok: false, error: "apiKey or OPENAI_API_KEY required" });
+  }
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const write = (obj: unknown) => {
+    if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+
+  try {
+    for await (const ev of streamOpenAIAgents({
+      systemPrompt: (b.systemPrompt as string) || undefined,
+      prompt: b.prompt as string,
+      apiKey,
+      modelId: (b.modelId as string) || process.env.OPENAI_AGENTS_SDK_MODEL,
+      timeoutSec: (b.timeoutSec as number) ?? 600,
+      maxTurns: (b.maxTurns as number) ?? undefined,
+      cwd: (b.cwd as string) || undefined,
+    })) {
+      write(ev);
+      if (ev.kind === "done") break;
+    }
+  } catch (err) {
+    const e = err as Error;
+    write({ kind: "error", error: `${e?.name || "Error"}: ${e?.message || String(err)}` });
+  } finally {
+    if (!reply.raw.writableEnded) reply.raw.end();
+  }
 });
 
 fastify.post("/adapters/opencode/run", async (request, reply) => {

@@ -107,9 +107,13 @@ class ClaudeCodeSDKAdapter(Adapter):
                     if not payload:
                         continue
                     try:
-                        yield json.loads(payload)
+                        ev = json.loads(payload)
                     except json.JSONDecodeError:
                         continue
+                    yield ev
+                    # Stop on terminal event — see _gemini.py / _opencode_sdk.py.
+                    if isinstance(ev, dict) and ev.get("kind") == "done":
+                        return
 
     async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()

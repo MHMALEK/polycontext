@@ -79,6 +79,50 @@ class ClineSDKAdapter(Adapter):
             metrics=_metrics_from(out, t),
         )
 
+    async def astream(self, inp: AdapterAskInput):
+        """Proxy /adapters/cline/stream — see streamCline in agent-node.
+        Uses the first available provider key the same way runCline does."""
+        import json
+        from ..core.explore_directive import wrap_with_explore_directive
+        provider_id, model_id, api_key = self._provider_key()
+        if not provider_id:
+            raise RuntimeError("no LLM provider key configured; cline_sdk needs one")
+        prompt = wrap_with_explore_directive(
+            inp.query, tools_on=inp.tools_enabled and not inp.grounded,
+        )
+        body: dict[str, Any] = {
+            "systemPrompt": _ASK_SYSTEM,
+            "prompt": prompt,
+            "cwd": str(self._cwd_for_repos(inp.repos)),
+            "providerId": provider_id,
+            "modelId": (inp.model or model_id),
+            "apiKey": api_key,
+            "timeoutSec": int(self.settings.agent_node_timeout_seconds),
+            "enableFindCode": True,
+        }
+        url = self.settings.agent_node_url.rstrip("/") + "/adapters/cline/stream"
+        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=None)
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            async with c.stream("POST", url, json=body) as resp:
+                if resp.status_code >= 400:
+                    text = (await resp.aread()).decode("utf-8", "replace")[:500]
+                    raise RuntimeError(
+                        f"agent-node cline /stream -> {resp.status_code}: {text}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload:
+                        continue
+                    try:
+                        ev = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    yield ev
+                    if isinstance(ev, dict) and ev.get("kind") == "done":
+                        return
+
     async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()
         user_prompt = (

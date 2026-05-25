@@ -71,6 +71,44 @@ class CursorSDKAdapter(Adapter):
             metrics=_metrics_from(out, t),
         )
 
+    async def astream(self, inp: AdapterAskInput):
+        """Proxy /adapters/cursor/stream — see streamCursor in agent-node."""
+        import json
+        from ..core.explore_directive import wrap_with_explore_directive
+        prompt = wrap_with_explore_directive(
+            inp.query, tools_on=inp.tools_enabled and not inp.grounded,
+        )
+        body: dict[str, Any] = {
+            "systemPrompt": _ASK_SYSTEM,
+            "prompt": prompt,
+            "cwd": str(self._cwd_for_repos(inp.repos)),
+            "apiKey": self.settings.cursor_api_key,
+            "modelId": (inp.model or self.settings.cursor_sdk_model),
+            "timeoutSec": int(self.settings.agent_node_timeout_seconds),
+        }
+        url = self.settings.agent_node_url.rstrip("/") + "/adapters/cursor/stream"
+        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=None)
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            async with c.stream("POST", url, json=body) as resp:
+                if resp.status_code >= 400:
+                    text = (await resp.aread()).decode("utf-8", "replace")[:500]
+                    raise RuntimeError(
+                        f"agent-node cursor /stream -> {resp.status_code}: {text}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload:
+                        continue
+                    try:
+                        ev = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    yield ev
+                    if isinstance(ev, dict) and ev.get("kind") == "done":
+                        return
+
     async def _decompose_raw_text(self, inp: AdapterDecomposeInput) -> RawDecomposeText:
         t = time.monotonic()
         prompt = DECOMPOSE_PREAMBLE.format(model_tag=self.name) + query_blob(inp)

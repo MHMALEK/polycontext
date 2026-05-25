@@ -185,9 +185,15 @@ class OpencodeSDKAdapter(Adapter):
                     if not payload:
                         continue
                     try:
-                        yield json.loads(payload)
+                        ev = json.loads(payload)
                     except json.JSONDecodeError:
                         continue
+                    yield ev
+                    # Terminal event — stop reading to avoid racing the
+                    # agent-node connection close (would raise
+                    # RemoteProtocolError mid-chunked-read).
+                    if isinstance(ev, dict) and ev.get("kind") == "done":
+                        return
 
     async def abort(self, session_id: str, cwd: Path | str | None = None) -> dict[str, Any]:
         """Cancel a running OpenCode session by id (UI Stop button)."""
