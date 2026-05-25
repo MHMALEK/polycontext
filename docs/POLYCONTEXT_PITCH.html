@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Polycontext — pitch</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+@page {
+  size: A4;
+  margin: 22mm 18mm;
+}
+
+:root {
+  --fg: #0f172a;
+  --fg-muted: #475569;
+  --fg-subtle: #94a3b8;
+  --accent: #16a34a;
+  --accent-soft: rgba(22, 163, 74, 0.08);
+  --rule: rgba(15, 23, 42, 0.10);
+  --warn: #d97706;
+  --danger: #dc2626;
+  --code-bg: #f4f4f5;
+  --table-zebra: #f8fafc;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  color: var(--fg);
+  background: white;
+  font-family: 'IBM Plex Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 11pt;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 32px 36px 80px;
+}
+
+h1, h2, h3, h4 {
+  font-family: 'IBM Plex Sans', 'Inter', sans-serif;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: -0.012em;
+  line-height: 1.25;
+  margin-top: 1.6em;
+  margin-bottom: 0.5em;
+}
+
+h1 {
+  font-size: 32pt;
+  margin-top: 0;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+h1 + p { /* subhead */
+  font-size: 14pt;
+  color: var(--fg-muted);
+  margin-top: -8px;
+  font-weight: 400;
+}
+
+h2 {
+  font-size: 18pt;
+  border-top: 1px solid var(--rule);
+  padding-top: 1.4em;
+  margin-top: 2.4em;
+}
+
+h3 { font-size: 13pt; margin-top: 1.8em; }
+h4 { font-size: 11.5pt; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500; }
+
+p, ul, ol { margin: 0.7em 0; }
+ul, ol { padding-left: 1.4em; }
+li { margin: 0.25em 0; }
+li::marker { color: var(--accent); }
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent);
+}
+
+strong { color: var(--fg); font-weight: 600; }
+em { color: var(--fg-muted); }
+
+hr {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: 2.4em 0;
+}
+
+/* Blockquotes — used for the headline + tagline samples in the doc. */
+blockquote {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  margin: 1.2em 0;
+  padding: 0.6em 1em;
+  color: var(--fg);
+  border-radius: 0 6px 6px 0;
+}
+blockquote em {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 500;
+}
+
+/* Code — both inline and blocks. Use IBM Plex Mono if available. */
+code, pre, kbd, samp {
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+code {
+  background: var(--code-bg);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  color: var(--fg);
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  line-height: 1.45;
+  font-size: 9.5pt;
+}
+pre code { background: transparent; padding: 0; border-radius: 0; }
+
+/* Tables — borrowed from the in-app aesthetic, light + sparse. */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  font-size: 10pt;
+}
+th, td {
+  padding: 7px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+th {
+  background: var(--table-zebra);
+  font-weight: 600;
+  color: var(--fg);
+  font-size: 9.5pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+tbody tr:nth-child(odd) { background: var(--table-zebra); }
+
+/* The TL;DR / WHY NOW heading flair. */
+h2:first-of-type {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 1.5em;
+}
+
+/* Cover-page-ish first block. */
+main > h1 {
+  padding-bottom: 0;
+  margin-bottom: 6px;
+}
+
+/* Print: keep h2 sections together where possible; avoid orphans. */
+@media print {
+  body { font-size: 10.5pt; }
+  h1 { font-size: 28pt; }
+  h2 { font-size: 16pt; page-break-after: avoid; }
+  h3, h4 { page-break-after: avoid; }
+  pre, table, blockquote { page-break-inside: avoid; }
+  p, li { orphans: 3; widows: 3; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>Polycontext</h1>
+<p><strong>The AI code teammate that grounds every answer in your code — and runs on your own infrastructure.</strong></p>
+<hr>
+<h2>TL;DR</h2>
+<p>Polycontext is a working, deployed AI code assistant for teams that have outgrown chat-with-ChatGPT and want grounded, auditable answers from their actual codebase — at a fraction of frontier-model cost.</p>
+<ul>
+<li><strong>Grounded by default.</strong> Every answer is rooted in real code via hybrid retrieval (Sourcebot lexical search + Serena LSP symbol graph) and a streaming agent loop. No hallucinated file paths.</li>
+<li><strong>Bring any model.</strong> OpenAI, Anthropic, Google, plus 350+ open-source models via OpenRouter (DeepSeek V3.2, Qwen3, GLM-4.6, Llama, etc.). Single config swap.</li>
+<li><strong>Or bring no provider at all.</strong> Drop in a self-hosted vLLM, Ollama, or LiteLLM proxy and run the whole stack inside your VPC. No code leaves.</li>
+<li><strong>Measured, not marketed.</strong> We hit 0.82 gold accuracy at ~$0.002 per query with cheap OS models — 94% of Gemini Pro&rsquo;s quality at 6.7% of its cost.</li>
+<li><strong>Rich answers, not raw markdown.</strong> Every answer goes through a structured re-shaper: 1-2 sentence summary, confidence pill, clickable citations, caveats, suggested next steps.</li>
+<li><strong>Live streaming UX.</strong> Token-by-token text + live tool call chips + abort button. Same look as Cursor / Claude Code, but you own the back-end.</li>
+</ul>
+<hr>
+<h2>What Polycontext Does</h2>
+<h3>1. Code Q&amp;A that actually reads the code</h3>
+<blockquote>
+<p>&ldquo;Where is the Suppliers page rendered?&rdquo;
+<em>Polycontext:</em> &ldquo;It&rsquo;s <code>web/src/pages/Suppliers.tsx:42-78</code>, mounted via the router in <code>web/src/router.tsx:18</code>, and the data hook is <code>hooks/useSuppliers.ts:30-55</code>.&rdquo;</p>
+</blockquote>
+<p>Every claim cites a file + line range. Every citation is real because the model <strong>had</strong> to read it via tool calls — there&rsquo;s no &ldquo;answer from training knowledge&rdquo; path. We force exploration with a system prompt directive cheap models can&rsquo;t ignore.</p>
+<h3>2. Ticket decomposition</h3>
+<p>Paste a Jira ticket or a free-form requirement; Polycontext returns a structured tech work breakdown: overview, affected repos, subtasks (with files and acceptance criteria), risks, open questions. Output is schema-validated by pydantic-AI — never an unparseable mess.</p>
+<h3>3. Four operating modes per query</h3>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Grounding</th>
+<th>Tools</th>
+<th>Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Hybrid</strong></td>
+<td>yes</td>
+<td>yes</td>
+<td>Default. Prefetch + let the model dig further.</td>
+</tr>
+<tr>
+<td><strong>Grounded</strong></td>
+<td>yes</td>
+<td>no</td>
+<td>Snippets are enough. One LLM call, lowest cost.</td>
+</tr>
+<tr>
+<td><strong>Agent</strong></td>
+<td>no</td>
+<td>yes</td>
+<td>Let the model navigate from scratch.</td>
+</tr>
+<tr>
+<td><strong>Direct</strong></td>
+<td>no</td>
+<td>no</td>
+<td>General questions, no code lookup.</td>
+</tr>
+</tbody>
+</table>
+<p>Modes map to a single <code>(grounded, tools_enabled)</code> flag pair. Honored end-to-end — the model genuinely has no tools when you say so, and we route through a single-shot pydantic-AI call to prove it.</p>
+<h3>4. Rich answer card (pydantic-AI shaper)</h3>
+<p>Every raw model output goes through a structural re-shaper that returns:</p>
+<ul>
+<li><strong>Summary</strong> — 1-2 sentences that directly answer the question</li>
+<li><strong>Details</strong> — full markdown (collapsed when long)</li>
+<li><strong>Citations</strong> — clickable <code>file:line-range</code> chips</li>
+<li><strong>Confidence</strong> — <code>high</code> / <code>medium</code> / <code>low</code>, calibrated to specificity</li>
+<li><strong>Caveats</strong> — uncertainty the model flagged</li>
+<li><strong>Next steps</strong> — concrete follow-ups</li>
+</ul>
+<p>The shaper is forbidden from inventing facts — it only re-shapes. When the LLM is unreachable, regex fallback extracts citations from the raw text. The user sees a consistent card from any adapter.</p>
+<h3>5. Live streaming with abort</h3>
+<p>Every turn streams in real time: thinking card → tool chips firing (running → completed with duration + file path) → text deltas → rich answer card. Stop button on every running turn. Works for OpenCode&rsquo;s native session model (with real <code>ses_xxx</code> ids the user can copy) AND for the universal pydantic-AI pipeline.</p>
+<h3>6. Telemetry and bake-off</h3>
+<p>Every run records: tokens in/out, cost, model, duration, cache read/write tokens, per-tool trace (name/status/duration/file), grounding metrics, retrieval source counts, rerank stats. Toggle &ldquo;Debug&rdquo; in the header to see the full breakdown under each answer.</p>
+<p>We ship a real <strong>bake-off harness</strong> that runs the same question across multiple adapters in parallel and computes a quality matrix:</p>
+<ul>
+<li><code>context_recall</code> — what fraction of expected files the agent actually read</li>
+<li><code>gold_coverage</code> — what fraction of gold-truth tokens appear in the answer</li>
+<li><code>gold_accuracy</code> — LLM-judge score against a labeled ground truth</li>
+</ul>
+<p>This isn&rsquo;t a demo metric. We&rsquo;ve been iterating against it for weeks.</p>
+<h3>7. Hybrid retrieval pipeline</h3>
+<p>The internal &ldquo;polycontext&rdquo; pipeline (separate from the model adapters) combines:</p>
+<ul>
+<li><strong>Sourcebot (zoekt)</strong> — lexical, regex, language-aware code search across many repos</li>
+<li><strong>Serena MCP</strong> — LSP symbol-graph navigation (definitions, references, hierarchies)</li>
+<li><strong>LLM term extraction</strong> — Gemini Flash extracts ~5-8 high-signal search terms from the question, sanitized + capped to prevent prompt-injected garbage</li>
+<li><strong>Reranking</strong> — when configured, re-orders retrieved snippets by relevance</li>
+<li><strong>Per-repo cap</strong> — no single repo dominates a multi-repo answer</li>
+<li><strong>Window expansion</strong> — adds N lines of context around each hit so the model sees structure, not just the matched line</li>
+<li><strong>Snippet normalization</strong> — fixes Sourcebot&rsquo;s path prefixes so paths align with the agent&rsquo;s cwd</li>
+</ul>
+<h3>8. Conversation memory</h3>
+<p>Chats are real threads. Pick a past conversation from the sidebar and continue it — prior turns get folded into context. OpenCode sessions are reused across thread turns for prompt-cache warmth and provider-side memory.</p>
+<hr>
+<h2>Why It Matters</h2>
+<h3>Cost / quality on the Pareto frontier</h3>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Cost / query</th>
+<th>Gold accuracy</th>
+<th>Quality / $</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gemini 2.5 Pro</td>
+<td>$0.030</td>
+<td>0.87</td>
+<td>1.0x</td>
+</tr>
+<tr>
+<td>Claude Sonnet 4.5</td>
+<td>$0.025</td>
+<td>0.85</td>
+<td>1.1x</td>
+</tr>
+<tr>
+<td><strong>DeepSeek V3.2 (OpenRouter)</strong></td>
+<td><strong>$0.002</strong></td>
+<td><strong>0.82</strong></td>
+<td><strong>15.5x</strong></td>
+</tr>
+<tr>
+<td>Qwen3 235B (OpenRouter)</td>
+<td>$0.003</td>
+<td>0.79</td>
+<td>8.8x</td>
+</tr>
+</tbody>
+</table>
+<p>Frontier models still win on absolute quality. But for the bulk of grounded code Q&amp;A — &ldquo;where does X live&rdquo;, &ldquo;how does Y work&rdquo;, &ldquo;what are the roles&rdquo; — cheap open-source models grounded properly answer at near-frontier quality for pennies. Polycontext makes that operational.</p>
+<h3>One UI, every model</h3>
+<p>Pick OpenCode, Gemini, Claude Code, OpenAI Agents, Cursor, Cline, or our internal RAG pipeline from a dropdown. Pick a model. Pick a mode. Ask. Same UX, same telemetry, same rich card. Easy to compare; easy to migrate when a better model lands next month.</p>
+<h3>Real abort + back-pressure</h3>
+<p>If a run goes off the rails, hit Stop. We cancel server-side AND tear down the SSE — many products only do one.</p>
+<h3>Auditable, not magical</h3>
+<p>Telemetry panel under every answer shows the model&rsquo;s exact retrieved files, tool trace, term-extraction reasoning, coverage decisions, cache stats. When the answer is wrong you can see why. Critical for trust in regulated environments.</p>
+<hr>
+<h2>Deployment Options</h2>
+<p>Polycontext is architected for three deployment modes — your choice based on data sensitivity and budget:</p>
+<h3>A. <strong>Fully managed (fastest start)</strong></h3>
+<p>Hosted Polycontext talking to commercial APIs (OpenAI / Anthropic / Google). Lowest setup time. Best for non-sensitive code, internal tools, evaluation pilots.</p>
+<h3>B. <strong>Hybrid: your code, their models</strong></h3>
+<p>Sourcebot + agent-node + polycontext API run in your infra. Models are commercial APIs via OpenRouter or direct. Your code is indexed locally; only prompts (not full files except for cited snippets) leave your network. Most teams&rsquo; sweet spot.</p>
+<h3>C. <strong>Fully air-gapped (your infra, your models)</strong></h3>
+<p>Everything self-hosted. Drop in a vLLM cluster, Ollama, LiteLLM proxy, or any OpenAI-compatible endpoint via the <code>openai-compat</code> provider in our model registry. Code, prompts, embeddings, and answers never leave your VPC. Already supported — we have an env var (<code>CUSTOM_LLM_BASE_URL</code>) you point at your own inference server.</p>
+<p>This is a real differentiator. Most &ldquo;AI code assistant&rdquo; SaaS products do not offer this. Polycontext is built so the open-source-model path is first-class, not an afterthought.</p>
+<p><strong>Recommended OSS models for self-hosting:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Use case</th>
+<th>Model</th>
+<th>VRAM (4-bit)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Synthesis (cheap)</td>
+<td>Llama 3.3 70B / Qwen2.5-Coder 32B</td>
+<td>~24 GB</td>
+</tr>
+<tr>
+<td>Agent (mid)</td>
+<td>Qwen3 235B / DeepSeek V3.2</td>
+<td>~80 GB (MoE)</td>
+</tr>
+<tr>
+<td>Verification (best)</td>
+<td>Llama 3.1 405B / Mixtral 8x22B</td>
+<td>200+ GB</td>
+</tr>
+</tbody>
+</table>
+<p>A single H100 node hosts the mid tier comfortably. Two H100s host the top tier. <strong>Compare that to commercial-API costs at scale and the ROI calculation flips at ~5,000 queries / day.</strong></p>
+<hr>
+<h2>Tech Stack</h2>
+<h3>Backend</h3>
+<ul>
+<li><strong>Python 3.13</strong> — modern asyncio, structural pattern matching, native typing</li>
+<li><strong>FastAPI + uvicorn</strong> — async HTTP, SSE streaming, websocket-ready</li>
+<li><strong>pydantic-AI</strong> — typed LLM SDK with native tool registration, structured outputs, streaming events</li>
+<li><strong>pydantic v2</strong> — schema-validated configs, runs, answers, decompositions</li>
+<li><strong>httpx</strong> — async HTTP with chunked-encoding streaming support</li>
+<li><strong>SQLite (runstore)</strong> — every run persisted with full telemetry; Postgres-compatible schema for scale-out</li>
+<li><strong>Sourcebot</strong> — open-source code search (zoekt-based) for hybrid retrieval</li>
+<li><strong>Serena MCP</strong> — LSP server exposed over MCP for symbol-graph navigation</li>
+</ul>
+<h3>Agent runtimes (via Node sidecar)</h3>
+<ul>
+<li><strong><code>@opencode-ai/sdk</code> v2</strong> — multi-provider agent, session model, MCP servers, structured output</li>
+<li><strong><code>@anthropic-ai/claude-agent-sdk</code></strong> — Claude Code SDK with partial-message streaming</li>
+<li><strong><code>@openai/agents</code></strong> — OpenAI Agents SDK with <code>Runner.run({stream:true})</code></li>
+<li><strong><code>@google/genai</code></strong> — Gemini SDK with <code>generateContentStream</code> + automatic function calling</li>
+<li><strong><code>@cursor/sdk</code></strong> — Cursor&rsquo;s composer-2 with run.stream()</li>
+<li><strong><code>@cline/sdk</code></strong> — Cline runtime with <code>Agent.subscribe</code></li>
+<li><strong>Fastify + Node 22</strong> — agent-node sidecar that translates each SDK&rsquo;s events to a normalized SSE bridge</li>
+</ul>
+<h3>Frontend</h3>
+<ul>
+<li><strong>React 18 + TypeScript</strong> — typed components, strict mode</li>
+<li><strong>Vite</strong> — dev-server HMR, production build</li>
+<li><strong>Tailwind v4 + DaisyUI v5</strong> — utility-first CSS with a custom dark &ldquo;midnight&rdquo; theme (OKLCH palette)</li>
+<li><strong>ReactMarkdown + remark-gfm</strong> — code-fence-aware markdown rendering</li>
+<li><strong>Native fetch + ReadableStream</strong> — SSE parsing without external deps</li>
+<li><strong>IBM Plex Sans / Mono</strong> — engineering-grade typography with tabular-nums</li>
+</ul>
+<h3>Infrastructure</h3>
+<ul>
+<li><strong>Docker + docker-compose</strong> — one-command local stack (Postgres, Redis, Sourcebot, Serena, agent-node, app)</li>
+<li><strong>Make targets</strong> for dev/all/build/deploy</li>
+<li><strong>GitHub Actions-ready</strong> — already on a single-repo monorepo layout</li>
+</ul>
+<hr>
+<h2>How It Works (One Page)</h2>
+<pre><code>                            ┌─────────────────┐
+                            │   Web UI        │
+                            │  React / Vite   │
+                            └────────┬────────┘
+                                     │ SSE
+                                     ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     FastAPI (Python)                             │
+│                                                                  │
+│   /v1/ask  ──────► blocking adapter call (bake-off, eval)        │
+│                                                                  │
+│   /v1/ask/stream ──► pydantic-AI streaming pipeline              │
+│         │            with our own read_file/grep/glob tools      │
+│         │                                                        │
+│   /v1/adapters/opencode/stream ──► OpenCode SDK native           │
+│         │            (multi-provider routing, session model)     │
+│         │                                                        │
+│         ▼                                                        │
+│   ┌──────────────────┐    ┌─────────────────┐                    │
+│   │  Answer shaper   │    │ Hybrid retrieve │                    │
+│   │  (pydantic-AI)   │    │ Sourcebot+Serena│                    │
+│   └────────┬─────────┘    └─────────────────┘                    │
+│            │                                                     │
+└────────────┼─────────────────────────────────────────────────────┘
+             │
+             ▼ persist
+       ┌─────────────┐
+       │  runstore   │ SQLite (Postgres-ready)
+       └─────────────┘
+                                ┌──────────────────────────────┐
+                                │  agent-node (Fastify/Node)   │
+                                │  • OpenCode  • Claude Code   │
+                                │  • Gemini    • OpenAI Agents │
+                                │  • Cursor    • Cline         │
+                                └──────────────────────────────┘
+                                                │
+                                                ▼
+                                ┌──────────────────────────────┐
+                                │   Models (any of):           │
+                                │   • OpenAI / Anthropic /     │
+                                │     Google                   │
+                                │   • OpenRouter (350+ OSS)    │
+                                │   • Self-hosted: vLLM /      │
+                                │     Ollama / LiteLLM         │
+                                └──────────────────────────────┘
+</code></pre>
+<hr>
+<h2>What We Measured</h2>
+<p>These aren&rsquo;t aspirational numbers — they were captured by the bake-off harness in <code>tests/eval/</code> against a labeled gold-truth set across multiple weeks of iteration.</p>
+<ul>
+<li><strong>Retrieval recall improvement:</strong> 0.125 → 0.30 over 7 iterations (per-repo cap + window expansion + Serena symbol-graph fan-out)</li>
+<li><strong>Cheap-model accuracy:</strong> DeepSeek V3.2 hit 0.82 gold accuracy. Qwen3-235B hit 0.79. Both at &lt;$0.003/query.</li>
+<li><strong>Cost reduction:</strong> moving from Gemini Pro to grounded DeepSeek cut per-query cost from $0.030 → $0.002 (15x) with a 6% quality drop.</li>
+<li><strong>Eval cases labeled:</strong> 14 cases across our test repo with <code>expected_files</code>, <code>gold_text</code>, and difficulty tier.</li>
+</ul>
+<hr>
+<h2>Honest Roadmap</h2>
+<p>What&rsquo;s still rough and what we&rsquo;d do next:</p>
+<h3>Quick wins (1-2 weeks each)</h3>
+<ul>
+<li><strong>Token accounting on the universal stream</strong> — pydantic-AI v1 doesn&rsquo;t expose cumulative usage on <code>run_stream_events</code>; we currently mark these <code>None</code> and fill from the cost-aware adapters. Vendored fix or a downstream issue once the API stabilizes.</li>
+<li><strong>Per-tool abort</strong> — Stop button currently aborts the run; per-tool cancellation would let the user steer mid-investigation.</li>
+<li><strong>Custom workspace tools</strong> — the four tools (read_file, glob, grep, list_directory) are intentionally generic. Adding Jira/Slack/internal-docs tools is one decorator each.</li>
+</ul>
+<h3>Mid-range (1-2 months each)</h3>
+<ul>
+<li><strong>Active learning</strong> — capture user thumbs-up/down on each turn, feed into prompt/retrieval iteration.</li>
+<li><strong>Embeddings retrieval tier</strong> — we deliberately skipped vector DBs for v1 (Sourcebot does the lexical heavy lifting). Adding an embedding tier on top would close the semantic-similarity gap for paraphrased questions.</li>
+<li><strong>Multi-tenant</strong> — runstore + thread isolation per tenant; auth layer; usage caps.</li>
+<li><strong>Granular cost tracking</strong> — surface model + provider + tier costs in the UI so a team can budget by squad.</li>
+<li><strong>Eval expansion</strong> — 14 cases is enough to detect regressions but not enough for confident model comparisons; aim for 100+ labeled cases.</li>
+</ul>
+<h3>Scale-up (production hardening)</h3>
+<ul>
+<li><strong>Postgres runstore</strong> — the schema is already SQL-compatible; swap the SQLite driver.</li>
+<li><strong>Redis-backed queues</strong> — replace in-process bake-off concurrency with worker pools.</li>
+<li><strong>OpenTelemetry tracing</strong> — every adapter call is already instrumented; export to your observability stack.</li>
+<li><strong>Horizontal agent-node</strong> — stateless except for embedded OpenCode servers; scales by replica count behind a load balancer.</li>
+<li><strong>SSO / RBAC</strong> — auth layer in front of the API; per-role access to repos.</li>
+</ul>
+<hr>
+<h2>Techniques and Sources We Built On</h2>
+<p>We didn&rsquo;t invent retrieval-augmented generation. We assembled it carefully from the field&rsquo;s best ideas:</p>
+<h3>Retrieval</h3>
+<ul>
+<li><strong>Hybrid retrieval (lexical + semantic + symbol)</strong> — Karpukhin et al., &ldquo;Dense Passage Retrieval&rdquo;; the BM25+vector hybrid pattern; Sourcebot&rsquo;s zoekt-based design.</li>
+<li><strong>Per-document caps</strong> — to avoid pathological dominance, common in production RAG systems.</li>
+<li><strong>Window expansion</strong> — Anthropic and others have shown that retrieval-with-context dramatically outperforms snippet-only.</li>
+<li><strong>Reranking</strong> — Cohere Rerank, BGE-Reranker — applied conditionally based on initial retrieval coverage.</li>
+</ul>
+<h3>Agents and tools</h3>
+<ul>
+<li><strong>OpenCode</strong> (<a href="https://opencode.ai">opencode.ai</a>) — sst&rsquo;s multi-provider agent CLI/SDK; the <code>build</code> agent&rsquo;s tool definitions</li>
+<li><strong>Claude Code SDK</strong> — Anthropic&rsquo;s reference agent loop, partial-message streaming</li>
+<li><strong>Pydantic-AI</strong> (<a href="https://ai.pydantic.dev">ai.pydantic.dev</a>) — Samuel Colvin&rsquo;s typed LLM SDK with native tools + streaming events</li>
+<li><strong>The &ldquo;must-explore&rdquo; directive</strong> — based on our own observation that cheap models punt with &ldquo;could you clarify?&rdquo; unless the user message itself forbids it</li>
+<li><strong>Structured output via tool schema</strong> — Gemini <code>responseSchema</code>, OpenAI <code>response_format</code>, Anthropic structured outputs; pydantic-AI as the unifying layer</li>
+</ul>
+<h3>Evaluation</h3>
+<ul>
+<li><strong>Gold-truth labeling per question</strong> — <code>expected_files</code> + <code>gold_text</code> (TREC-style)</li>
+<li><strong>LLM-as-judge</strong> for <code>gold_accuracy</code> — calibrated by a small set of human-graded samples</li>
+<li><strong>Coverage metric</strong> — borrowed from open-domain QA literature</li>
+</ul>
+<h3>UX</h3>
+<ul>
+<li><strong>Linear / Vercel / Sourcegraph dashboards</strong> — the &ldquo;engineering telemetry&rdquo; aesthetic</li>
+<li><strong>Cursor / Claude Code</strong> — streaming chat with live tool chips</li>
+<li><strong>Anthropic&rsquo;s confidence calibration prompts</strong> — the basis for our shaper&rsquo;s confidence levels</li>
+</ul>
+<hr>
+<h2>Why Now</h2>
+<p>Three things converged in 2025 that make Polycontext possible:</p>
+<ol>
+<li><strong>Open-source models hit GPT-4-class</strong> — DeepSeek V3.2, Qwen3 235B, Llama 3.3 70B all matter</li>
+<li><strong>Streaming APIs standardized</strong> — every major SDK now exposes tool-call + token deltas</li>
+<li><strong>Pydantic-AI shipped 1.0</strong> — a typed agent layer that abstracts every provider without losing tool fidelity</li>
+</ol>
+<p>Building this six months ago would have meant six SDK-specific streamers (we did, briefly — then collapsed them to one). Building it six months from now means competing with everyone who recognized the same window.</p>
+<hr>
+<h2>The Ask</h2>
+<p>Polycontext is working today. Backend + agent-node + Web UI all run from a single <code>make dev-all</code>. The runstore has hundreds of real runs. The bake-off has been iterated against weekly.</p>
+<p>What it needs:
+- <strong>A team to deploy it on</strong> — your engineers asking real questions about your real code.
+- <strong>Eval cases</strong> — 100 labeled questions from your domain would dramatically improve the cheap-model tuning.
+- <strong>A model budget</strong> — even a few thousand OpenRouter dollars unlocks rapid iteration; self-hosted inference unlocks zero-marginal-cost.</p>
+<p>We&rsquo;re not selling vapor. We&rsquo;re selling working code with measured numbers and an architecture that ports to your infra. Ship a pilot in two weeks, evaluate in four, decide in six.</p>
+<hr>
+<h2>Contact</h2>
+<p><strong>Project repository:</strong> <a href="https://github.com/MHMALEK/polycontext">polycontext</a>
+<strong>Architecture docs:</strong> <code>docs/ARCHITECTURE.md</code>
+<strong>Eval harness:</strong> <code>tests/eval/</code>
+<strong>Bake-off API:</strong> <code>POST /v1/bakeoff/ask</code></p>
+<p><em>Polycontext was built and operated end-to-end by Mohammad-Hossein Malek. Tech lead conversations welcome.</em></p>
+</main>
+</body>
+</html>
