@@ -570,25 +570,26 @@ def _resolve_synthesis_model(inp: AdapterAskInput, adapter_name: str, settings) 
 
 @app.post("/v1/ask/stream")
 async def ask_stream(inp: AdapterAskInput, request: Request) -> StreamingResponse:
-    """SSE endpoint that streams a single-shot LLM call directly via
-    pydantic-AI when the request is in a no-tools mode (Direct or
-    Grounded-only). Works for ANY adapter selection because we bypass the
-    SDK entirely — the ``adapter`` parameter only influences which model to
-    default to.
+    """Universal streaming endpoint — handles all four modes (Direct,
+    Grounded-only, Agent, Hybrid) via a single pydantic-AI pipeline.
 
-    For requests that DO need the agent loop (Hybrid / Agent mode), this
-    endpoint returns a 400 directing the caller to the adapter-specific
-    streaming endpoint (currently only ``/v1/adapters/opencode/stream``).
+    What used to be six per-SDK streamers + a no-tools-only universal
+    fallback collapsed into one path. When ``tools_enabled=True``, the
+    agent gets read_file/grep_search/glob/list_directory tools (defined
+    in ``core/agent_tools.py``) and pydantic-AI drives the loop. The
+    ``adapter`` parameter only influences which model to default to.
+
+    Stable event union (matches the OpencodeStreamEvent shape the UI
+    already consumes):
+
+      - ``run``: synthetic preamble with run_id + thread_id
+      - ``session``: synthetic marker with the model id
+      - ``status``: lifecycle pulses
+      - ``text.delta``: token-level text increments
+      - ``tool.update``: tool lifecycle (running → completed/error)
+      - ``done``: final envelope mirroring the blocking /ask result
+      - ``shaped``: optional rich-card from the pydantic-AI answer shaper
     """
-    if not _wants_tools_disabled(inp):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "ask/stream supports only no-tools modes (Direct, Grounded-only). "
-                "Use /v1/adapters/opencode/stream for tool-loop streaming."
-            ),
-        )
-
     settings = get_settings()
     store = open_default_store(settings)
     ctx = RunContext(settings=settings, mode="ask")
@@ -635,6 +636,16 @@ async def ask_stream(inp: AdapterAskInput, request: Request) -> StreamingRespons
         toks_in: int | None = None
         toks_out: int | None = None
         duration_ms = 0
+        tool_calls = 0
+        tool_names_seen: set[str] = set()
+        # Workspace root for tool calls. Mirror the per-adapter cwd
+        # resolution: one repo → that repo; otherwise the multi-repo root.
+        workspace_root_for_tools: str | None = None
+        if inp.tools_enabled:
+            if inp.repos and len(inp.repos) == 1:
+                workspace_root_for_tools = str(settings.repo_path(inp.repos[0]))
+            else:
+                workspace_root_for_tools = str(settings.repos_root)
         from .core.synthesize import synthesize_ask_stream
         try:
             async for ev in synthesize_ask_stream(
@@ -642,16 +653,25 @@ async def ask_stream(inp: AdapterAskInput, request: Request) -> StreamingRespons
                 grounding_block=grounding_block,
                 settings=settings,
                 model_id=model_spec,
+                workspace_root=workspace_root_for_tools,
+                tools_enabled=bool(inp.tools_enabled),
             ):
                 if await request.is_disconnected():
                     break
                 if ev["kind"] == "text.delta":
                     yield f"data: {_sse_json({'kind': 'text.delta', 'text': ev['text']})}\n\n"
+                elif ev["kind"] == "tool.update":
+                    # Forward verbatim — already in the shape the UI expects.
+                    yield f"data: {_sse_json(ev)}\n\n"
+                    name = ev.get("tool")
+                    if isinstance(name, str):
+                        tool_names_seen.add(name)
                 elif ev["kind"] == "result":
                     final_text = ev["text"]
                     toks_in = ev.get("tokens_in")
                     toks_out = ev.get("tokens_out")
                     duration_ms = ev.get("duration_ms") or 0
+                    tool_calls = ev.get("tool_calls") or 0
         except Exception as e:  # noqa: BLE001
             err = {"kind": "error", "error": f"{type(e).__name__}: {e}"}
             yield f"data: {_sse_json(err)}\n\n"
@@ -662,8 +682,8 @@ async def ask_stream(inp: AdapterAskInput, request: Request) -> StreamingRespons
                 pass
             return
 
-        # Build the done envelope mirroring opencode's shape so the UI
-        # client can use the same reducer.
+        # Build the done envelope. Same shape as the per-adapter streamers
+        # used so the UI reducer needs no special-casing.
         done_result = {
             "ok": True,
             "answer": final_text,
@@ -671,8 +691,8 @@ async def ask_stream(inp: AdapterAskInput, request: Request) -> StreamingRespons
             "tokensIn": toks_in,
             "tokensOut": toks_out,
             "costUsd": None,
-            "toolCalls": 0,
-            "toolNames": [],
+            "toolCalls": tool_calls,
+            "toolNames": sorted(tool_names_seen),
             "toolTrace": [],
         }
         yield f"data: {_sse_json({'kind': 'done', 'result': done_result})}\n\n"
@@ -691,6 +711,8 @@ async def ask_stream(inp: AdapterAskInput, request: Request) -> StreamingRespons
                 "synthesis_model": model_spec,
                 "wall_ms_total": int((_time.monotonic() - start) * 1000),
                 "synth_duration_ms": duration_ms,
+                "tool_calls": tool_calls,
+                "opencode_tool_names": sorted(tool_names_seen),
             }
             payload: dict[str, Any] = {"metrics_extra": extra}
             if grounding is not None:

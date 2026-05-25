@@ -111,21 +111,13 @@ const ADAPTER_SUPPORTS_TOOLS_TOGGLE: Record<string, boolean> = {
   // work for them; not yet wired.
 };
 
-/**
- * Adapters that implement an ``astream`` method on the server side so the
- * UI can route through ``/v1/adapters/{name}/stream`` for the Hybrid /
- * Agent (tools-on) modes. Adapters not in this set still get token
- * streaming for the no-tools modes via the universal ``/v1/ask/stream``
- * endpoint — just not the tool-call deltas during the agent loop.
- */
-const ADAPTER_SUPPORTS_SSE_STREAM: Record<string, boolean> = {
-  opencode: true,
-  gemini: true,
-  claude_code: true,    // includePartialMessages → per-token deltas
-  openai_agents: true,  // Runner.run({stream:true}) → ResponseStreamEvent
-  cursor: true,         // run.stream() → assistant.message + tool_call events
-  cline_sdk: true,      // Agent.subscribe(listener) → chunk + hook events
-};
+// The per-adapter SSE-streaming capability map was retired when the
+// chat UI moved to a single ``/v1/ask/stream`` pipeline backed by
+// pydantic-AI for every mode. The per-SDK ``/v1/adapters/{name}/stream``
+// endpoints + the agent-node streamX functions stay in the codebase
+// for now but are no longer reached from the UI. The blocking
+// ``/v1/adapters/{name}/ask`` path is still used by the bake-off
+// harness so the adapter SDKs themselves remain compared.
 
 function modeIsSupported(mode: AskMode, adapter: string): boolean {
   if (mode === "hybrid" || mode === "agent_only") return true;
@@ -1842,19 +1834,13 @@ export function App() {
           throw new Error("pick an adapter from the dropdown before submitting");
         }
         const wireMode = askModeToWire(form.mode);
-        // Three streaming strategies, ordered by preference:
-        //   1. No-tools modes (Direct / Grounded-only) → /v1/ask/stream
-        //      — bypasses adapter SDKs, streams token-by-token via
-        //      pydantic-AI native streaming for ANY adapter.
-        //   2. Adapters with SDK-level event taps (opencode, gemini) +
-        //      tools on → /v1/adapters/{name}/stream — text deltas + tool
-        //      updates from the agent loop.
-        //   3. Any other adapter with tools on → blocking
-        //      /v1/adapters/{name}/ask — no streaming.
-        const useNativeStream = !wireMode.tools_enabled;
-        const useAdapterStream =
-          !useNativeStream && ADAPTER_SUPPORTS_SSE_STREAM[form.adapter] === true;
-        if (useNativeStream || useAdapterStream) {
+        // Single streaming pipeline for all four modes — /v1/ask/stream
+        // now handles Direct / Grounded-only / Agent / Hybrid universally
+        // via pydantic-AI. The adapter dropdown just picks the default
+        // model. The blocking /v1/adapters/{name}/ask path stays for the
+        // bake-off harness (it iterates each adapter's native SDK), but
+        // the chat UI no longer needs the per-SDK streaming branch.
+        {
           const controller = new AbortController();
           streamAbortRef.current = controller;
           setStreamingTurn({
@@ -1868,24 +1854,12 @@ export function App() {
             startedAt: Date.now(),
           });
           let threadIdFromStream: string | null = activeThreadId;
-          const streamCall = useNativeStream
-            ? api.nativeAskStream(
+          const streamCall = api.nativeAskStream(
                 {
                   query: question,
                   grounded: wireMode.grounded,
                   tools_enabled: wireMode.tools_enabled,
                   adapter: form.adapter,
-                  ...(form.model ? { model: form.model } : {}),
-                  ...(activeThreadId ? { thread_id: activeThreadId } : {}),
-                },
-                { signal: controller.signal },
-              )
-            : api.adapterAskStream(
-                form.adapter,
-                {
-                  query: question,
-                  grounded: wireMode.grounded,
-                  tools_enabled: wireMode.tools_enabled,
                   ...(form.model ? { model: form.model } : {}),
                   ...(activeThreadId ? { thread_id: activeThreadId } : {}),
                 },
@@ -1940,26 +1914,11 @@ export function App() {
           setStreamingTurn(null);
           return;
         }
-        const askPromise = api.adapterAsk(form.adapter, {
-          query: question,
-          grounded: wireMode.grounded,
-          tools_enabled: wireMode.tools_enabled,
-          ...(form.model ? { model: form.model } : {}),
-          ...(activeThreadId ? { thread_id: activeThreadId } : {}),
-        });
-        void loadHistory();
-        queueMicrotask(() => void loadHistory());
-        window.setTimeout(() => void loadHistory(), 280);
-        window.setTimeout(() => void loadHistory(), 750);
-        const r = await askPromise;
-        askCompleted = true;
-        if (submitGen !== detailFetchGen.current) return;
-        setActiveThreadId(r.thread_id);
-        displayedThreadRef.current = r.thread_id;
-        await loadHistory();
-        const rows = await api.listThreadRuns(r.thread_id);
-        if (submitGen !== detailFetchGen.current) return;
-        setThreadMessages(rows);
+        // No fallback path needed — every chat turn now goes through the
+        // streaming branch above. The blocking ``api.adapterAsk`` call is
+        // still available for direct API consumers (and the bake-off
+        // harness uses it under the hood), it just isn't wired into the
+        // chat UI anymore.
       } catch (err) {
         if (submitGen === detailFetchGen.current) {
           setError((err as Error).message);

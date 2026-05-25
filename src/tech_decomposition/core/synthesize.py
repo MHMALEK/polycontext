@@ -165,62 +165,187 @@ async def synthesize_ask_stream(
     grounding_block: str,
     settings: Settings,
     model_id: str | None = None,
+    workspace_root: str | None = None,
+    tools_enabled: bool = False,
 ):
-    """Stream token deltas from a single-shot LLM call (no tools, no agent loop).
+    """Stream events from a pydantic-AI agent run — the **single
+    streaming pipeline** for the chat UI.
 
-    Used by the API's ``/v1/ask/stream`` for the no-tools modes (Direct,
-    Grounded-only) across ANY adapter — bypasses each adapter's SDK and
-    streams natively via pydantic-AI. Works for Gemini, Anthropic, OpenAI,
-    OpenRouter (any model the ``llm_registry`` can build).
+    Replaces the six per-SDK streamers (opencode, gemini, claude_code,
+    openai_agents, cursor, cline) with one universal path. When
+    ``tools_enabled=True`` and ``workspace_root`` is set, the agent gets
+    read_file/grep_search/glob/list_directory tools wired up and the
+    pydantic-AI agent loop drives them.
 
-    Yields a sequence of events::
+    Yields::
 
-        {"kind": "text.delta",   "text": "..."}   # zero or more
-        {"kind": "result",       "text": "<full>", "model": ..., "tokens_in": ..., "tokens_out": ..., "duration_ms": ...}
+        {"kind": "text.delta",  "text": "..."}                       # per-token
+        {"kind": "tool.update", "callID": ..., "tool": ..., "status": "running" | "completed" | "error", ...}
+        {"kind": "result",      "text": "<full>", "model": ..., "duration_ms": ..., "tool_calls": int}
 
-    The terminal ``result`` event always fires (even on degenerate runs);
-    callers can break the loop after seeing it. Raises on hard errors so
-    the bridge can emit a structured error event.
+    Works for Gemini, Anthropic, OpenAI, OpenRouter — any model
+    ``llm_registry`` can build.
     """
     import time
 
-    # Pick a system prompt suited to the mode: grounded uses the strict
-    # "answer only from snippets" prompt; direct uses the LLM-only prompt.
-    # Without this split, direct-mode queries get refused ("no snippets
-    # were provided") because the grounded prompt insists on evidence.
-    system_prompt = _ASK_SYNTH_SYSTEM if grounding_block else _ASK_DIRECT_SYSTEM
+    from pydantic_ai.messages import (
+        FunctionToolCallEvent,
+        FunctionToolResultEvent,
+        PartDeltaEvent,
+        PartStartEvent,
+        TextPartDelta,
+        ToolCallPart,
+    )
+
+    # Pick the system prompt by mode. Three flavors:
+    #   - Agent (tools on + workspace)   → _ASK_AGENT_SYSTEM
+    #   - Grounded (snippets, no tools)  → _ASK_SYNTH_SYSTEM
+    #   - Direct  (no snippets, no tools)→ _ASK_DIRECT_SYSTEM
+    use_tools = bool(tools_enabled and workspace_root)
+    if use_tools:
+        system_prompt = _ASK_AGENT_SYSTEM
+    elif grounding_block:
+        system_prompt = _ASK_SYNTH_SYSTEM
+    else:
+        system_prompt = _ASK_DIRECT_SYSTEM
+
     agent, model_name = _build_agent(
         settings, system=system_prompt, model_id=model_id,
     )
-    prompt = build_grounded_prompt(grounding_block=grounding_block, query=query) if grounding_block else query
+
+    if use_tools:
+        from pathlib import Path as _Path
+
+        from .agent_tools import Workspace, attach_workspace_tools
+
+        attach_workspace_tools(agent, Workspace(root=_Path(workspace_root)))
+
+    prompt = (
+        build_grounded_prompt(grounding_block=grounding_block, query=query)
+        if grounding_block
+        else query
+    )
     t0 = time.monotonic()
     final_text = ""
-    toks_in: int | None = None
-    toks_out: int | None = None
-    # ``run_stream`` returns an async context manager that yields a
-    # StreamedRunResult. ``stream_text(delta=True)`` then yields just the
-    # incremental text — exactly what the UI's <StreamingAnswerBubble> wants.
-    async with agent.run_stream(prompt) as response:
-        async for delta in response.stream_text(delta=True):
-            if not delta:
-                continue
-            final_text += delta
-            yield {"kind": "text.delta", "text": delta}
-        # Usage is only populated after the stream completes.
-        try:
-            u = response.usage()
-            toks_in = getattr(u, "request_tokens", None) or getattr(u, "input_tokens", None)
-            toks_out = getattr(u, "response_tokens", None) or getattr(u, "output_tokens", None)
-        except Exception:  # noqa: BLE001
-            pass
+    tool_calls = 0
+    # Per-call bookkeeping so the running → completed pairs match up by id.
+    tool_starts: dict[str, dict[str, Any]] = {}
+
+    async for event in agent.run_stream_events(prompt):
+        if isinstance(event, PartStartEvent):
+            # New content part. Tool-call parts get a "running" event so
+            # the UI's chip appears immediately, before the tool runs.
+            # Text parts get their deltas via PartDeltaEvent (no emit here).
+            if isinstance(event.part, ToolCallPart):
+                call_id = event.part.tool_call_id or f"call_{tool_calls}"
+                tool = event.part.tool_name or "tool"
+                file_path = _extract_file_path(event.part.args)
+                tool_starts[call_id] = {
+                    "name": tool,
+                    "startMs": int((time.monotonic() - t0) * 1000),
+                    "file_path": file_path,
+                }
+                tool_calls += 1
+                yield {
+                    "kind": "tool.update",
+                    "callID": call_id,
+                    "tool": tool,
+                    "status": "running",
+                    **({"filePath": file_path} if file_path else {}),
+                }
+        elif isinstance(event, PartDeltaEvent):
+            if isinstance(event.delta, TextPartDelta) and event.delta.content_delta:
+                final_text += event.delta.content_delta
+                yield {"kind": "text.delta", "text": event.delta.content_delta}
+        elif isinstance(event, FunctionToolCallEvent):
+            # Backup path: some models emit FunctionToolCallEvent without
+            # a preceding PartStartEvent. Catch those here so the chip
+            # still renders.
+            call_id = event.part.tool_call_id or f"call_{tool_calls}"
+            if call_id not in tool_starts:
+                tool = event.part.tool_name or "tool"
+                file_path = _extract_file_path(event.part.args)
+                tool_starts[call_id] = {
+                    "name": tool,
+                    "startMs": int((time.monotonic() - t0) * 1000),
+                    "file_path": file_path,
+                }
+                tool_calls += 1
+                yield {
+                    "kind": "tool.update",
+                    "callID": call_id,
+                    "tool": tool,
+                    "status": "running",
+                    **({"filePath": file_path} if file_path else {}),
+                }
+        elif isinstance(event, FunctionToolResultEvent):
+            call_id = event.tool_call_id or ""
+            meta = tool_starts.get(call_id, {})
+            tool = meta.get("name") or "tool"
+            duration_ms = int((time.monotonic() - t0) * 1000) - meta.get("startMs", 0)
+            is_error = getattr(event.result, "is_error", False) is True
+            err_str: str | None = None
+            if is_error:
+                content = getattr(event.result, "content", "")
+                err_str = (content if isinstance(content, str) else str(content))[:200]
+            yield {
+                "kind": "tool.update",
+                "callID": call_id or f"call_{len(tool_starts)}",
+                "tool": tool,
+                "status": "error" if is_error else "completed",
+                "durationMs": max(0, duration_ms),
+                **({"filePath": meta["file_path"]} if meta.get("file_path") else {}),
+                **({"error": err_str} if err_str else {}),
+            }
+
     yield {
         "kind": "result",
         "text": final_text.strip(),
         "model": model_name,
-        "tokens_in": toks_in,
-        "tokens_out": toks_out,
+        "tokens_in": None,  # Best-effort: pydantic-AI v1 doesn't expose
+        "tokens_out": None,  # cumulative usage on run_stream_events.
         "duration_ms": int((time.monotonic() - t0) * 1000),
+        "tool_calls": tool_calls,
     }
+
+
+def _extract_file_path(args: Any) -> str | None:
+    """Best-effort extraction of a 'path' arg from a tool call. Used to
+    populate the UI chip's path label. None when no obvious path arg."""
+    if isinstance(args, str):
+        import json as _json
+        try:
+            args = _json.loads(args)
+        except Exception:  # noqa: BLE001
+            return None
+    if not isinstance(args, dict):
+        return None
+    for key in ("path", "file_path", "filePath", "filename"):
+        v = args.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
+# Agent-mode system prompt: tools available, must explore before answering.
+_ASK_AGENT_SYSTEM = """\
+You are a senior code Q&A assistant with read-only tools over the
+workspace: read_file, list_directory, glob, grep_search. Ground every
+claim in real code from these tools — don't rely on training knowledge.
+
+Mandatory workflow:
+1. **Explore before answering.** Call ``glob`` for path patterns or
+   ``grep_search`` for content. AT LEAST one tool call is required —
+   no answers from memory.
+2. **Read 2-3 files.** After locating candidates, ``read_file`` the
+   most-relevant ones to confirm what's actually there.
+3. **Cite paths + line numbers** in your final answer
+   (``path/to/file.py:120-145``).
+4. **Be concise.** Engineer-readable bullets, real evidence, brief whys.
+5. **Never punt.** If the question is short or vague (e.g. "what is
+   roles", "how does upload work"), interpret it as a request to find
+   that concept. Do not ask the user to clarify — explore.
+"""
 
 
 async def synthesize_decompose_draft(
