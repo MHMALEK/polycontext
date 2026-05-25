@@ -613,6 +613,8 @@ export async function* streamOpencode(
   let sessionID = (body.sessionID || "").trim() || undefined;
   let client: OpencodeClient | undefined;
   let cwd: string | undefined;
+  // Polling-fallback flag — hoisted so catch/finally can set it.
+  let pollDone = false;
   let stop: (() => void) | undefined;
 
   try {
@@ -784,6 +786,130 @@ export async function* streamOpencode(
       notify();
     };
 
+    // Poll session.messages() while the prompt is in-flight as a FALLBACK
+    // for OpenCode server versions that don't broadcast session.next.*
+    // events on /event (e.g. v1.14.50 with the OpenRouter provider). Diff
+    // against last-seen tool callIDs and synthesize tool.update events for
+    // newly-discovered tool calls. Without this poll, long opencode runs
+    // sit silent for 30+s and the UI has no signal what the agent is doing.
+    const seenToolCallIDs = new Set<string>();
+    let lastAssistantTextLen = 0;
+    const pollPump = (async () => {
+      while (!pollDone) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (pollDone || signal?.aborted || !client || !sessionID) break;
+        try {
+          const messagesRes = await client.session.messages({ sessionID, directory: cwd });
+          const list = Array.isArray(messagesRes?.data) ? messagesRes.data : [];
+          // Walk every part of every message; emit deltas for things we
+          // haven't seen yet. Only the current assistant message matters
+          // for text-delta computation, but ALL messages can contain tool
+          // parts (the agent's multi-turn tool loop is split across them).
+          let latestAssistantText = "";
+          for (const msg of list) {
+            // Only treat ASSISTANT messages as a source of assistant text
+            // and tool calls. User messages contain the prompt itself plus
+            // tool-result blocks which we don't want to echo as deltas.
+            // OpenCode marks the role on either ``message.role`` or
+            // ``message.info.role`` depending on SDK version.
+            const role =
+              (msg as { role?: string; info?: { role?: string } }).role ||
+              (msg as { info?: { role?: string } }).info?.role ||
+              "";
+            const isAssistant = role === "assistant";
+            const parts = Array.isArray((msg as { parts?: unknown[] }).parts)
+              ? (msg as { parts: unknown[] }).parts
+              : [];
+            for (const p of parts) {
+              if (!p || typeof p !== "object") continue;
+              const tp = p as {
+                type?: string;
+                tool?: string;
+                callID?: string;
+                state?: {
+                  status?: string;
+                  input?: Record<string, unknown>;
+                  time?: { start?: number; end?: number };
+                };
+                text?: string;
+              };
+              if (tp.type === "tool" && tp.callID) {
+                const callID = tp.callID;
+                const tool = tp.tool || "tool";
+                const filePath =
+                  typeof tp.state?.input?.filePath === "string"
+                    ? (tp.state.input.filePath as string)
+                    : undefined;
+                const st = tp.state?.status;
+                const runKey = `${callID}:run`;
+                const doneKey = `${callID}:done`;
+                if ((st === "running" || st === "pending") && !seenToolCallIDs.has(runKey)) {
+                  seenToolCallIDs.add(runKey);
+                  toolStartByCall.set(callID, Date.now());
+                  toolNameByCall.set(callID, tool);
+                  channel.push({
+                    kind: "tool.update",
+                    callID,
+                    tool,
+                    status: "running",
+                    ...(filePath ? { filePath } : {}),
+                  });
+                } else if (
+                  (st === "completed" || st === "error") &&
+                  !seenToolCallIDs.has(doneKey)
+                ) {
+                  seenToolCallIDs.add(doneKey);
+                  // Backfill a synthetic "running" if we missed it (the
+                  // poll interval can be larger than the tool's runtime).
+                  if (!seenToolCallIDs.has(runKey)) {
+                    seenToolCallIDs.add(runKey);
+                    toolStartByCall.set(callID, Date.now());
+                    toolNameByCall.set(callID, tool);
+                    channel.push({
+                      kind: "tool.update",
+                      callID,
+                      tool,
+                      status: "running",
+                      ...(filePath ? { filePath } : {}),
+                    });
+                  }
+                  const start = toolStartByCall.get(callID);
+                  const durationMs =
+                    tp.state?.time?.end && tp.state.time.start
+                      ? Math.max(0, Math.round(tp.state.time.end - tp.state.time.start))
+                      : typeof start === "number"
+                        ? Math.max(0, Date.now() - start)
+                        : undefined;
+                  channel.push({
+                    kind: "tool.update",
+                    callID,
+                    tool,
+                    status: st === "error" ? "error" : "completed",
+                    ...(filePath ? { filePath } : {}),
+                    ...(typeof durationMs === "number" ? { durationMs } : {}),
+                  });
+                }
+              } else if (isAssistant && tp.type === "text" && typeof tp.text === "string") {
+                // Assistant-only: accumulate the latest text so we can
+                // emit a delta when it grows between polls. Skipping
+                // user messages here prevents the prompt itself from
+                // being echoed back as a "text.delta".
+                latestAssistantText = tp.text;
+              }
+            }
+          }
+          if (latestAssistantText.length > lastAssistantTextLen) {
+            const delta = latestAssistantText.slice(lastAssistantTextLen);
+            lastAssistantTextLen = latestAssistantText.length;
+            if (delta) channel.push({ kind: "text.delta", text: delta });
+          }
+          notify();
+        } catch {
+          // Best-effort; transient API hiccups shouldn't kill the stream.
+        }
+      }
+    })();
+
     const agentName = (body.agent || "build").trim();
     const tools = toolsMask(body.toolsEnabled);
     const timeoutMs = Math.max(1, (body.timeoutSec ?? 600) * 1000);
@@ -932,12 +1058,18 @@ export async function* streamOpencode(
       };
     }
 
-    await eventPump.catch(() => undefined);
+    // Stop the message-polling fallback now that the prompt has resolved
+    // (or errored). Without this the loop would keep firing every 1.5s
+    // until the function returns and the timer object gets GC'd.
+    pollDone = true;
+    await Promise.all([eventPump.catch(() => undefined), pollPump.catch(() => undefined)]);
   } catch (err) {
+    pollDone = true;
     const e = err as Error;
     yield { kind: "error", error: `${e?.name || "Error"}: ${e?.message || String(err)}` };
   } finally {
     stop?.();
+    pollDone = true;
     if (createdSessionID && !body.keepSession) {
       await client?.session.delete({ sessionID: createdSessionID, directory: cwd }).catch(() => undefined);
     }
