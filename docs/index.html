@@ -540,13 +540,13 @@ main > h1 {
 </ol>
 <p>Building this six months ago would have meant six SDK-specific streamers (we did, briefly — then collapsed them to one). Building it six months from now means competing with everyone who recognized the same window.</p>
 <hr>
-<h2>The Ask</h2>
-<p>Polycontext is working today. Backend + agent-node + Web UI all run from a single <code>make dev-all</code>. The runstore has hundreds of real runs. The bake-off has been iterated against weekly.</p>
-<p>What it needs:
-- <strong>A team to deploy it on</strong> — your engineers asking real questions about your real code.
-- <strong>Eval cases</strong> — 100 labeled questions from your domain would dramatically improve the cheap-model tuning.
-- <strong>A model budget</strong> — even a few thousand OpenRouter dollars unlocks rapid iteration; self-hosted inference unlocks zero-marginal-cost.</p>
-<p>We&rsquo;re not selling vapor. We&rsquo;re selling working code with measured numbers and an architecture that ports to your infra. Ship a pilot in two weeks, evaluate in four, decide in six.</p>
+<h2>Where It Stands</h2>
+<p>Polycontext runs today. Backend + agent-node + Web UI all come up from a single <code>make dev-all</code>. The runstore holds hundreds of real runs, and the bake-off has been iterated against a labeled gold set over multiple weeks. Nothing here is a mockup — every number in this document came out of the harness.</p>
+<p>What I&rsquo;d build next, given a real team and real questions against real code:
+- <strong>Deploy against a live codebase</strong> — the gap between a labeled eval and a team&rsquo;s actual day-to-day questions is where the interesting tuning lives.
+- <strong>Grow the eval set</strong> — 41 labeled <code>expected_files</code> across 15 cases is enough to catch regressions; ~100 domain questions would make cheap-model comparisons confident rather than directional.
+- <strong>Close the roadmap quick-wins</strong> — universal-stream token accounting, per-tool abort, and a few domain-specific workspace tools (one decorator each).</p>
+<p>The point of this document isn&rsquo;t a sale — it&rsquo;s to show the engineering: a framework-agnostic adapter contract proven across two agent frameworks, measured retrieval iteration instead of vibes, and the willingness to delete 2,000 lines when one abstraction beats six. The architecture ports to your infra; the code is on GitHub; the numbers are reproducible.</p>
 <hr>
 <h2>Contact</h2>
 <p><strong>Project repository:</strong> <a href="https://github.com/MHMALEK/polycontext">polycontext</a>

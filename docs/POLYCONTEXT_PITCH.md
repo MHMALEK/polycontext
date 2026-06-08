@@ -341,16 +341,16 @@ Building this six months ago would have meant six SDK-specific streamers (we did
 
 ---
 
-## The Ask
+## Where It Stands
 
-Polycontext is working today. Backend + agent-node + Web UI all run from a single `make dev-all`. The runstore has hundreds of real runs. The bake-off has been iterated against weekly.
+Polycontext runs today. Backend + agent-node + Web UI all come up from a single `make dev-all`. The runstore holds hundreds of real runs, and the bake-off has been iterated against a labeled gold set over multiple weeks. Nothing here is a mockup — every number in this document came out of the harness.
 
-What it needs:
-- **A team to deploy it on** — your engineers asking real questions about your real code.
-- **Eval cases** — 100 labeled questions from your domain would dramatically improve the cheap-model tuning.
-- **A model budget** — even a few thousand OpenRouter dollars unlocks rapid iteration; self-hosted inference unlocks zero-marginal-cost.
+What I'd build next, given a real team and real questions against real code:
+- **Deploy against a live codebase** — the gap between a labeled eval and a team's actual day-to-day questions is where the interesting tuning lives.
+- **Grow the eval set** — 41 labeled `expected_files` across 15 cases is enough to catch regressions; ~100 domain questions would make cheap-model comparisons confident rather than directional.
+- **Close the roadmap quick-wins** — universal-stream token accounting, per-tool abort, and a few domain-specific workspace tools (one decorator each).
 
-We're not selling vapor. We're selling working code with measured numbers and an architecture that ports to your infra. Ship a pilot in two weeks, evaluate in four, decide in six.
+The point of this document isn't a sale — it's to show the engineering: a framework-agnostic adapter contract proven across two agent frameworks, measured retrieval iteration instead of vibes, and the willingness to delete 2,000 lines when one abstraction beats six. The architecture ports to your infra; the code is on GitHub; the numbers are reproducible.
 
 ---
 
