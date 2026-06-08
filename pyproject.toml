@@ -35,6 +35,17 @@ dev = [
 # The adapter set talks to ``services/agent-node`` for cursor, cline_sdk, gemini, opencode,
 # optional extras remain empty for ``.[adapters]``.
 adapters = []
+# In-process LangChain agent adapter (adapters/_langchain.py). Pure-Python, no
+# agent-node round-trip — uses langchain's prebuilt create_agent + init_chat_model
+# over the shared workspace tools. Provider packages cover the four keys the
+# project already configures (Gemini, Anthropic, OpenAI, OpenRouter-via-OpenAI).
+langchain = [
+    "langchain>=1.0",
+    "langgraph>=1.0",
+    "langchain-google-genai>=3.0",
+    "langchain-anthropic>=1.0",
+    "langchain-openai>=1.0",
+]
 
 [build-system]
 requires = ["hatchling"]

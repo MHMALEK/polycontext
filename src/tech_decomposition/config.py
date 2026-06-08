@@ -107,6 +107,20 @@ class Settings(BaseSettings):
     opencode_sdk_base_url: str = ""
     opencode_sdk_structured_retry_count: int = 2
 
+    # ----- LangChain adapter (adapters/_langchain.py) -------------------------
+    # In-process agent built on langchain's create_agent + init_chat_model.
+    # Model spec is the project-standard ``provider:model`` colon form
+    # (e.g. ``gemini:gemini-2.5-flash``, ``openrouter:deepseek/deepseek-v3.2``,
+    # ``anthropic:claude-sonnet-4-5``). Falls back to this default when a
+    # request omits ``model``.
+    langchain_model: str = "gemini:gemini-2.5-flash"
+    # Empty ⇒ reuse ``langchain_model`` for decompose.
+    langchain_decompose_model: str = ""
+    langchain_timeout_seconds: float = 600.0
+    # Upper bound on agent tool-use rounds. create_agent's recursion limit is
+    # derived as roughly ``2 * rounds + 1`` (one LLM step + one tool step per round).
+    langchain_max_tool_rounds: int = 8
+
     # Serena MCP server (https://github.com/oraios/serena).
     # When set, ``core/grounding.py`` will call Serena.search_for_pattern in parallel with
     # Sourcebot's /api/search and merge structured semantic-search results into the
