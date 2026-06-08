@@ -29,6 +29,12 @@ def test_cursor_is_loadable():
     assert {"ask", "decompose", "implement"}.issubset(a.capabilities)
 
 
+def test_langchain_is_loadable():
+    a = get_adapter("langchain", _settings())
+    assert a.name == "langchain"
+    assert {"ask", "decompose"}.issubset(a.capabilities)
+
+
 def test_list_adapters_reports_every_registered_name():
     items = list_adapters(_settings())
     all_names = {i["name"] for i in items}

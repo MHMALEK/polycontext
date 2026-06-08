@@ -118,6 +118,20 @@ _MODEL_CATALOG: dict[str, list[dict]] = {
         {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "google"},
         {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "google"},
     ],
+    # In-process LangChain agent. Uses the same ``provider:model`` colon spec as
+    # the pipeline adapter (routed through init_chat_model, not llm_registry).
+    "langchain": [
+        {"id": "gemini:gemini-2.5-flash", "name": "Gemini 2.5 Flash (default)", "provider": "gemini"},
+        {"id": "gemini:gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "gemini"},
+        {"id": "anthropic:claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "provider": "anthropic"},
+        {"id": "openai:gpt-4.1", "name": "GPT-4.1", "provider": "openai"},
+        {
+            "id": "openrouter:deepseek/deepseek-v3.2",
+            "name": "DeepSeek V3.2 (OpenRouter)",
+            "provider": "openrouter",
+            "note": "Cheap agentic; routes via OpenRouter — not code-privacy compliant.",
+        },
+    ],
     "cursor": [
         {"id": "composer-2", "name": "Composer-2", "provider": "cursor"},
     ],
