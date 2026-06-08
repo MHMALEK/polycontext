@@ -29,6 +29,7 @@ const ADAPTER_PRIORITY: Record<string, number> = {
   sourcebot: 4,
   cline_sdk: 5,
   openai_agents: 6,
+  langchain: 7,
 };
 
 const COMPLEXITY_CLS: Record<Subtask["estimated_complexity"], string> = {

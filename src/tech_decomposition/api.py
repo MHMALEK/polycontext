@@ -551,6 +551,7 @@ def _resolve_synthesis_model(inp: AdapterAskInput, adapter_name: str, settings) 
             "claude_code": settings.claude_code_model if hasattr(settings, "claude_code_model") else "claude-sonnet-4-5",
             "openai_agents": settings.openai_agents_sdk_model if hasattr(settings, "openai_agents_sdk_model") else "gpt-4o",
             "cursor": settings.cursor_sdk_model if hasattr(settings, "cursor_sdk_model") else "composer-2",
+            "langchain": settings.langchain_model if hasattr(settings, "langchain_model") else "gemini:gemini-2.5-flash",
         }
         raw = (defaults.get(adapter_name) or settings.pipeline_synthesis_model or "gemini-2.5-flash").strip()
 

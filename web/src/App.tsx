@@ -106,9 +106,10 @@ const ADAPTER_SUPPORTS_TOOLS_TOGGLE: Record<string, boolean> = {
   pipeline: true,
   gemini: true,  // wired via agent-node — toolsEnabled=false routes to
                  // the no-tools generateContent path (no AFC, no CallableTool).
-  // cursor, claude_code, cline_sdk, openai_agents, sourcebot —
-  // still treat tools_enabled as advisory. Same threading pattern would
-  // work for them; not yet wired.
+  // cursor, claude_code, cline_sdk, openai_agents, sourcebot, langchain —
+  // still treat tools_enabled as advisory. (langchain wraps the explore
+  // directive on/off with the flag but never hard-masks its tools, so the
+  // model can still call them.) Same threading pattern would work; not yet wired.
 };
 
 /**
