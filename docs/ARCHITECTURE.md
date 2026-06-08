@@ -64,7 +64,7 @@ These four words mean very specific things. Use them precisely; the rest of the 
 
 A Python class that knows how to drive one external code-AI service end-to-end. Implements `ask` and/or `decompose`. Lives under [`src/tech_decomposition/adapters/`](../src/tech_decomposition/adapters/). Registered by name in [`registry.py`](../src/tech_decomposition/adapters/registry.py).
 
-There are 8 adapters today:
+There are 9 adapters today:
 
 | Adapter | Drives | Capabilities |
 |---|---|---|
@@ -76,10 +76,11 @@ There are 8 adapters today:
 | `openai_agents` | OpenAI Agents SDK via agent-node | ask, decompose |
 | `sourcebot` | Sourcebot `/api/chat/blocking` (in-process Python) | ask, decompose |
 | `pipeline` | Our custom tiered RAG flow (in-process Python) | ask, decompose |
+| `langchain` | LangChain `create_agent` + `init_chat_model` (in-process Python) | ask, decompose |
 
 ### SDK
 
-The vendor library that an adapter calls. OpenCode's `@opencode-ai/sdk`, Anthropic's `@anthropic-ai/claude-agent-sdk`, etc. Most run inside `agent-node` (the Node service) because they're Node-only packages; `pipeline` and `sourcebot` are pure-Python.
+The vendor library that an adapter calls. OpenCode's `@opencode-ai/sdk`, Anthropic's `@anthropic-ai/claude-agent-sdk`, etc. Most run inside `agent-node` (the Node service) because they're Node-only packages; `pipeline`, `sourcebot`, and `langchain` are pure-Python (the `langchain` agent loop runs entirely in the FastAPI process — it's a reference implementation showing the adapter contract is framework-agnostic).
 
 In UI copy we sometimes use "SDK" interchangeably with "adapter" because users pick an adapter and what they're really doing is picking which SDK runs their query.
 
@@ -274,6 +275,7 @@ The Ask form's **Model** picker writes a per-request value into `AdapterAskInput
 
 - `opencode`: `provider/model` slash form (e.g. `openrouter/deepseek/deepseek-v3.2`, `anthropic/claude-sonnet-4-20250514`).
 - `pipeline`: `provider:model` colon form (e.g. `openrouter:deepseek/deepseek-v3.2`, `gemini:gemini-2.5-pro`).
+- `langchain`: `provider:model` colon form, same as `pipeline` (resolved through `init_chat_model`; providers `gemini`/`anthropic`/`openai`/`openrouter`/`custom`).
 - `gemini`: bare Gemini id (`gemini-2.5-pro`, `gemini-2.5-flash`).
 
 When the user picks a per-request model, the adapter also re-resolves the credential to use:

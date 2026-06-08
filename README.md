@@ -206,6 +206,9 @@ Registered in `src/tech_decomposition/adapters/registry.py`. Most SDK-backed ada
 | **`opencode`** | [`@opencode-ai/sdk`](https://opencode.ai/) | Node | ✅ | ✅ | **per-request ✓** |
 | **`openai_agents`** | [`@openai/agents`](https://github.com/openai/openai-agents-js) | Node | ✅ | ✅ | per-request* |
 | **`claude_code`** | [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) | Node | ✅ | ✅ | per-request | host-only — Docker arm64-musl native binary doesn't launch |
+| **`langchain`** | [`langchain`](https://docs.langchain.com/oss/python) `create_agent` + `init_chat_model` | **Python (in-process)** | ✅ | ✅ | — |
+
+The `langchain` adapter is a pure-Python reference implementation (no agent-node round-trip): it wires the shared read-only workspace tools (`read_file`, `list_directory`, `glob`, `grep_search` from [`core/agent_tools.py`](src/tech_decomposition/core/agent_tools.py)) into LangChain's prebuilt `create_agent` and selects the model with `init_chat_model` from the same `provider:model` spec the pipeline uses (`gemini:`, `anthropic:`, `openai:`, `openrouter:`). Install with `pip install -e '.[langchain]'`. It exists mainly to show the adapter contract is framework-agnostic — pydantic-ai and LangChain are interchangeable behind the same `ask`/`_decompose_raw_text` surface.
 
 \* Wired but the underlying model (Composer-2 / gpt-4o-mini) doesn't call MCP tools in measurements so far. Cline (Gemini Pro driving) and OpenCode (Gemini Pro driving) do call them and benefit.
 
