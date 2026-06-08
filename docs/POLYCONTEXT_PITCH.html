@@ -192,6 +192,7 @@ main > h1 {
 <li><strong>Bring any model.</strong> OpenAI, Anthropic, Google, plus 350+ open-source models via OpenRouter (DeepSeek V3.2, Qwen3, GLM-4.6, Llama, etc.). Single config swap.</li>
 <li><strong>Or bring no provider at all.</strong> Drop in a self-hosted vLLM, Ollama, or LiteLLM proxy and run the whole stack inside your VPC. No code leaves.</li>
 <li><strong>Measured, not marketed.</strong> We hit 0.82 gold accuracy at ~$0.002 per query with cheap OS models — 94% of Gemini Pro&rsquo;s quality at 6.7% of its cost.</li>
+<li><strong>One contract, nine backends, two agent frameworks.</strong> Every code-AI backend implements the same two-method adapter contract. Seven wrap vendor SDKs; two run in-process on <em>different</em> Python agent frameworks (pydantic-AI and LangChain) — proof the abstraction is real, not aspirational.</li>
 <li><strong>Rich answers, not raw markdown.</strong> Every answer goes through a structured re-shaper: 1-2 sentence summary, confidence pill, clickable citations, caveats, suggested next steps.</li>
 <li><strong>Live streaming UX.</strong> Token-by-token text + live tool call chips + abort button. Same look as Cursor / Claude Code, but you own the back-end.</li>
 </ul>
@@ -279,6 +280,19 @@ main > h1 {
 <h3>8. Conversation memory</h3>
 <p>Chats are real threads. Pick a past conversation from the sidebar and continue it — prior turns get folded into context. OpenCode sessions are reused across thread turns for prompt-cache warmth and provider-side memory.</p>
 <hr>
+<h2>Engineering Highlights</h2>
+<p>The parts of this codebase I&rsquo;m proudest of. Each is a deliberate design decision with a measurable payoff — not a feature checkbox. This is the section to read if you&rsquo;re evaluating <em>how</em> it was built, not just <em>what</em> it does.</p>
+<h3>One adapter contract, nine backends, two agent frameworks</h3>
+<p>Every code-AI backend implements the same two-method contract — <code>ask</code> and <code>_decompose_raw_text</code>, defined in <a href="../src/tech_decomposition/adapters/base.py"><code>adapters/base.py</code></a>. That is the <em>entire</em> surface an adapter owes the system. Schema validation, answer-shaping, telemetry, grounding, and streaming all live <strong>outside</strong> the adapter, so adding a backend is a focused exercise rather than a rewrite.</p>
+<p>How focused? The contract is provably framework-agnostic. Of the nine adapters, seven wrap vendor SDKs through a Node sidecar — but <strong>two run entirely in-process on different Python agent frameworks</strong>: one on <strong>pydantic-AI</strong> (the tiered-RAG <code>pipeline</code>) and one on <strong>LangChain</strong> (<code>create_agent</code> + <code>init_chat_model</code>). Same contract, same workspace tools, same rich-card output downstream. Swap the framework and nothing else in the system notices.</p>
+<p>The LangChain adapter exists specifically to demonstrate this: ~330 lines that reuse the exact <code>read_file</code> / <code>grep</code> / <code>glob</code> / <code>list_directory</code> tools from <a href="../src/tech_decomposition/core/agent_tools.py"><code>core/agent_tools.py</code></a> and the project-standard <code>provider:model</code> spec parser — no duplicated tool logic, no special-casing elsewhere. A new backend is a single file plus two registry lines; the UI discovers it automatically over <code>GET /v1/adapters</code>.</p>
+<h3>Six SDK streamers collapsed into one</h3>
+<p>The first cut had six per-SDK streaming translators (OpenCode, Gemini, Claude Code, OpenAI Agents, Cursor, Cline) — roughly 2,000 lines turning each vendor&rsquo;s bespoke event taxonomy into our SSE shape. I replaced all six with a single pydantic-AI pipeline that registers our own tools and emits one normalized event union for every provider. OpenCode keeps a native path because it genuinely owns features the universal layer can&rsquo;t model (multi-provider routing, session continuity, MCP servers). Knowing <em>which</em> abstraction to keep and which to collapse — and being willing to delete your own code — is the actual skill on display here.</p>
+<h3>Schema enforcement in exactly one place</h3>
+<p>Decompose output must be a valid <code>Decomposition</code>. Rather than make every adapter parse JSON (and risk a 502 on malformed model output), adapters hand back <strong>raw text</strong> and a shared structurer (<a href="../src/tech_decomposition/core/decomposition_structurer.py"><code>core/decomposition_structurer.py</code></a>) runs the extract → validate → LLM-repair pass once. A chatty model that wraps its JSON in prose or drops the outer object can&rsquo;t break the contract — the repair path catches it, and the failure is observable in telemetry (<code>structurer_used_llm_repair</code>).</p>
+<h3>Retrieval tuned against a labeled eval, not vibes</h3>
+<p>Eight measured retrieval wins moved recall 0.125 → 0.30 — each one A/B&rsquo;d against a hand-labeled gold set, each one kept or reverted based on whether it actually moved the number. The single biggest win was finding a <strong>double-grounding bug</strong> (the API and the adapter were both grounding the already-grounded query, poisoning search terms with test-fixture tokens) — not adding a fancier model. The eval harness in <a href="../eval/"><code>eval/</code></a> with 41 labeled <code>expected_files</code> across 15 cases is what makes that kind of disciplined iteration possible.</p>
+<hr>
 <h2>Why It Matters</h2>
 <h3>Cost / quality on the Pareto frontier</h3>
 <table>
@@ -319,7 +333,7 @@ main > h1 {
 </table>
 <p>Frontier models still win on absolute quality. But for the bulk of grounded code Q&amp;A — &ldquo;where does X live&rdquo;, &ldquo;how does Y work&rdquo;, &ldquo;what are the roles&rdquo; — cheap open-source models grounded properly answer at near-frontier quality for pennies. Polycontext makes that operational.</p>
 <h3>One UI, every model</h3>
-<p>Pick OpenCode, Gemini, Claude Code, OpenAI Agents, Cursor, Cline, or our internal RAG pipeline from a dropdown. Pick a model. Pick a mode. Ask. Same UX, same telemetry, same rich card. Easy to compare; easy to migrate when a better model lands next month.</p>
+<p>Pick OpenCode, Gemini, Claude Code, OpenAI Agents, Cursor, Cline, our internal RAG pipeline, or an in-process LangChain agent from a dropdown. Pick a model. Pick a mode. Ask. Same UX, same telemetry, same rich card. Easy to compare; easy to migrate when a better model lands next month.</p>
 <h3>Real abort + back-pressure</h3>
 <p>If a run goes off the rails, hit Stop. We cancel server-side AND tear down the SSE — many products only do one.</p>
 <h3>Auditable, not magical</h3>
@@ -366,9 +380,10 @@ main > h1 {
 <h2>Tech Stack</h2>
 <h3>Backend</h3>
 <ul>
-<li><strong>Python 3.13</strong> — modern asyncio, structural pattern matching, native typing</li>
+<li><strong>Python 3.11+</strong> — modern asyncio, structural pattern matching, native typing</li>
 <li><strong>FastAPI + uvicorn</strong> — async HTTP, SSE streaming, websocket-ready</li>
-<li><strong>pydantic-AI</strong> — typed LLM SDK with native tool registration, structured outputs, streaming events</li>
+<li><strong>pydantic-AI</strong> — typed LLM SDK with native tool registration, structured outputs, streaming events; drives the universal stream and the tiered-RAG <code>pipeline</code> adapter</li>
+<li><strong>LangChain</strong> (<code>create_agent</code> + <code>init_chat_model</code>) — a second, fully in-process agent framework behind the same adapter contract, proving the abstraction is framework-agnostic</li>
 <li><strong>pydantic v2</strong> — schema-validated configs, runs, answers, decompositions</li>
 <li><strong>httpx</strong> — async HTTP with chunked-encoding streaming support</li>
 <li><strong>SQLite (runstore)</strong> — every run persisted with full telemetry; Postgres-compatible schema for scale-out</li>
@@ -419,6 +434,9 @@ main > h1 {
 │   /v1/adapters/opencode/stream ──► OpenCode SDK native           │
 │         │            (multi-provider routing, session model)     │
 │         │                                                        │
+│   /v1/adapters/{pipeline,langchain}/* ──► in-process agents      │
+│         │            (pydantic-AI / LangChain — no Node sidecar)  │
+│         │                                                        │
 │         ▼                                                        │
 │   ┌──────────────────┐    ┌─────────────────┐                    │
 │   │  Answer shaper   │    │ Hybrid retrieve │                    │
@@ -450,12 +468,12 @@ main > h1 {
 </code></pre>
 <hr>
 <h2>What We Measured</h2>
-<p>These aren&rsquo;t aspirational numbers — they were captured by the bake-off harness in <code>tests/eval/</code> against a labeled gold-truth set across multiple weeks of iteration.</p>
+<p>These aren&rsquo;t aspirational numbers — they were captured by the bake-off harness in <a href="../eval/"><code>eval/</code></a> against a labeled gold-truth set across multiple weeks of iteration.</p>
 <ul>
 <li><strong>Retrieval recall improvement:</strong> 0.125 → 0.30 over 7 iterations (per-repo cap + window expansion + Serena symbol-graph fan-out)</li>
 <li><strong>Cheap-model accuracy:</strong> DeepSeek V3.2 hit 0.82 gold accuracy. Qwen3-235B hit 0.79. Both at &lt;$0.003/query.</li>
 <li><strong>Cost reduction:</strong> moving from Gemini Pro to grounded DeepSeek cut per-query cost from $0.030 → $0.002 (15x) with a 6% quality drop.</li>
-<li><strong>Eval cases labeled:</strong> 14 cases across our test repo with <code>expected_files</code>, <code>gold_text</code>, and difficulty tier.</li>
+<li><strong>Eval cases labeled:</strong> 41 <code>expected_files</code> across 15 cases in our test repos, each with <code>gold_text</code> and a difficulty tier — enough to make retrieval recall scorable per-case instead of vibes-based.</li>
 </ul>
 <hr>
 <h2>Honest Roadmap</h2>
@@ -533,7 +551,7 @@ main > h1 {
 <h2>Contact</h2>
 <p><strong>Project repository:</strong> <a href="https://github.com/MHMALEK/polycontext">polycontext</a>
 <strong>Architecture docs:</strong> <code>docs/ARCHITECTURE.md</code>
-<strong>Eval harness:</strong> <code>tests/eval/</code>
+<strong>Eval harness:</strong> <code>eval/</code>
 <strong>Bake-off API:</strong> <code>POST /v1/bakeoff/ask</code></p>
 <p><em>Polycontext was built and operated end-to-end by Mohammad-Hossein Malek. Tech lead conversations welcome.</em></p>
 </main>

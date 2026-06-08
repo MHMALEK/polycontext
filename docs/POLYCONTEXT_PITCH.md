@@ -12,6 +12,7 @@ Polycontext is a working, deployed AI code assistant for teams that have outgrow
 - **Bring any model.** OpenAI, Anthropic, Google, plus 350+ open-source models via OpenRouter (DeepSeek V3.2, Qwen3, GLM-4.6, Llama, etc.). Single config swap.
 - **Or bring no provider at all.** Drop in a self-hosted vLLM, Ollama, or LiteLLM proxy and run the whole stack inside your VPC. No code leaves.
 - **Measured, not marketed.** We hit 0.82 gold accuracy at ~$0.002 per query with cheap OS models — 94% of Gemini Pro's quality at 6.7% of its cost.
+- **One contract, nine backends, two agent frameworks.** Every code-AI backend implements the same two-method adapter contract. Seven wrap vendor SDKs; two run in-process on *different* Python agent frameworks (pydantic-AI and LangChain) — proof the abstraction is real, not aspirational.
 - **Rich answers, not raw markdown.** Every answer goes through a structured re-shaper: 1-2 sentence summary, confidence pill, clickable citations, caveats, suggested next steps.
 - **Live streaming UX.** Token-by-token text + live tool call chips + abort button. Same look as Cursor / Claude Code, but you own the back-end.
 
@@ -88,6 +89,32 @@ Chats are real threads. Pick a past conversation from the sidebar and continue i
 
 ---
 
+## Engineering Highlights
+
+The parts of this codebase I'm proudest of. Each is a deliberate design decision with a measurable payoff — not a feature checkbox. This is the section to read if you're evaluating *how* it was built, not just *what* it does.
+
+### One adapter contract, nine backends, two agent frameworks
+
+Every code-AI backend implements the same two-method contract — `ask` and `_decompose_raw_text`, defined in [`adapters/base.py`](../src/tech_decomposition/adapters/base.py). That is the *entire* surface an adapter owes the system. Schema validation, answer-shaping, telemetry, grounding, and streaming all live **outside** the adapter, so adding a backend is a focused exercise rather than a rewrite.
+
+How focused? The contract is provably framework-agnostic. Of the nine adapters, seven wrap vendor SDKs through a Node sidecar — but **two run entirely in-process on different Python agent frameworks**: one on **pydantic-AI** (the tiered-RAG `pipeline`) and one on **LangChain** (`create_agent` + `init_chat_model`). Same contract, same workspace tools, same rich-card output downstream. Swap the framework and nothing else in the system notices.
+
+The LangChain adapter exists specifically to demonstrate this: ~330 lines that reuse the exact `read_file` / `grep` / `glob` / `list_directory` tools from [`core/agent_tools.py`](../src/tech_decomposition/core/agent_tools.py) and the project-standard `provider:model` spec parser — no duplicated tool logic, no special-casing elsewhere. A new backend is a single file plus two registry lines; the UI discovers it automatically over `GET /v1/adapters`.
+
+### Six SDK streamers collapsed into one
+
+The first cut had six per-SDK streaming translators (OpenCode, Gemini, Claude Code, OpenAI Agents, Cursor, Cline) — roughly 2,000 lines turning each vendor's bespoke event taxonomy into our SSE shape. I replaced all six with a single pydantic-AI pipeline that registers our own tools and emits one normalized event union for every provider. OpenCode keeps a native path because it genuinely owns features the universal layer can't model (multi-provider routing, session continuity, MCP servers). Knowing *which* abstraction to keep and which to collapse — and being willing to delete your own code — is the actual skill on display here.
+
+### Schema enforcement in exactly one place
+
+Decompose output must be a valid `Decomposition`. Rather than make every adapter parse JSON (and risk a 502 on malformed model output), adapters hand back **raw text** and a shared structurer ([`core/decomposition_structurer.py`](../src/tech_decomposition/core/decomposition_structurer.py)) runs the extract → validate → LLM-repair pass once. A chatty model that wraps its JSON in prose or drops the outer object can't break the contract — the repair path catches it, and the failure is observable in telemetry (`structurer_used_llm_repair`).
+
+### Retrieval tuned against a labeled eval, not vibes
+
+Eight measured retrieval wins moved recall 0.125 → 0.30 — each one A/B'd against a hand-labeled gold set, each one kept or reverted based on whether it actually moved the number. The single biggest win was finding a **double-grounding bug** (the API and the adapter were both grounding the already-grounded query, poisoning search terms with test-fixture tokens) — not adding a fancier model. The eval harness in [`eval/`](../eval/) with 41 labeled `expected_files` across 15 cases is what makes that kind of disciplined iteration possible.
+
+---
+
 ## Why It Matters
 
 ### Cost / quality on the Pareto frontier
@@ -103,7 +130,7 @@ Frontier models still win on absolute quality. But for the bulk of grounded code
 
 ### One UI, every model
 
-Pick OpenCode, Gemini, Claude Code, OpenAI Agents, Cursor, Cline, or our internal RAG pipeline from a dropdown. Pick a model. Pick a mode. Ask. Same UX, same telemetry, same rich card. Easy to compare; easy to migrate when a better model lands next month.
+Pick OpenCode, Gemini, Claude Code, OpenAI Agents, Cursor, Cline, our internal RAG pipeline, or an in-process LangChain agent from a dropdown. Pick a model. Pick a mode. Ask. Same UX, same telemetry, same rich card. Easy to compare; easy to migrate when a better model lands next month.
 
 ### Real abort + back-pressure
 
@@ -148,9 +175,10 @@ A single H100 node hosts the mid tier comfortably. Two H100s host the top tier. 
 ## Tech Stack
 
 ### Backend
-- **Python 3.13** — modern asyncio, structural pattern matching, native typing
+- **Python 3.11+** — modern asyncio, structural pattern matching, native typing
 - **FastAPI + uvicorn** — async HTTP, SSE streaming, websocket-ready
-- **pydantic-AI** — typed LLM SDK with native tool registration, structured outputs, streaming events
+- **pydantic-AI** — typed LLM SDK with native tool registration, structured outputs, streaming events; drives the universal stream and the tiered-RAG `pipeline` adapter
+- **LangChain** (`create_agent` + `init_chat_model`) — a second, fully in-process agent framework behind the same adapter contract, proving the abstraction is framework-agnostic
 - **pydantic v2** — schema-validated configs, runs, answers, decompositions
 - **httpx** — async HTTP with chunked-encoding streaming support
 - **SQLite (runstore)** — every run persisted with full telemetry; Postgres-compatible schema for scale-out
@@ -201,6 +229,9 @@ A single H100 node hosts the mid tier comfortably. Two H100s host the top tier. 
 │   /v1/adapters/opencode/stream ──► OpenCode SDK native           │
 │         │            (multi-provider routing, session model)     │
 │         │                                                        │
+│   /v1/adapters/{pipeline,langchain}/* ──► in-process agents      │
+│         │            (pydantic-AI / LangChain — no Node sidecar)  │
+│         │                                                        │
 │         ▼                                                        │
 │   ┌──────────────────┐    ┌─────────────────┐                    │
 │   │  Answer shaper   │    │ Hybrid retrieve │                    │
@@ -235,12 +266,12 @@ A single H100 node hosts the mid tier comfortably. Two H100s host the top tier. 
 
 ## What We Measured
 
-These aren't aspirational numbers — they were captured by the bake-off harness in `tests/eval/` against a labeled gold-truth set across multiple weeks of iteration.
+These aren't aspirational numbers — they were captured by the bake-off harness in [`eval/`](../eval/) against a labeled gold-truth set across multiple weeks of iteration.
 
 - **Retrieval recall improvement:** 0.125 → 0.30 over 7 iterations (per-repo cap + window expansion + Serena symbol-graph fan-out)
 - **Cheap-model accuracy:** DeepSeek V3.2 hit 0.82 gold accuracy. Qwen3-235B hit 0.79. Both at <$0.003/query.
 - **Cost reduction:** moving from Gemini Pro to grounded DeepSeek cut per-query cost from $0.030 → $0.002 (15x) with a 6% quality drop.
-- **Eval cases labeled:** 14 cases across our test repo with `expected_files`, `gold_text`, and difficulty tier.
+- **Eval cases labeled:** 41 `expected_files` across 15 cases in our test repos, each with `gold_text` and a difficulty tier — enough to make retrieval recall scorable per-case instead of vibes-based.
 
 ---
 
@@ -327,7 +358,7 @@ We're not selling vapor. We're selling working code with measured numbers and an
 
 **Project repository:** [polycontext](https://github.com/MHMALEK/polycontext)
 **Architecture docs:** `docs/ARCHITECTURE.md`
-**Eval harness:** `tests/eval/`
+**Eval harness:** `eval/`
 **Bake-off API:** `POST /v1/bakeoff/ask`
 
 *Polycontext was built and operated end-to-end by Mohammad-Hossein Malek. Tech lead conversations welcome.*
