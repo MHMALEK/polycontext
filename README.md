@@ -17,7 +17,7 @@
     <img src="https://img.shields.io/badge/OpenCode-22C55E?style=flat" alt="OpenCode" />
   </p>
 
-  <h1>tech-decomposition</h1>
+  <h1>polycontext</h1>
   <p align="center">
     One JSON API. Seven code-AI backends. Two modes (ask, decompose).<br/>
     Optional grounded retrieval, augmented with LSP-backed semantic search via Serena MCP.<br/>

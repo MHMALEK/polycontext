@@ -1345,11 +1345,16 @@ def _serena_first_lineno(block: str) -> int | None:
 
 def _language_from_path(path: str) -> str | None:
     p = path.lower()
-    if p.endswith(".py"): return "python"
-    if p.endswith((".ts", ".tsx")): return "typescript"
-    if p.endswith((".js", ".jsx")): return "javascript"
-    if p.endswith(".go"): return "go"
-    if p.endswith(".rs"): return "rust"
+    if p.endswith(".py"):
+        return "python"
+    if p.endswith((".ts", ".tsx")):
+        return "typescript"
+    if p.endswith((".js", ".jsx")):
+        return "javascript"
+    if p.endswith(".go"):
+        return "go"
+    if p.endswith(".rs"):
+        return "rust"
     return None
 
 

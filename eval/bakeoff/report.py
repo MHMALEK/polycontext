@@ -245,7 +245,7 @@ def _render_ask_full_section(recs: list[dict[str, Any]]) -> str:
             f"runner_wall_ms={rec.get('duration_ms')} · "
             f"score={(rec.get('score') or {}).get('overall', 0):.2f}"
         )
-        blk.append(f"<details>")
+        blk.append("<details>")
         blk.append("")
         blk.append(f"<summary>{hdr_line}</summary>")
         blk.append("")

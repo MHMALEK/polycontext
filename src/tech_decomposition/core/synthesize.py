@@ -1,7 +1,6 @@
 """Single-shot LLM synthesis over prefetched context — no tools."""
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any
 

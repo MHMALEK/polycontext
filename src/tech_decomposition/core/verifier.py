@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import Settings
-from ..models import Decomposition, Subtask
+from ..models import Decomposition
 
 
 @dataclass

@@ -15,7 +15,6 @@ external callers have a single, uniform shape to target.
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Literal
 
 from pathlib import Path
@@ -116,7 +115,7 @@ app.add_middleware(
 #   1. UI_DIST_DIR env var (set in the Docker image to /app/web/dist)
 #   2. web/dist relative to the current working directory (dev mode)
 # Mount is silently skipped if neither exists, so the API runs without the UI.
-import os as _os
+import os as _os  # noqa: E402
 _ui_env = _os.environ.get("UI_DIST_DIR")
 _ui_dist = Path(_ui_env) if _ui_env else (Path.cwd() / "web" / "dist")
 if _ui_dist.is_dir():

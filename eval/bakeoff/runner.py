@@ -26,7 +26,7 @@ from typing import Any
 
 from .cases import Case, Job
 from .client import AdapterClient
-from .scorer import Score, score_response, score_response_async
+from .scorer import Score, score_response_async
 
 log = logging.getLogger(__name__)
 
