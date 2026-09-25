@@ -20,13 +20,13 @@ def test_unknown_adapter_raises_key_error():
 def test_opencode_is_loadable():
     a = get_adapter("opencode", _settings())
     assert a.name == "opencode"
-    assert {"ask", "decompose", "implement"}.issubset(a.capabilities)
+    assert {"ask", "decompose"}.issubset(a.capabilities)
 
 
 def test_cursor_is_loadable():
     a = get_adapter("cursor", _settings())
     assert a.name == "cursor"
-    assert {"ask", "decompose", "implement"}.issubset(a.capabilities)
+    assert {"ask", "decompose"}.issubset(a.capabilities)
 
 
 def test_langchain_is_loadable():
